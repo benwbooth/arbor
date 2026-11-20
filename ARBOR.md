@@ -69,6 +69,16 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 4. KDE appmenu protocol for hearth's global menu bar.
 5. NixOS session + hearth backend for niri IPC.
 
+## Colour management
+
+- `color-profile "edid"` per output (default `"srgb"`, niri's behaviour): maps
+  sRGB to the panel's EDID primaries with the CRTC colour pipeline
+  (DEGAMMA_LUT = sRGB EOTF, CTM = sRGB->panel with Bradford to the panel white,
+  GAMMA_LUT = inverse EOTF). wlr-gamma-control ramps are composed after the
+  inverse EOTF, so night light still works. Math in `src/backend/color.rs`
+  (unit tested), DRM side in `src/backend/tty/color_pipeline.rs`; all three
+  properties are owned by `GammaProps` in tty.rs and set in one atomic commit.
+
 ## Code map
 
 - `src/layout/dock.rs`: DockSpace (tree, layout, render positions, hit
