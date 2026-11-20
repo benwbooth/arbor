@@ -86,6 +86,32 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 4. KDE appmenu protocol for hearth's global menu bar.
 5. NixOS session + hearth backend for niri IPC.
 
+## Colour management
+
+- `color-profile "edid"` per output (default `"srgb"`, niri's behaviour): maps
+  sRGB to the panel's EDID primaries with the CRTC colour pipeline
+  (DEGAMMA_LUT = sRGB EOTF, CTM = sRGB->panel with Bradford to the panel white,
+  GAMMA_LUT = inverse EOTF). wlr-gamma-control ramps are composed after the
+  inverse EOTF, so night light still works. Math in `src/backend/color.rs`
+  (unit tested), DRM side in `src/backend/tty/color_pipeline.rs`; all three
+  properties are owned by `GammaProps` in tty.rs and set in one atomic commit.
+- `hdr { sdr-brightness N; max-luminance N; }` per output: HDR for SDR
+  content, also entirely in the CRTC pipeline (DEGAMMA = sRGB EOTF, CTM =
+  sRGB->BT.2020, GAMMA_LUT = PQ with sRGB white at N nits) plus connector
+  `Colorspace` BT2020_RGB, PQ `HDR_OUTPUT_METADATA`, `max bpc` 10. No shader
+  pass, plane stays XRGB8888 (the pipeline and the 10 bpc link carry the
+  precision). Connector props use legacy set_property like upstream's
+  `reset_hdr` (allows the modeset amdgpu needs to enter/leave HDR) and are
+  re-applied after VT switch.
+- Not done (HDR next steps): `wp_color_management_v1` so HDR clients
+  (mpv, games) can submit PQ/scRGB surfaces; that needs per-surface
+  conversion in the renderer (GLES shader on each surface texture into a
+  linear/PQ FP16 offscreen, then KMS GAMMA_LUT becomes identity-ish) or the
+  per-plane `COLOR_PIPELINE` colorop uAPI (kernel 6.19+, amdgpu has it; only
+  exposed to clients that set DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE, so
+  drm_info does not show it) - smithay has no support for either yet.
+  Screencasts/screenshots stay sRGB (correct for SDR content).
+
 ## Next steps
 
 - **Server-side title bars.** niri draws no title bars, so apps that don't

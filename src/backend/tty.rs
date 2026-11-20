@@ -399,6 +399,8 @@ struct GammaProps {
     gamma_lut: property::Handle,
     gamma_lut_size: property::Handle,
     previous_blob: Option<NonZeroU64>,
+    /// arbor: DEGAMMA_LUT/CTM gamut mapping, composed with the gamma ramp.
+    color: color_pipeline::ColorState,
 }
 
 struct ConnectorProperties<'a> {
@@ -683,6 +685,10 @@ impl Tty {
                                 Ok(()) => (),
                                 Err(err) => debug!("couldn't reset HDR properties: {err:?}"),
                             }
+                            // arbor: re-enable our HDR signalling.
+                            if let Some(gamma_props) = &surface.gamma_props {
+                                gamma_props.restore_hdr_signalling(&props);
+                            }
                         } else {
                             warn!("failed to get connector properties");
                         };
@@ -690,7 +696,9 @@ impl Tty {
                         if let Some(ramp) = surface.pending_gamma_change.take() {
                             let ramp = ramp.as_deref();
                             let res = if let Some(gamma_props) = &mut surface.gamma_props {
-                                gamma_props.set_gamma(&device.drm, ramp)
+                                gamma_props
+                                    .set_gamma(&device.drm, ramp)
+                                    .and_then(|()| gamma_props.restore_gamma(&device.drm))
                             } else {
                                 set_gamma_for_crtc(&device.drm, *crtc, ramp)
                             };
@@ -1330,6 +1338,34 @@ impl Tty {
         };
         if let Err(err) = res {
             debug!("couldn't reset gamma: {err:?}");
+        }
+
+        // arbor: EDID gamut mapping / HDR through DEGAMMA_LUT/CTM/GAMMA_LUT.
+        if let Some(gamma_props) = &mut gamma_props {
+            gamma_props.color.edid_chroma = get_edid_info(&device.drm, connector.handle())
+                .ok()
+                .and_then(|info| color_pipeline::edid_chromaticities(&info))
+                .inspect(|chroma| {
+                    let ctm = color_pipeline::edid_ctm(chroma);
+                    debug!("{connector_name}: EDID chromaticities {chroma:?}, CTM {ctm:?}");
+                });
+            match ConnectorProperties::try_new(&device.drm, connector.handle()) {
+                Ok(props) => {
+                    if let Err(err) = gamma_props.set_color_config(
+                        &props,
+                        config.color_profile,
+                        config.hdr(),
+                        true,
+                    ) {
+                        warn!("{connector_name}: error setting colour config: {err:?}");
+                    }
+                }
+                Err(err) => warn!("{connector_name}: no connector properties: {err:?}"),
+            }
+        } else if config.color_profile != niri_config::output::ColorProfile::Srgb
+            || config.hdr().is_some()
+        {
+            warn!("{connector_name}: color-profile/hdr need GAMMA_LUT support, ignoring");
         }
 
         let surface = device
@@ -2424,6 +2460,29 @@ impl Tty {
 
                 let change_mode = surface.compositor.pending_mode() != mode;
 
+                // arbor: colour profile / HDR changes.
+                if let Some(gamma_props) = &mut surface.gamma_props {
+                    if gamma_props.color.profile != config.color_profile
+                        || gamma_props.color.hdr != config.hdr()
+                    {
+                        let res = ConnectorProperties::try_new(&device.drm, surface.connector)
+                            .and_then(|props| {
+                                gamma_props.set_color_config(
+                                    &props,
+                                    config.color_profile,
+                                    config.hdr(),
+                                    false,
+                                )
+                            });
+                        if let Err(err) = res {
+                            warn!(
+                                "output {:?}: error setting colour config: {err:?}",
+                                surface.name.connector
+                            );
+                        }
+                    }
+                }
+
                 let vrr_enabled = surface.compositor.vrr_enabled();
                 let change_always_vrr = vrr_enabled != config.is_vrr_always_on();
                 let is_on_demand_vrr = config.is_vrr_on_demand();
@@ -2623,11 +2682,19 @@ impl GammaProps {
         let gamma_lut = gamma_lut.context("missing GAMMA_LUT property")?;
         let gamma_lut_size = gamma_lut_size.context("missing GAMMA_LUT_SIZE property")?;
 
+        let color = color_pipeline::ColorState {
+            props: color_pipeline::ColorProps::new(device, crtc)
+                .map_err(|err| debug!("no CRTC colour pipeline: {err:?}"))
+                .ok(),
+            ..Default::default()
+        };
+
         Ok(Self {
             crtc,
             gamma_lut,
             gamma_lut_size,
             previous_blob: None,
+            color,
         })
     }
 
@@ -2638,6 +2705,25 @@ impl GammaProps {
     }
 
     fn set_gamma(&mut self, device: &DrmDevice, gamma: Option<&[u16]>) -> anyhow::Result<()> {
+        if self.color.active.is_none() {
+            self.color.client_ramp = gamma.map(<[u16]>::to_vec);
+            return self.write_gamma_lut(device, gamma);
+        }
+
+        // arbor: gamut mapping active, so GAMMA_LUT gets linear light; compose the client
+        // ramp after the inverse sRGB EOTF.
+        if let Some(gamma) = gamma {
+            let gamma_size = self
+                .gamma_size(device)
+                .context("error getting gamma size")? as usize;
+            ensure!(gamma.len() == gamma_size * 3, "wrong gamma length");
+        }
+        self.color.client_ramp = gamma.map(<[u16]>::to_vec);
+        let lut = self.effective_gamma_lut(device)?;
+        self.write_gamma_lut(device, lut.as_deref())
+    }
+
+    fn write_gamma_lut(&mut self, device: &DrmDevice, gamma: Option<&[u16]>) -> anyhow::Result<()> {
         let _span = tracy_client::span!("GammaProps::set_gamma");
 
         let blob = if let Some(gamma) = gamma {
@@ -2708,6 +2794,10 @@ impl GammaProps {
 
     fn restore_gamma(&self, device: &DrmDevice) -> anyhow::Result<()> {
         let _span = tracy_client::span!("GammaProps::restore_gamma");
+
+        if self.color.props.is_some() {
+            return self.restore_color(device);
+        }
 
         let blob = self.previous_blob.map(NonZeroU64::get).unwrap_or(0);
         device
@@ -3428,6 +3518,8 @@ unsafe fn init_libinput_plugin_system(libinput: &Libinput) {
     #[cfg(not(have_libinput_plugin_system))]
     let _ = libinput;
 }
+
+mod color_pipeline;
 
 #[cfg(test)]
 mod tests {

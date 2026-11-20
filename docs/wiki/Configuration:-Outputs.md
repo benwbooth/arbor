@@ -13,6 +13,8 @@ output "eDP-1" {
     transform "90"
     position x=1280 y=0
     variable-refresh-rate // on-demand=true
+    color-profile "edid"
+    // hdr { sdr-brightness 560; }
     focus-at-startup
     backdrop-color "#001100"
 
@@ -224,6 +226,49 @@ output "HDMI-A-1" {
     variable-refresh-rate on-demand=true
 }
 ```
+
+### `color-profile`
+
+<sup>arbor</sup>
+
+How composited sRGB content is mapped to the panel's colour gamut.
+
+- `"srgb"` (default): no mapping. sRGB values are sent to the monitor as-is, like niri. On a wide-gamut monitor (most OLEDs, many recent IPS panels) this looks oversaturated.
+- `"edid"`: read the panel's red/green/blue/white chromaticities from its EDID and convert sRGB to the panel's native primaries in the display hardware, using the KMS CRTC colour pipeline: `DEGAMMA_LUT` (sRGB EOTF), `CTM` (sRGB to panel matrix, with Bradford adaptation to the panel white) and `GAMMA_LUT` (inverse sRGB EOTF).
+
+```kdl
+output "DP-1" {
+    color-profile "edid"
+}
+```
+
+Gamma-control clients (night light tools like wlsunset or gammastep) keep working: their ramp is applied on top of the mapping.
+Only the TTY backend supports this, and only when the GPU driver exposes `DEGAMMA_LUT` and `CTM` on the CRTC (amdgpu, i915 and most others do); otherwise a warning is logged and the option is ignored.
+Screenshots and screencasts are not affected: they keep the plain sRGB content.
+
+### `hdr`
+
+<sup>arbor</sup>
+
+Drive the output in HDR: the monitor receives a 10-bit PQ (SMPTE ST 2084) BT.2020 signal, and all desktop content (which is SDR sRGB) is shown with sRGB white at `sdr-brightness` nits.
+
+```kdl
+output "DP-1" {
+    hdr {
+        sdr-brightness 560  // nits for sRGB white, default 203
+        max-luminance 560   // peak sent in the HDR metadata, default sdr-brightness
+        // off
+    }
+}
+```
+
+The conversion happens in the display hardware (KMS CRTC colour pipeline: sRGB EOTF, sRGB to BT.2020 matrix, PQ), so it costs no GPU time and also covers the cursor and direct-scanout windows.
+The connector gets `Colorspace` = BT2020_RGB, PQ `HDR_OUTPUT_METADATA` (with the panel's EDID primaries as the mastering display) and `max bpc` 10.
+When `hdr` is on, `color-profile` is ignored: the monitor maps BT.2020 to its panel itself.
+
+There is no HDR client support yet (no `wp_color_management_v1`): HDR videos and games are shown as SDR.
+Turning HDR on or off makes the monitor resync (a short blank).
+Night light (gamma-control) still works on top.
 
 ### `focus-at-startup`
 
