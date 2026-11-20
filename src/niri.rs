@@ -2247,6 +2247,15 @@ impl Niri {
         let (executor, scheduler) = calloop::futures::executor().unwrap();
         event_loop.insert_source(executor, |_, _, _| ()).unwrap();
 
+        // arbor: redraw when an icon tile's icon finishes loading.
+        let (icon_ping, icon_ping_source) = calloop::ping::make_ping().unwrap();
+        event_loop
+            .insert_source(icon_ping_source, |_, _, state| {
+                state.niri.queue_redraw_all()
+            })
+            .unwrap();
+        crate::layout::icon_tile::set_redraw_ping(icon_ping);
+
         let display_handle = display.handle();
         let config_ = config.borrow();
         let config_file_output_config = config_.outputs.clone();

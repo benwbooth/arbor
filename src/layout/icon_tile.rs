@@ -1,7 +1,8 @@
 //! arbor: icon tiles for docked windows seen too small to be useful.
 //!
 //! A leaf below the size threshold draws as a rounded tile in a colour derived from the app id,
-//! with the app icon (from its desktop entry; PNG icons only) or the app's first letter. A whole
+//! with the app icon (from its desktop entry, through the icon theme; SVG or PNG) or the app's
+//! first letter. A whole
 //! subtree below the threshold draws as one tile showing the outlines of its leaves.
 //!
 //! Icons are looked up and decoded on a helper thread; the letter shows until they're ready.
@@ -41,6 +42,16 @@ enum IconState {
     Loaded(Option<Arc<IconImage>>),
 }
 
+static REDRAW_PING: OnceLock<calloop::ping::Ping> = OnceLock::new();
+
+/// Sets the ping that asks the compositor to redraw when an icon finished loading.
+pub fn set_redraw_ping(ping: calloop::ping::Ping) {
+    let _ = REDRAW_PING.set(ping);
+}
+
+/// Size icons are rasterized at; tiles scale them down.
+const ICON_SIZE: u32 = 256;
+
 fn icon_cache() -> &'static Mutex<HashMap<String, IconState>> {
     static CACHE: OnceLock<Mutex<HashMap<String, IconState>>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
@@ -58,13 +69,17 @@ pub fn app_icon(app_id: &str) -> Option<Arc<IconImage>> {
             let res = std::thread::Builder::new()
                 .name("arbor-icon".to_owned())
                 .spawn(move || {
-                    let icon = find_icon(&app_id)
-                        .and_then(|path| load_png(&path))
-                        .map(Arc::new);
+                    let icon = find_icon(&app_id).and_then(|path| load_icon(&path));
+                    let found = icon.is_some();
                     icon_cache()
                         .lock()
                         .unwrap()
-                        .insert(app_id, IconState::Loaded(icon));
+                        .insert(app_id, IconState::Loaded(icon.map(Arc::new)));
+                    if found {
+                        if let Some(ping) = REDRAW_PING.get() {
+                            ping.ping();
+                        }
+                    }
                 });
             if let Err(err) = res {
                 warn!("error spawning icon loader thread: {err:?}");
@@ -120,38 +135,152 @@ fn icon_name(app_id: &str, dirs: &[PathBuf]) -> String {
     app_id.to_owned()
 }
 
+/// Icon themes to look in, in order: the configured theme (KDE's kdeglobals), Breeze Dark,
+/// Breeze, then hicolor.
+fn icon_themes() -> Vec<String> {
+    let mut themes = Vec::new();
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")));
+    if let Some(dir) = config_home {
+        if let Ok(contents) = std::fs::read_to_string(dir.join("kdeglobals")) {
+            let mut in_icons = false;
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_icons = line == "[Icons]";
+                } else if in_icons {
+                    if let Some(theme) = line.strip_prefix("Theme=") {
+                        themes.push(theme.trim().to_owned());
+                    }
+                }
+            }
+        }
+    }
+    for theme in ["breeze-dark", "breeze", "hicolor"] {
+        if !themes.iter().any(|t| t == theme) {
+            themes.push(theme.to_owned());
+        }
+    }
+    themes
+}
+
+/// Subdirectories of an icon theme with their nominal size (scalable ones count as large).
+fn theme_dirs(theme_dir: &Path) -> Vec<(String, u32)> {
+    let Ok(index) = std::fs::read_to_string(theme_dir.join("index.theme")) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<(String, u32)> = Vec::new();
+    let mut section = String::new();
+    let mut listed: Vec<String> = Vec::new();
+    for line in index.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.to_owned();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        if section == "Icon Theme" && (key == "Directories" || key == "ScaledDirectories") {
+            listed.extend(value.split(',').map(|d| d.trim().to_owned()));
+        } else if listed.contains(&section) {
+            match key {
+                "Size" => {
+                    let size = value.parse().unwrap_or(0);
+                    match dirs.iter_mut().find(|(d, _)| *d == section) {
+                        Some(entry) => entry.1 = entry.1.max(size),
+                        None => dirs.push((section.clone(), size)),
+                    }
+                }
+                "Type" if value == "Scalable" => match dirs.iter_mut().find(|(d, _)| *d == section)
+                {
+                    Some(entry) => entry.1 = entry.1.max(1024),
+                    None => dirs.push((section.clone(), 1024)),
+                },
+                _ => (),
+            }
+        }
+    }
+    // Only application icons, largest first.
+    dirs.retain(|(dir, _)| dir.contains("apps"));
+    dirs.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+    dirs
+}
+
 fn find_icon(app_id: &str) -> Option<PathBuf> {
     let dirs = data_dirs();
     let name = icon_name(app_id, &dirs);
 
     let path = Path::new(&name);
     if path.is_absolute() {
-        return (path.extension().is_some_and(|e| e == "png") && path.exists())
-            .then(|| path.to_owned());
+        return path.exists().then(|| path.to_owned());
     }
 
-    const SIZES: [&str; 7] = [
-        "256x256", "192x192", "128x128", "96x96", "64x64", "48x48", "32x32",
-    ];
+    for theme in icon_themes() {
+        for data in &dirs {
+            let theme_dir = data.join("icons").join(&theme);
+            if !theme_dir.is_dir() {
+                continue;
+            }
+            for (sub, _) in theme_dirs(&theme_dir) {
+                for ext in ["svg", "png"] {
+                    let path = theme_dir.join(&sub).join(format!("{name}.{ext}"));
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
     for dir in &dirs {
-        for size in SIZES {
-            let path = dir
-                .join("icons/hicolor")
-                .join(size)
-                .join("apps")
-                .join(format!("{name}.png"));
+        for ext in ["svg", "png"] {
+            let path = dir.join("pixmaps").join(format!("{name}.{ext}"));
             if path.exists() {
                 return Some(path);
             }
         }
     }
-    for dir in &dirs {
-        let path = dir.join("pixmaps").join(format!("{name}.png"));
-        if path.exists() {
-            return Some(path);
-        }
-    }
     None
+}
+
+fn load_icon(path: &Path) -> Option<IconImage> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("svg") | Some("svgz") => load_svg(path),
+        _ => load_png(path),
+    }
+}
+
+/// Rasterizes an SVG icon at `ICON_SIZE`.
+fn load_svg(path: &Path) -> Option<IconImage> {
+    let data = std::fs::read(path).ok()?;
+    let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let k = ICON_SIZE as f32 / size.width().max(size.height());
+    let w = ((size.width() * k).round() as u32).max(1);
+    let h = ((size.height() * k).round() as u32).max(1);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(k, k),
+        &mut pixmap.as_mut(),
+    );
+
+    // tiny-skia is premultiplied RGBA; cairo wants premultiplied native-endian ARGB.
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in pixmap.data().chunks_exact(4) {
+        let argb = u32::from(px[3]) << 24
+            | u32::from(px[0]) << 16
+            | u32::from(px[1]) << 8
+            | u32::from(px[2]);
+        out.extend_from_slice(&argb.to_ne_bytes());
+    }
+    Some(IconImage {
+        width: w as i32,
+        height: h as i32,
+        data: out,
+    })
 }
 
 fn load_png(path: &Path) -> Option<IconImage> {
@@ -460,6 +589,41 @@ pub fn relative_rect(outer: Rect, inner: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_icons_rasterize() {
+        let dir = std::env::temp_dir().join(format!("arbor-icon-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.svg");
+        std::fs::write(
+            &path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+                <rect width="16" height="16" fill="#ff0000"/></svg>"##,
+        )
+        .unwrap();
+        let icon = load_icon(&path).unwrap();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        // Opaque red, as native-endian ARGB.
+        let px = u32::from_ne_bytes(icon.data[0..4].try_into().unwrap());
+        assert_eq!(px, 0xffff0000);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn theme_dirs_from_index() {
+        let dir = std::env::temp_dir().join(format!("arbor-theme-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("index.theme"),
+            "[Icon Theme]\nDirectories=apps/16,apps/64,apps/scalable,actions/22\n\n\
+             [apps/16]\nSize=16\n\n[apps/64]\nSize=64\n\n\
+             [apps/scalable]\nSize=48\nType=Scalable\n\n[actions/22]\nSize=22\n",
+        )
+        .unwrap();
+        let dirs: Vec<String> = theme_dirs(&dir).into_iter().map(|(d, _)| d).collect();
+        assert_eq!(dirs, ["apps/scalable", "apps/64", "apps/16"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn letters_and_colors() {

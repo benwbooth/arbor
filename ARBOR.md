@@ -103,9 +103,10 @@ layout {
      levels/pan/history, scaled rendering and input mapping, Mod+pinch,
      click/double-click while zoomed
    - [x] icon tiles: leaves seen narrower than `icon-threshold` draw as a
-     rounded tile in the app's colour with its icon (desktop entry →
-     hicolor/pixmaps PNG, loaded off-thread; SVG-only themes fall back to
-     the app's letter); a subtree below threshold is one tile showing its
+     rounded tile in the app's colour with its icon (desktop entry → icon
+     theme: kdeglobals theme, breeze-dark, breeze, hicolor; SVG via resvg or
+     PNG, loaded off-thread, redraw when ready; the app's letter otherwise);
+     a subtree below threshold is one tile showing its
      leaf outlines. Clicking anywhere in a slot activates; double-click
      frames.
 3. Tab groups (reuse niri's tabbed column display), saved views.
