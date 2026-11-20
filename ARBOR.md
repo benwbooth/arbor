@@ -113,18 +113,36 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
   drm_info does not show it) - smithay has no support for either yet.
   Screencasts/screenshots stay sRGB (correct for SDR content).
 
-## Next steps
+## Title bars
 
-- **Server-side title bars.** niri draws no title bars, so apps that don't
-  draw their own (KDE/Qt apps asking for server-side xdg-decoration, or
-  apps that never bind xdg-decoration and aren't CSD) have none. Plan: a
-  `TitleBar` element in `Tile` (beside border/focus ring), drawn only when
-  the decoration mode is server-side: app title (pango, like the hotkey
-  overlay), macOS-style close/minimize/zoom buttons on the left;
-  `Tile::hit` returns a new hit kind for the bar so that pressing on it
-  starts an interactive move (and with it drag-to-dock), double-click
-  toggles maximize, and the buttons map to close / `minimize-window` /
-  maximize. Tile sizes must account for the bar height like borders do.
+arbor draws macOS-style title bars for windows that negotiated server-side
+decorations (xdg-decoration server-side, or the KDE server-decoration
+protocol in server mode: Qt/KDE apps). CSD apps (browsers, Electron, GTK
+header bars) don't get one. The bar sits inside the tile above the window
+(the window gets the tile height minus the bar), with traffic-light buttons
+on the left (close, minimize, zoom; symbols on hover) and the title
+centered; top corners follow `geometry-corner-radius`. Drag the bar to move
+(and drag-to-dock); double-click or the green button toggles maximize.
+
+```kdl
+layout {
+    title-bars {
+        // off
+        height 28
+        active-color "#31363b"
+        inactive-color "#202326"
+        active-text-color "#fcfcfc"
+        inactive-text-color "#a1a9b1"
+    }
+}
+window-rule {
+    match app-id="^org.example.App$"
+    title-bar false
+}
+```
+
+With title bars on, the decoration globals are offered to clients even
+without `prefer-no-csd`, so that Qt stops drawing its own bar.
 
 ## Code map
 
@@ -132,6 +150,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
   testing, interactive move/resize targets).
 - `src/layout/arbor.rs`, `src/layout/workspace_arbor.rs`: arbor methods
   on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
+- `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
+  `niri-config/src/title_bar.rs`: server-side title bars.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: holds `DockSpace` where niri held
   `ScrollingSpace`.

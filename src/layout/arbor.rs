@@ -1,6 +1,10 @@
 //! arbor additions to `Layout`, kept out of `mod.rs` for easy rebasing.
 
-use super::{InteractiveMoveState, Layout, LayoutElement};
+use smithay::output::Output;
+use smithay::utils::{Logical, Point};
+
+use super::title_bar::TitleBarHit;
+use super::{InteractiveMoveState, Layout, LayoutElement, MonitorSet};
 
 impl<W: LayoutElement> Layout<W> {
     /// Minimizes a docked window (the focused one if `window` is `None`).
@@ -45,6 +49,47 @@ impl<W: LayoutElement> Layout<W> {
         if let Some(ws) = self.active_workspace_mut() {
             ws.focus_tab(forwards);
         }
+    }
+
+    /// The title bar part under the pointer, and its window.
+    pub fn title_bar_under(
+        &self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<(&W, TitleBarHit)> {
+        if self.interactive_move.is_some() || self.is_overview_open() {
+            return None;
+        }
+        let mon = self.monitor_for_output(output)?;
+        let (ws, geo) = mon.workspace_under(pos_within_output)?;
+        ws.title_bar_under(pos_within_output - geo.loc)
+    }
+
+    /// Updates the title bar button hover state for the pointer. Returns whether anything
+    /// changed.
+    pub fn update_title_bar_hover(
+        &mut self,
+        pointer: Option<(&Output, Point<f64, Logical>)>,
+    ) -> bool {
+        let overview = self.is_overview_open();
+        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+            return false;
+        };
+
+        let mut changed = false;
+        for mon in monitors {
+            let under = pointer
+                .filter(|(output, _)| !overview && *output == &mon.output)
+                .and_then(|(_, pos)| {
+                    let (ws, geo) = mon.workspace_under(pos)?;
+                    Some((ws.id(), pos - geo.loc))
+                });
+            for ws in &mut mon.workspaces {
+                let pos = under.filter(|(id, _)| *id == ws.id()).map(|(_, pos)| pos);
+                changed |= ws.update_title_bar_hover(pos);
+            }
+        }
+        changed
     }
 
     pub fn is_minimized(&self, window: &W::Id) -> bool {

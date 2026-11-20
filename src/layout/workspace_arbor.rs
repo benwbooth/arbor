@@ -1,7 +1,10 @@
 //! arbor additions to `Workspace`, kept out of `workspace.rs` for easy rebasing.
 
+use smithay::utils::{Logical, Point};
+
 use super::{FloatingActive, Workspace};
 use crate::layout::dock::next_minimize_seq;
+use crate::layout::title_bar::TitleBarHit;
 use crate::layout::LayoutElement;
 
 impl<W: LayoutElement> Workspace<W> {
@@ -54,6 +57,42 @@ impl<W: LayoutElement> Workspace<W> {
             return false;
         }
         self.scrolling.focus_tab(forwards)
+    }
+
+    /// The title bar part under `pos`, on the topmost window under it.
+    pub fn title_bar_under(&self, pos: Point<f64, Logical>) -> Option<(&W, TitleBarHit)> {
+        let (tile, tile_pos) = self.topmost_tile_under(pos)?;
+        let hit = tile.title_bar_hit(pos - tile_pos)?;
+        Some((tile.window(), hit))
+    }
+
+    fn topmost_tile_under(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(&crate::layout::tile::Tile<W>, Point<f64, Logical>)> {
+        self.tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
+            .find(|(tile, tile_pos, _)| tile.hit(pos - *tile_pos).is_some())
+            .map(|(tile, tile_pos, _)| (tile, tile_pos))
+    }
+
+    /// Updates the title bar button hover state for the pointer at `pos` (or away from this
+    /// workspace for `None`). Returns whether anything changed.
+    pub fn update_title_bar_hover(&mut self, pos: Option<Point<f64, Logical>>) -> bool {
+        let target = pos.and_then(|pos| {
+            self.topmost_tile_under(pos)
+                .map(|(tile, tile_pos)| (tile.window().id().clone(), pos - tile_pos))
+        });
+
+        let mut changed = false;
+        for tile in self.tiles_mut() {
+            let point = target
+                .as_ref()
+                .filter(|(id, _)| id == tile.window().id())
+                .map(|(_, point)| *point);
+            changed |= tile.set_title_bar_hover(point);
+        }
+        changed
     }
 
     pub fn is_minimized(&self, id: &W::Id) -> bool {

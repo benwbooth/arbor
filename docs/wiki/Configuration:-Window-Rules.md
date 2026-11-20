@@ -516,6 +516,19 @@ window-rule {
 }
 ```
 
+#### `title-bar`
+
+arbor: set to `false` to never draw arbor's server-side title bar on the
+window, even when it uses server-side decorations.
+
+```kdl
+window-rule {
+    match app-id="^mpv$"
+
+    title-bar false
+}
+```
+
 #### `open-focused`
 
 <sup>Since: 25.01</sup>

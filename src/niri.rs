@@ -372,6 +372,8 @@ pub struct Niri {
     pub pointer_inside_hot_corner: bool,
     /// arbor: the cursor shows a resize shape over a dock divider.
     pub dock_divider_hover: bool,
+    /// arbor: last click on a server-side title bar, for double-click detection.
+    pub title_bar_last_click: Option<(std::time::Duration, smithay::desktop::Window)>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
     /// arbor: the ongoing workspace switch gesture follows horizontal finger movement.
@@ -2589,6 +2591,7 @@ impl Niri {
             notified_activity_this_iteration: false,
             pointer_inside_hot_corner: false,
             dock_divider_hover: false,
+            title_bar_last_click: None,
             tablet_cursor_location: None,
             gesture_swipe_3f_cumulative: None,
             gesture_swipe_horizontal_ws: false,
@@ -2653,7 +2656,9 @@ impl Niri {
         let config = self.config.borrow();
         let data = Arc::new(ClientState {
             compositor_state: Default::default(),
-            can_view_decoration_globals: config.prefer_no_csd,
+            // arbor: with title bars on, offer server-side decorations so that apps like Qt's
+            // stop drawing their own bars.
+            can_view_decoration_globals: config.prefer_no_csd || !config.layout.title_bars.off,
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,

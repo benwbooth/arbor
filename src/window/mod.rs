@@ -73,6 +73,9 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open docked (arbor).
     pub open_docked: Option<bool>,
 
+    /// Whether the window may get a server-side title bar (arbor).
+    pub title_bar: Option<bool>,
+
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
 
@@ -258,6 +261,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_docked {
                     resolved.open_docked = Some(x);
+                }
+
+                if let Some(x) = rule.title_bar {
+                    resolved.title_bar = Some(x);
                 }
 
                 if let Some(x) = rule.open_focused {

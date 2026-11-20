@@ -1009,6 +1009,10 @@ impl LayoutElement for Mapped {
         self.need_to_recompute_rules |= changed;
     }
 
+    fn title(&self) -> Option<String> {
+        with_toplevel_role(self.toplevel(), |role| role.title.clone())
+    }
+
     fn set_minimized(&mut self, minimized: bool) {
         self.is_minimized = minimized;
     }

@@ -11,6 +11,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
+use super::title_bar::{self, TitleBar, TitleBarHit};
 use super::{
     HitType, LayoutElement, LayoutElementRenderElement, LayoutElementRenderSnapshot, Options,
     SizeFrac, RESIZE_ANIMATION_THRESHOLD,
@@ -23,6 +24,7 @@ use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::{ClippedSurfaceRenderElement, RoundedCornerDamage};
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
 use crate::render_helpers::shadow::ShadowRenderElement;
@@ -49,6 +51,13 @@ pub struct Tile<W: LayoutElement> {
 
     /// The shadow around the window.
     shadow: Shadow,
+
+    /// arbor: the server-side title bar, shown when `has_title_bar`.
+    title_bar: TitleBar,
+
+    /// arbor: whether the window gets a server-side title bar (decorations negotiated
+    /// server-side, title bars on, and not turned off by a window rule).
+    has_title_bar: bool,
 
     /// This tile's current sizing mode.
     ///
@@ -133,6 +142,7 @@ niri_render_elements! {
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
+        TitleBar = PrimaryGpuTextureRenderElement,
     }
 }
 
@@ -187,12 +197,15 @@ impl<W: LayoutElement> Tile<W> {
         let focus_ring_config = options.layout.focus_ring.merged_with(&rules.focus_ring);
         let shadow_config = options.layout.shadow.merged_with(&rules.shadow);
         let sizing_mode = window.sizing_mode();
+        let has_title_bar = compute_has_title_bar(&window, &options);
 
         Self {
             window,
             border: FocusRing::new(border_config.into()),
             focus_ring: FocusRing::new(focus_ring_config),
             shadow: Shadow::new(shadow_config),
+            title_bar: TitleBar::default(),
+            has_title_bar,
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.]),
             restore_to_floating: false,
@@ -253,6 +266,7 @@ impl<W: LayoutElement> Tile<W> {
         self.shadow.update_config(shadow_config);
 
         self.window.update_config(self.options.blur);
+        self.has_title_bar = compute_has_title_bar(&self.window, &self.options);
     }
 
     pub fn update_shaders(&mut self) {
@@ -262,6 +276,9 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn update_window(&mut self) {
+        // arbor: the decoration mode may have changed with this commit.
+        self.has_title_bar = compute_has_title_bar(&self.window, &self.options);
+
         let prev_sizing_mode = self.sizing_mode;
         self.sizing_mode = self.window.sizing_mode();
 
@@ -537,6 +554,18 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         self.fullscreen_backdrop.resize(animated_tile_size);
+
+        // arbor: the title bar.
+        if let Some(rect) = self.title_bar_rect() {
+            let radius = self
+                .window
+                .geometry_corner_radius()
+                .scaled_by(1. - expanded_progress as f32);
+            let title = self.window.title().unwrap_or_default();
+            let config = self.options.layout.title_bars;
+            self.title_bar
+                .update(rect.size, self.scale, title, is_active, config, radius);
+        }
     }
 
     pub fn scale(&self) -> f64 {
@@ -736,6 +765,59 @@ impl<W: LayoutElement> Tile<W> {
         Some(self.border.width())
     }
 
+    /// arbor: height of the title bar outside fullscreen (0 when the window has none).
+    pub fn title_bar_height_nonfullscreen(&self) -> f64 {
+        if self.has_title_bar {
+            round_logical_in_physical_max1(self.scale, self.options.layout.title_bars.height)
+        } else {
+            0.
+        }
+    }
+
+    /// arbor: height of the title bar in the current sizing mode.
+    pub fn title_bar_height(&self) -> f64 {
+        if self.sizing_mode.is_fullscreen() {
+            0.
+        } else {
+            self.title_bar_height_nonfullscreen()
+        }
+    }
+
+    /// arbor: rectangle of the title bar within the tile, if shown.
+    pub fn title_bar_rect(&self) -> Option<Rectangle<f64, Logical>> {
+        let height = self.title_bar_height();
+        if height <= 0. {
+            return None;
+        }
+        let border = self.effective_border_width().unwrap_or(0.);
+        let size = self.animated_tile_size();
+        Some(Rectangle::new(
+            Point::from((border, border)),
+            Size::from((f64::max(0., size.w - border * 2.), height)),
+        ))
+    }
+
+    /// arbor: which part of the title bar is at `point` (relative to the tile).
+    pub fn title_bar_hit(&self, point: Point<f64, Logical>) -> Option<TitleBarHit> {
+        let rect = self.title_bar_rect()?;
+        let point = point - self.bob_offset();
+        title_bar::hit(rect.size, point - rect.loc)
+    }
+
+    /// arbor: updates whether the pointer is over the title bar buttons; returns whether that
+    /// changed.
+    pub fn set_title_bar_hover(&mut self, point: Option<Point<f64, Logical>>) -> bool {
+        let hovered = match (self.title_bar_rect(), point) {
+            (Some(rect), Some(point)) => {
+                title_bar::is_over_buttons(rect.size, point - self.bob_offset() - rect.loc)
+            }
+            _ => false,
+        };
+        let changed = self.title_bar.buttons_hovered != hovered;
+        self.title_bar.buttons_hovered = hovered;
+        changed
+    }
+
     /// Returns the location of the window's visual geometry within this Tile.
     pub fn window_loc(&self) -> Point<f64, Logical> {
         let mut loc = Point::from((0., 0.));
@@ -751,8 +833,10 @@ impl<W: LayoutElement> Tile<W> {
         //   the tile size matches the window.
         // - During animations, the window remains centered within the tile; this is important for
         //   the to/from fullscreen animation.
+        // - arbor: the title bar sits above the window, inside the border.
+        let bar = self.title_bar_height();
         loc.x += (target_size.w - window_size.w) / 2.;
-        loc.y += (target_size.h - window_size.h) / 2.;
+        loc.y += bar + (target_size.h - bar - window_size.h) / 2.;
 
         // Round to physical pixels.
         loc = loc
@@ -777,6 +861,7 @@ impl<W: LayoutElement> Tile<W> {
             size.w += width * 2.;
             size.h += width * 2.;
         }
+        size.h += self.title_bar_height();
 
         size
     }
@@ -796,6 +881,7 @@ impl<W: LayoutElement> Tile<W> {
             size.w += width * 2.;
             size.h += width * 2.;
         }
+        size.h += self.title_bar_height();
 
         size
     }
@@ -909,6 +995,7 @@ impl<W: LayoutElement> Tile<W> {
             size.w = f64::max(1., size.w - width * 2.);
             size.h = f64::max(1., size.h - width * 2.);
         }
+        size.h = f64::max(1., size.h - self.title_bar_height_nonfullscreen());
 
         // The size request has to be i32 unfortunately, due to Wayland. We floor here instead of
         // round to avoid situations where proportionally-sized columns don't fit on the screen
@@ -930,6 +1017,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn tile_height_for_window_height(&self, size: f64) -> f64 {
+        let size = size + self.title_bar_height_nonfullscreen();
         if self.border.is_off() {
             size
         } else {
@@ -946,6 +1034,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn window_height_for_tile_height(&self, size: f64) -> f64 {
+        let size = size - self.title_bar_height_nonfullscreen();
         if self.border.is_off() {
             size
         } else {
@@ -955,10 +1044,12 @@ impl<W: LayoutElement> Tile<W> {
 
     pub fn request_maximized(
         &mut self,
-        size: Size<f64, Logical>,
+        mut size: Size<f64, Logical>,
         animate: bool,
         transaction: Option<Transaction>,
     ) {
+        // arbor: maximized windows keep their title bar.
+        size.h = f64::max(1., size.h - self.title_bar_height_nonfullscreen());
         self.window.request_size(
             size.to_i32_round(),
             SizingMode::Maximized,
@@ -989,6 +1080,7 @@ impl<W: LayoutElement> Tile<W> {
             size.w += width * 2.;
             size.h += width * 2.;
         }
+        size.h += self.title_bar_height_nonfullscreen();
 
         size
     }
@@ -1006,6 +1098,9 @@ impl<W: LayoutElement> Tile<W> {
             if size.h > 0. {
                 size.h += width * 2.;
             }
+        }
+        if size.h > 0. {
+            size.h += self.title_bar_height_nonfullscreen();
         }
 
         size
@@ -1275,6 +1370,13 @@ impl<W: LayoutElement> Tile<W> {
                     alpha,
                     Kind::Unspecified,
                 );
+                push(elem.into());
+            }
+        }
+
+        // arbor: the title bar.
+        if let Some(rect) = self.title_bar_rect() {
+            if let Some(elem) = self.title_bar.render(ctx.renderer, location + rect.loc) {
                 push(elem.into());
             }
         }
@@ -1555,4 +1657,9 @@ impl<W: LayoutElement> Tile<W> {
         assert_abs_diff_eq!(size.w, rounded.w, epsilon = 1e-5);
         assert_abs_diff_eq!(size.h, rounded.h, epsilon = 1e-5);
     }
+}
+
+/// arbor: whether a window gets a server-side title bar.
+fn compute_has_title_bar<W: LayoutElement>(window: &W, options: &Options) -> bool {
+    !options.layout.title_bars.off && window.rules().title_bar != Some(false) && window.has_ssd()
 }

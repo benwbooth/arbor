@@ -1060,3 +1060,86 @@ fn drag_to_center_creates_tab_group_and_tear_off() {
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.scrolling().tree_string(), "H[2,1]");
 }
+
+#[test]
+fn title_bar_size_accounting_and_hits() {
+    use crate::layout::title_bar::TitleBarHit;
+
+    let mut s = space();
+    let mut params = TestWindowParams::new(1);
+    params.has_ssd = true;
+    let window = TestWindow::new(params);
+    let t = Tile::new(
+        window,
+        Size::from((1280., 720.)),
+        1.,
+        s.clock().clone(),
+        s.options().clone(),
+    );
+    s.add_tile(None, t, true, ColumnWidth::Proportion(0.5), false, None);
+    s.verify_invariants();
+    add(&mut s, 2);
+
+    let r1 = s.window_rect(&1).unwrap();
+    let r2 = s.window_rect(&2).unwrap();
+    let requested = |s: &DockSpace<TestWindow>, id: usize| {
+        s.tiles()
+            .find(|t| *t.window().id() == id)
+            .unwrap()
+            .window()
+            .requested_size()
+            .unwrap()
+    };
+    // The window gets the slot height minus the 28 px bar; no bar for the CSD window.
+    assert_eq!(requested(&s, 1).h, r1.size.h as i32 - 28);
+    assert_eq!(requested(&s, 2).h, r2.size.h as i32);
+
+    let tile = s.tiles().find(|t| *t.window().id() == 1).unwrap();
+    assert_eq!(tile.title_bar_height(), 28.);
+    assert_eq!(tile.tile_height_for_window_height(100.), 128.);
+    assert_eq!(tile.window_height_for_tile_height(128.), 100.);
+    let tile2 = s.tiles().find(|t| *t.window().id() == 2).unwrap();
+    assert_eq!(tile2.title_bar_height(), 0.);
+    assert_eq!(tile2.title_bar_hit(Point::from((16., 14.))), None);
+
+    // Hit testing is relative to the tile.
+    assert_eq!(
+        tile.title_bar_hit(Point::from((16., 14.))),
+        Some(TitleBarHit::Close)
+    );
+    assert_eq!(
+        tile.title_bar_hit(Point::from((80., 14.))),
+        Some(TitleBarHit::Bar)
+    );
+    assert_eq!(tile.title_bar_hit(Point::from((80., 40.))), None);
+}
+
+#[test]
+fn title_bars_off_and_rule() {
+    let mut options = Options::default();
+    options.layout.title_bars.off = true;
+    let options = Rc::new(options);
+    let mut params = TestWindowParams::new(1);
+    params.has_ssd = true;
+    let tile = Tile::new(
+        TestWindow::new(params.clone()),
+        Size::from((1280., 720.)),
+        1.,
+        Clock::with_time(Duration::ZERO),
+        options,
+    );
+    assert_eq!(tile.title_bar_height(), 0.);
+
+    params.rules = Some(ResolvedWindowRules {
+        title_bar: Some(false),
+        ..Default::default()
+    });
+    let tile = Tile::new(
+        TestWindow::new(params),
+        Size::from((1280., 720.)),
+        1.,
+        Clock::with_time(Duration::ZERO),
+        Rc::new(Options::default()),
+    );
+    assert_eq!(tile.title_bar_height(), 0.);
+}

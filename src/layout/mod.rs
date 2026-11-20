@@ -87,6 +87,7 @@ pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
 pub mod tile;
+pub mod title_bar;
 pub mod workspace;
 
 #[cfg(test)]
@@ -245,6 +246,10 @@ pub trait LayoutElement {
     fn set_floating(&mut self, floating: bool);
     /// arbor: whether the window is minimized (hidden, keeping its dock slot).
     fn set_minimized(&mut self, _minimized: bool) {}
+    /// arbor: the window title, for the server-side title bar.
+    fn title(&self) -> Option<String> {
+        None
+    }
     fn set_bounds(&self, bounds: Size<i32, Logical>);
     fn is_ignoring_opacity_window_rule(&self) -> bool;
 

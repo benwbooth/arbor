@@ -40,6 +40,7 @@ pub mod layout;
 pub mod misc;
 pub mod output;
 pub mod recent_windows;
+pub mod title_bar;
 pub mod utils;
 pub mod window_rule;
 pub mod workspace;
@@ -57,6 +58,7 @@ pub use crate::misc::*;
 pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
+pub use crate::title_bar::{TitleBars, TitleBarsPart};
 pub use crate::utils::FloatOrInt;
 use crate::utils::{Flag, MergeWith as _};
 pub use crate::window_rule::{
@@ -1516,6 +1518,34 @@ mod tests {
                     b: 0.25,
                     a: 1.0,
                 },
+                title_bars: TitleBars {
+                    off: false,
+                    height: 28.0,
+                    active_color: Color {
+                        r: 0.19215687,
+                        g: 0.21176471,
+                        b: 0.23137255,
+                        a: 1.0,
+                    },
+                    inactive_color: Color {
+                        r: 0.1254902,
+                        g: 0.13725491,
+                        b: 0.14901961,
+                        a: 1.0,
+                    },
+                    active_text_color: Color {
+                        r: 0.9882353,
+                        g: 0.9882353,
+                        b: 0.9882353,
+                        a: 1.0,
+                    },
+                    inactive_text_color: Color {
+                        r: 0.6313726,
+                        g: 0.6627451,
+                        b: 0.69411767,
+                        a: 1.0,
+                    },
+                },
             },
             prefer_no_csd: true,
             cursor: Cursor {
@@ -1833,6 +1863,7 @@ mod tests {
                         false,
                     ),
                     open_docked: None,
+                    title_bar: None,
                     open_focused: Some(
                         true,
                     ),

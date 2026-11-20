@@ -65,6 +65,7 @@ pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
 pub mod spatial_movement_grab;
 pub mod swipe_tracker;
+mod title_bar;
 pub mod touch_overview_grab;
 pub mod touch_resize_grab;
 
@@ -2655,6 +2656,7 @@ impl State {
         self.niri.maybe_activate_pointer_constraint();
 
         self.update_dock_divider_cursor();
+        self.update_title_bar_hover();
 
         // Inform the layout of an ongoing DnD operation.
         let is_dnd_grab = pointer
@@ -2749,6 +2751,7 @@ impl State {
         self.niri.maybe_activate_pointer_constraint();
 
         self.update_dock_divider_cursor();
+        self.update_title_bar_hover();
 
         // We moved the pointer, show it.
         self.niri.pointer_visibility = PointerVisibility::Visible;
@@ -2915,6 +2918,8 @@ impl State {
             if self.try_start_dock_divider_resize(button, button_code, serial) {
                 // arbor: dragging a dock divider.
                 self.niri.queue_redraw_all();
+            } else if self.try_title_bar_press(button, button_code, serial) {
+                // arbor: server-side title bar.
             } else if let Some(mapped) = self.niri.window_under_cursor() {
                 let window = mapped.window.clone();
 

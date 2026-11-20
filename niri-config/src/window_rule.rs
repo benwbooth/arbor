@@ -35,6 +35,9 @@ pub struct WindowRule {
     /// arbor: dock the window into the dock tree instead of opening it on the floating Desktop.
     #[knuffel(child, unwrap(argument))]
     pub open_docked: Option<bool>,
+    /// arbor: set to false to never draw a server-side title bar for the window.
+    #[knuffel(child, unwrap(argument))]
+    pub title_bar: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub open_focused: Option<bool>,
 

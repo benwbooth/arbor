@@ -42,6 +42,8 @@ struct TestWindowInner {
     animate_next_configure: Cell<bool>,
     animation_snapshot: RefCell<Option<LayoutElementRenderSnapshot>>,
     rules: ResolvedWindowRules,
+    /// arbor: server-side decorations (gets a title bar).
+    has_ssd: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +62,7 @@ struct TestWindowParams {
     min_max_size: (Size<i32, Logical>, Size<i32, Logical>),
     #[proptest(strategy = "prop::option::of(arbitrary_rules())")]
     rules: Option<ResolvedWindowRules>,
+    has_ssd: bool,
 }
 
 impl TestWindowParams {
@@ -71,6 +74,7 @@ impl TestWindowParams {
             bbox: Rectangle::from_size(Size::from((100, 200))),
             min_max_size: Default::default(),
             rules: None,
+            has_ssd: false,
         }
     }
 }
@@ -94,6 +98,7 @@ impl TestWindow {
             animate_next_configure: Cell::new(false),
             animation_snapshot: RefCell::new(None),
             rules: params.rules.unwrap_or_default(),
+            has_ssd: params.has_ssd,
         }))
     }
 
@@ -203,7 +208,7 @@ impl LayoutElement for TestWindow {
     fn set_preferred_scale_transform(&self, _scale: output::Scale, _transform: Transform) {}
 
     fn has_ssd(&self) -> bool {
-        false
+        self.0.has_ssd
     }
 
     fn output_enter(&self, _output: &Output) {}

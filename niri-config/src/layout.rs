@@ -5,7 +5,10 @@ use crate::appearance::{
     Border, FocusRing, InsertHint, Shadow, TabIndicator, DEFAULT_BACKGROUND_COLOR,
 };
 use crate::utils::{expect_only_children, Flag, MergeWith};
-use crate::{BorderRule, Color, FloatOrInt, InsertHintPart, ShadowRule, TabIndicatorPart};
+use crate::{
+    BorderRule, Color, FloatOrInt, InsertHintPart, ShadowRule, TabIndicatorPart, TitleBars,
+    TitleBarsPart,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
@@ -24,6 +27,8 @@ pub struct Layout {
     pub gaps: f64,
     pub struts: Struts,
     pub background_color: Color,
+    /// arbor: server-side title bars.
+    pub title_bars: TitleBars,
 }
 
 impl Default for Layout {
@@ -52,6 +57,7 @@ impl Default for Layout {
                 PresetSize::Proportion(2. / 3.),
             ],
             background_color: DEFAULT_BACKGROUND_COLOR,
+            title_bars: TitleBars::default(),
         }
     }
 }
@@ -65,6 +71,7 @@ impl MergeWith<LayoutPart> for Layout {
             shadow,
             tab_indicator,
             insert_hint,
+            title_bars,
             always_center_single_column,
             empty_workspace_above_first,
             gaps,
@@ -126,6 +133,9 @@ pub struct LayoutPart {
     pub struts: Option<Struts>,
     #[knuffel(child)]
     pub background_color: Option<Color>,
+    /// arbor: server-side title bars.
+    #[knuffel(child)]
+    pub title_bars: Option<TitleBarsPart>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
