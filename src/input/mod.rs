@@ -3786,14 +3786,11 @@ impl State {
             return;
         }
 
-        if event.fingers() == 3 {
+        // arbor: macOS-style gestures. 3 and 4 fingers both decide by direction: vertical
+        // opens/closes the overview, horizontal switches workspaces.
+        if event.fingers() == 3 || event.fingers() == 4 {
             self.niri.gesture_swipe_3f_cumulative = Some((0., 0.));
-
-            // We handled this event.
-            return;
-        } else if event.fingers() == 4 {
-            self.niri.layout.overview_gesture_begin();
-            self.niri.queue_redraw_all();
+            self.niri.gesture_swipe_horizontal_ws = false;
 
             // We handled this event.
             return;
@@ -3842,8 +3839,6 @@ impl State {
             }
         }
 
-        let is_overview_open = self.niri.layout.is_overview_open();
-
         if let Some((cx, cy)) = &mut self.niri.gesture_swipe_3f_cumulative {
             *cx += delta_x;
             *cy += delta_y;
@@ -3853,30 +3848,17 @@ impl State {
             if cx * cx + cy * cy >= 16. * 16. {
                 self.niri.gesture_swipe_3f_cumulative = None;
 
-                if let Some(output) = self.niri.output_under_cursor() {
-                    if cx.abs() > cy.abs() {
-                        let output_ws = if is_overview_open {
-                            self.niri.workspace_under_cursor(true)
-                        } else {
-                            // We don't want to accidentally "catch" the wrong workspace during
-                            // animations.
-                            self.niri.output_under_cursor().and_then(|output| {
-                                let mon = self.niri.layout.monitor_for_output(&output)?;
-                                Some((output, mon.active_workspace_ref()))
-                            })
-                        };
-
-                        if let Some((output, ws)) = output_ws {
-                            let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.niri
-                                .layout
-                                .view_offset_gesture_begin(&output, Some(ws_idx), true);
-                        }
-                    } else {
+                // arbor: horizontal switches workspaces, vertical drives the overview.
+                if cx.abs() > cy.abs() {
+                    if let Some(output) = self.niri.output_under_cursor() {
+                        self.niri.gesture_swipe_horizontal_ws = true;
                         self.niri
                             .layout
                             .workspace_switch_gesture_begin(&output, true);
                     }
+                } else {
+                    self.niri.layout.overview_gesture_begin();
+                    self.niri.queue_redraw_all();
                 }
             }
         }
@@ -3884,10 +3866,16 @@ impl State {
         let timestamp = Duration::from_micros(event.time());
 
         let mut handled = false;
+        // arbor: the workspace switch follows the horizontal delta (left = next).
+        let ws_delta = if self.niri.gesture_swipe_horizontal_ws {
+            delta_x
+        } else {
+            delta_y
+        };
         let res = self
             .niri
             .layout
-            .workspace_switch_gesture_update(delta_y, timestamp, true);
+            .workspace_switch_gesture_update(ws_delta, timestamp, true);
         if let Some(output) = res {
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
@@ -3938,7 +3926,12 @@ impl State {
     }
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
-        self.niri.gesture_swipe_3f_cumulative = None;
+        let was_deciding = self.niri.gesture_swipe_3f_cumulative.take().is_some();
+        self.niri.gesture_swipe_horizontal_ws = false;
+        if was_deciding {
+            // arbor: a 3/4-finger swipe too short to pick a direction.
+            return;
+        }
 
         let mut handled = false;
         let res = self.niri.layout.workspace_switch_gesture_end(Some(true));

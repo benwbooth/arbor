@@ -372,6 +372,8 @@ pub struct Niri {
     pub dock_divider_hover: bool,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
+    /// arbor: the ongoing workspace switch gesture follows horizontal finger movement.
+    pub gesture_swipe_horizontal_ws: bool,
     pub overview_scroll_swipe_gesture: ScrollSwipeGesture,
     pub vertical_wheel_tracker: ScrollTracker,
     pub horizontal_wheel_tracker: ScrollTracker,
@@ -2584,6 +2586,7 @@ impl Niri {
             dock_divider_hover: false,
             tablet_cursor_location: None,
             gesture_swipe_3f_cumulative: None,
+            gesture_swipe_horizontal_ws: false,
             overview_scroll_swipe_gesture: ScrollSwipeGesture::new(),
             vertical_wheel_tracker: ScrollTracker::new(120),
             horizontal_wheel_tracker: ScrollTracker::new(120),
