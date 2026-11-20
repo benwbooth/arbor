@@ -1013,6 +1013,10 @@ impl LayoutElement for Mapped {
         with_toplevel_role(self.toplevel(), |role| role.title.clone())
     }
 
+    fn app_id(&self) -> Option<String> {
+        with_toplevel_role(self.toplevel(), |role| role.app_id.clone())
+    }
+
     fn set_minimized(&mut self, minimized: bool) {
         self.is_minimized = minimized;
     }

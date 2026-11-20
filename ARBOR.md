@@ -102,7 +102,12 @@ layout {
    - [x] canvas with minimum leaf size, camera follow/frame/show-all/zoom
      levels/pan/history, scaled rendering and input mapping, Mod+pinch,
      click/double-click while zoomed
-   - [ ] icon tiles
+   - [x] icon tiles: leaves seen narrower than `icon-threshold` draw as a
+     rounded tile in the app's colour with its icon (desktop entry →
+     hicolor/pixmaps PNG, loaded off-thread; SVG-only themes fall back to
+     the app's letter); a subtree below threshold is one tile showing its
+     leaf outlines. Clicking anywhere in a slot activates; double-click
+     frames.
 3. Tab groups (reuse niri's tabbed column display), saved views.
    - [x] tab groups: a leaf holds several tiles with one shown and niri's
      tab indicator; dropping a docked window on the middle of another joins
@@ -182,6 +187,7 @@ without `prefer-no-csd`, so that Qt stops drawing its own bar.
   on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
   `niri-config/src/title_bar.rs`: server-side title bars.
+- `src/layout/icon_tile.rs`: icon tiles.
 - `src/layout/camera.rs`: camera math (framing, panning, history);
   `src/input/camera.rs`: pinch and zoomed clicks.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.

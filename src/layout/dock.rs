@@ -24,6 +24,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::camera::{clamp_to_bounds, pan_to_show, Camera, CameraMode, CameraView};
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
+use super::icon_tile::{relative_rect, IconTiles, TileContent};
 use super::monitor::InsertPosition;
 use super::scrolling::{
     compute_toplevel_bounds, compute_working_area, Column, ColumnWidth, ScrollDirection,
@@ -34,6 +35,7 @@ use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Opti
 use crate::animation::{Animation, Clock};
 use crate::layout::SizingMode;
 use crate::niri_render_elements;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
@@ -150,6 +152,7 @@ niri_render_elements! {
     DockSpaceRenderElement<R> => {
         Inner = DockInnerRenderElement<R>,
         Camera = RescaleRenderElement<DockInnerRenderElement<R>>,
+        IconTile = PrimaryGpuTextureRenderElement,
     }
 }
 
@@ -245,6 +248,9 @@ pub struct DockSpace<W: LayoutElement> {
 
     /// The camera over the canvas (arbor milestone 2).
     camera: Camera,
+
+    /// Cached icon tile renderings.
+    icon_tiles: IconTiles,
 
     /// A drag resting over the middle of a docked window: the leaf, since when, and when the
     /// drag was last seen there.
@@ -976,6 +982,7 @@ impl<W: LayoutElement> DockSpace<W> {
             closing_windows: Vec::new(),
             tab_hover: Cell::new(None),
             camera: Camera::default(),
+            icon_tiles: IconTiles::default(),
             view_size,
             working_area,
             parent_area,
@@ -2156,6 +2163,19 @@ impl<W: LayoutElement> DockSpace<W> {
         })
     }
 
+    /// Nodes that are seen narrower than the icon threshold (outermost first), when zoomed out.
+    fn collapsed_nodes(&self, zoom: f64) -> Vec<CollapsedNode> {
+        let threshold = self.options.layout.camera.icon_threshold;
+        let mut out = Vec::new();
+        if zoom >= 1. || threshold <= 0. {
+            return out;
+        }
+        if let Some(root) = &self.root {
+            collect_collapsed(root, zoom, threshold, self.active, &mut out);
+        }
+        out
+    }
+
     /// Finds the divider between two docked siblings under `pos`.
     ///
     /// Returns a window adjacent to the divider and the edge of that window to resize, such that
@@ -2397,7 +2417,8 @@ impl<W: LayoutElement> DockSpace<W> {
         }
 
         // Zoomed: windows on the canvas are not interactive, only activatable.
-        self.tiles_with_render_positions()
+        let hit = self
+            .tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
             .find_map(|(tile, tile_pos, _)| {
                 if tile.sizing_mode().is_normal() {
@@ -2406,6 +2427,21 @@ impl<W: LayoutElement> DockSpace<W> {
                 } else {
                     HitType::hit_tile(tile, tile_pos, pos)
                 }
+            });
+        if hit.is_some() {
+            return hit;
+        }
+
+        // Anywhere in a window's slot (icon tiles cover the slot) activates it.
+        let canvas_pos = cam.to_canvas(pos);
+        self.visible_leaves()
+            .into_iter()
+            .find(|leaf| leaf.rect.contains(canvas_pos))
+            .map(|leaf| {
+                let hit = HitType::Activate {
+                    is_tab_indicator: false,
+                };
+                (leaf.tile().window(), hit)
             })
     }
 
@@ -2433,7 +2469,37 @@ impl<W: LayoutElement> DockSpace<W> {
         let zoom = cam.zoom;
         let active = self.active;
         let parent_area = self.parent_area;
+
+        // Nodes seen too small to be useful draw as icon tiles instead.
+        let collapsed = self.collapsed_nodes(zoom);
+        let mut hidden_leaves = Vec::new();
+        for node in &collapsed {
+            hidden_leaves.extend_from_slice(&node.leaves);
+            let rect = cam.rect_to_view(node.rect);
+            let rect = Rect::new(
+                rect.loc
+                    .to_physical_precise_round(self.scale)
+                    .to_logical(self.scale),
+                rect.size,
+            );
+            if let Some(elem) = self.icon_tiles.render(
+                ctx.renderer,
+                node.id,
+                rect,
+                self.scale,
+                node.content.clone(),
+                focus_ring && node.leaves.contains(&active.unwrap_or(LeafId(u64::MAX))),
+            ) {
+                push(DockSpaceRenderElement::IconTile(elem));
+            }
+        }
+        self.icon_tiles
+            .retain(|id| collapsed.iter().any(|node| node.id == id));
+
         for leaf in self.leaves_in_render_order() {
+            if hidden_leaves.contains(&leaf.id) && leaf.tile().sizing_mode().is_normal() {
+                continue;
+            }
             // Normal tiles are on the canvas and go through the camera: render them at
             // (canvas - offset) and scale around the origin. Fullscreen and maximized tiles are
             // in view coordinates already.
@@ -3354,6 +3420,15 @@ impl<W: LayoutElement> DockSpace<W> {
     // ---------------------------------------------------------------------------------------
     // Test accessors.
 
+    /// Leaf counts of the nodes drawn as icon tiles, outermost first.
+    #[cfg(test)]
+    pub fn icon_tile_leaf_counts(&self) -> Vec<usize> {
+        self.collapsed_nodes(self.camera_view().zoom)
+            .iter()
+            .map(|node| node.leaves.len())
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn view_size(&self) -> Size<f64, Logical> {
         self.view_size
@@ -3574,6 +3649,85 @@ fn required_size<W: LayoutElement>(
             match split.axis {
                 Axis::Horizontal => Size::from((along, across)),
                 Axis::Vertical => Size::from((across, along)),
+            }
+        }
+    }
+}
+
+/// A node drawn as one icon tile.
+struct CollapsedNode {
+    /// Cache id of the tile.
+    id: u64,
+    /// Canvas rectangle.
+    rect: Rect,
+    content: TileContent,
+    /// Leaves inside (not drawn themselves).
+    leaves: Vec<LeafId>,
+}
+
+fn leaf_app_id<W: LayoutElement>(leaf: &DockLeaf<W>) -> String {
+    leaf.tile().window().app_id().unwrap_or_default()
+}
+
+fn collect_collapsed<W: LayoutElement>(
+    node: &Node<W>,
+    zoom: f64,
+    threshold: f64,
+    active: Option<LeafId>,
+    out: &mut Vec<CollapsedNode>,
+) {
+    if !node.is_visible() {
+        return;
+    }
+    let rect = node_rect(node);
+    let small = rect.size.w * zoom < threshold || rect.size.h * zoom < threshold / 2.;
+    match node {
+        Node::Leaf(leaf) => {
+            if small && leaf.tile().sizing_mode().is_normal() {
+                out.push(CollapsedNode {
+                    id: leaf.id.0,
+                    rect,
+                    content: TileContent::App {
+                        app_id: leaf_app_id(leaf),
+                        has_icon: false,
+                    },
+                    leaves: vec![leaf.id],
+                });
+            }
+        }
+        Node::Split(split) => {
+            if small {
+                let mut leaves = Vec::new();
+                node.leaves(&mut leaves);
+                leaves.retain(|leaf| leaf.minimized.is_none());
+                if leaves
+                    .iter()
+                    .any(|leaf| !leaf.tile().sizing_mode().is_normal())
+                {
+                    // Don't hide fullscreen or maximized windows.
+                } else {
+                    let shown = leaves
+                        .iter()
+                        .find(|leaf| Some(leaf.id) == active)
+                        .or(leaves.first())
+                        .copied();
+                    out.push(CollapsedNode {
+                        id: leaves.first().map_or(0, |leaf| leaf.id.0) | (1 << 63),
+                        rect,
+                        content: TileContent::Group {
+                            leaves: leaves
+                                .iter()
+                                .map(|leaf| relative_rect(rect, leaf.rect))
+                                .collect(),
+                            app_id: shown.map(leaf_app_id).unwrap_or_default(),
+                        },
+                        leaves: leaves.iter().map(|leaf| leaf.id).collect(),
+                    });
+                    return;
+                }
+            }
+            for child in &split.children {
+                collect_collapsed(child, zoom, threshold, active, out);
             }
         }
     }

@@ -81,6 +81,7 @@ pub mod closing_window;
 pub mod dock;
 pub mod floating;
 pub mod focus_ring;
+pub mod icon_tile;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
@@ -249,6 +250,10 @@ pub trait LayoutElement {
     fn set_minimized(&mut self, _minimized: bool) {}
     /// arbor: the window title, for the server-side title bar.
     fn title(&self) -> Option<String> {
+        None
+    }
+    /// arbor: the app id, for icon tiles.
+    fn app_id(&self) -> Option<String> {
         None
     }
     fn set_bounds(&self, bounds: Size<i32, Logical>);

@@ -1412,3 +1412,53 @@ fn canvas_only_grows_when_needed() {
     assert_eq!(w2, 480.);
     assert_eq!(s.window_rect(&1).unwrap().size.w, 1248. - 16. - 480.);
 }
+
+#[test]
+fn icon_tiles_below_threshold() {
+    let make = |threshold: f64| {
+        let mut options = Options::default();
+        options.layout.camera.icon_threshold = threshold;
+        let s = space_with(options);
+        let mut clock = s.clock().clone();
+        clock.set_complete_instantly(true);
+        s
+    };
+
+    let build = |s: &mut DockSpace<TestWindow>| {
+        add(s, 1);
+        add(s, 2);
+        dock(s, 3, 2, DockSide::Bottom);
+        add(s, 4);
+        add(s, 5);
+        s.camera_show_all();
+        s.advance_animations();
+    };
+
+    // At actual size nothing collapses.
+    let mut s = make(160.);
+    add(&mut s, 1);
+    assert!(s.icon_tile_leaf_counts().is_empty());
+
+    // Zoomed out: windows narrower than the threshold become icon tiles.
+    let mut s = make(160.);
+    build(&mut s);
+    let zoom = s.camera_view().zoom;
+    assert!(zoom < 1.);
+    let counts = s.icon_tile_leaf_counts();
+    let small = (1..=5)
+        .filter(|id| s.window_rect(id).unwrap().size.w * zoom < 160.)
+        .count();
+    assert_eq!(counts.iter().sum::<usize>(), small);
+
+    // A huge threshold collapses the whole tree into one tile.
+    let mut s = make(100_000.);
+    build(&mut s);
+    assert_eq!(s.icon_tile_leaf_counts(), vec![5]);
+
+    // Clicking anywhere in a collapsed window's slot activates it.
+    let r4 = s.camera_view().rect_to_view(s.window_rect(&4).unwrap());
+    let center = Point::from((r4.loc.x + r4.size.w / 2., r4.loc.y + r4.size.h - 1.));
+    let (win, hit) = s.window_under(center).unwrap();
+    assert_eq!(*win.id(), 4);
+    assert!(matches!(hit, HitType::Activate { .. }));
+}
