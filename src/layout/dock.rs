@@ -142,7 +142,7 @@ struct Split<W: LayoutElement> {
 #[derive(Debug)]
 enum Node<W: LayoutElement> {
     Split(Split<W>),
-    Leaf(DockLeaf<W>),
+    Leaf(Box<DockLeaf<W>>),
 }
 
 /// A divider being dragged during an interactive resize.
@@ -361,14 +361,14 @@ impl<W: LayoutElement> Node<W> {
 
     fn as_leaf(&self) -> Option<&DockLeaf<W>> {
         match self {
-            Node::Leaf(leaf) => Some(leaf),
+            Node::Leaf(leaf) => Some(&**leaf),
             Node::Split(_) => None,
         }
     }
 
     fn as_leaf_mut(&mut self) -> Option<&mut DockLeaf<W>> {
         match self {
-            Node::Leaf(leaf) => Some(leaf),
+            Node::Leaf(leaf) => Some(&mut **leaf),
             Node::Split(_) => None,
         }
     }
@@ -883,7 +883,7 @@ impl<W: LayoutElement> DockSpace<W> {
         self.cancel_interactive_resize();
 
         let Some(root) = self.root.take() else {
-            self.root = Some(Node::Leaf(leaf));
+            self.root = Some(Node::Leaf(Box::new(leaf)));
             return;
         };
         self.root = Some(root);
@@ -900,7 +900,7 @@ impl<W: LayoutElement> DockSpace<W> {
             },
         };
 
-        let new = Node::Leaf(leaf);
+        let new = Node::Leaf(Box::new(leaf));
 
         match target_path {
             None => {
@@ -949,7 +949,7 @@ impl<W: LayoutElement> DockSpace<W> {
 
         let leaf = match path.split_last() {
             None => match self.root.take() {
-                Some(Node::Leaf(leaf)) => leaf,
+                Some(Node::Leaf(leaf)) => *leaf,
                 _ => unreachable!("empty dock path must point at a root leaf"),
             },
             Some((&idx, parent_path)) => {
@@ -957,7 +957,7 @@ impl<W: LayoutElement> DockSpace<W> {
                 let node = parent.children.remove(idx);
                 parent.fractions.remove(idx);
                 match node {
-                    Node::Leaf(leaf) => leaf,
+                    Node::Leaf(leaf) => *leaf,
                     Node::Split(_) => unreachable!("dock path must point at a leaf"),
                 }
             }
@@ -2164,6 +2164,48 @@ impl<W: LayoutElement> DockSpace<W> {
     #[cfg(test)]
     pub(super) fn view_offset(&self) -> NoViewOffset {
         NoViewOffset
+    }
+
+    /// Compact description of the tree shape, e.g. `H[1,V[2,3]]`.
+    #[cfg(test)]
+    pub fn tree_string(&self) -> String {
+        fn fmt<W: LayoutElement>(node: &Node<W>, out: &mut String) {
+            match node {
+                Node::Leaf(leaf) => out.push_str(&format!("{:?}", leaf.tile.window().id())),
+                Node::Split(split) => {
+                    out.push(match split.axis {
+                        Axis::Horizontal => 'H',
+                        Axis::Vertical => 'V',
+                    });
+                    out.push('[');
+                    for (idx, child) in split.children.iter().enumerate() {
+                        if idx > 0 {
+                            out.push(',');
+                        }
+                        fmt(child, out);
+                    }
+                    out.push(']');
+                }
+            }
+        }
+
+        let mut out = String::new();
+        if let Some(root) = &self.root {
+            fmt(root, &mut out);
+        }
+        out
+    }
+
+    /// Layout rectangle of a window's leaf.
+    #[cfg(test)]
+    pub fn window_rect(&self, window: &W::Id) -> Option<Rect> {
+        self.leaf_by_window(window).map(|leaf| leaf.rect)
+    }
+
+    /// Leaf id of a window, for building dock targets.
+    #[cfg(test)]
+    pub fn leaf_id_of(&self, window: &W::Id) -> Option<LeafId> {
+        self.leaf_by_window(window).map(|leaf| leaf.id)
     }
 
     #[cfg(test)]
