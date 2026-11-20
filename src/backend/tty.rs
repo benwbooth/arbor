@@ -685,6 +685,10 @@ impl Tty {
                                 Ok(()) => (),
                                 Err(err) => debug!("couldn't reset HDR properties: {err:?}"),
                             }
+                            // arbor: re-enable our HDR signalling.
+                            if let Some(gamma_props) = &surface.gamma_props {
+                                gamma_props.restore_hdr_signalling(&props);
+                            }
                         } else {
                             warn!("failed to get connector properties");
                         };
@@ -1336,22 +1340,32 @@ impl Tty {
             debug!("couldn't reset gamma: {err:?}");
         }
 
-        // arbor: EDID gamut mapping through DEGAMMA_LUT/CTM/GAMMA_LUT.
+        // arbor: EDID gamut mapping / HDR through DEGAMMA_LUT/CTM/GAMMA_LUT.
         if let Some(gamma_props) = &mut gamma_props {
-            gamma_props.color.edid_ctm = get_edid_info(&device.drm, connector.handle())
+            gamma_props.color.edid_chroma = get_edid_info(&device.drm, connector.handle())
                 .ok()
                 .and_then(|info| color_pipeline::edid_chromaticities(&info))
-                .and_then(|chroma| {
-                    let ctm = color_pipeline::edid_ctm(&chroma);
+                .inspect(|chroma| {
+                    let ctm = color_pipeline::edid_ctm(chroma);
                     debug!("{connector_name}: EDID chromaticities {chroma:?}, CTM {ctm:?}");
-                    ctm
                 });
-            if let Err(err) = gamma_props.set_color_profile(&device.drm, config.color_profile, true)
-            {
-                warn!("{connector_name}: error setting colour profile: {err:?}");
+            match ConnectorProperties::try_new(&device.drm, connector.handle()) {
+                Ok(props) => {
+                    if let Err(err) = gamma_props.set_color_config(
+                        &props,
+                        config.color_profile,
+                        config.hdr(),
+                        true,
+                    ) {
+                        warn!("{connector_name}: error setting colour config: {err:?}");
+                    }
+                }
+                Err(err) => warn!("{connector_name}: no connector properties: {err:?}"),
             }
-        } else if config.color_profile != niri_config::output::ColorProfile::Srgb {
-            warn!("{connector_name}: color-profile needs atomic GAMMA_LUT support, ignoring");
+        } else if config.color_profile != niri_config::output::ColorProfile::Srgb
+            || config.hdr().is_some()
+        {
+            warn!("{connector_name}: color-profile/hdr need GAMMA_LUT support, ignoring");
         }
 
         let surface = device
@@ -2446,14 +2460,23 @@ impl Tty {
 
                 let change_mode = surface.compositor.pending_mode() != mode;
 
-                // arbor: colour profile changes.
+                // arbor: colour profile / HDR changes.
                 if let Some(gamma_props) = &mut surface.gamma_props {
-                    if gamma_props.color.profile != config.color_profile {
-                        if let Err(err) =
-                            gamma_props.set_color_profile(&device.drm, config.color_profile, false)
-                        {
+                    if gamma_props.color.profile != config.color_profile
+                        || gamma_props.color.hdr != config.hdr()
+                    {
+                        let res = ConnectorProperties::try_new(&device.drm, surface.connector)
+                            .and_then(|props| {
+                                gamma_props.set_color_config(
+                                    &props,
+                                    config.color_profile,
+                                    config.hdr(),
+                                    false,
+                                )
+                            });
+                        if let Err(err) = res {
                             warn!(
-                                "output {:?}: error setting colour profile: {err:?}",
+                                "output {:?}: error setting colour config: {err:?}",
                                 surface.name.connector
                             );
                         }
@@ -2682,7 +2705,7 @@ impl GammaProps {
     }
 
     fn set_gamma(&mut self, device: &DrmDevice, gamma: Option<&[u16]>) -> anyhow::Result<()> {
-        if self.color.active_ctm.is_none() {
+        if self.color.active.is_none() {
             self.color.client_ramp = gamma.map(<[u16]>::to_vec);
             return self.write_gamma_lut(device, gamma);
         }

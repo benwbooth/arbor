@@ -14,6 +14,7 @@ output "eDP-1" {
     position x=1280 y=0
     variable-refresh-rate // on-demand=true
     color-profile "edid"
+    // hdr { sdr-brightness 560; }
     focus-at-startup
     backdrop-color "#001100"
 
@@ -244,6 +245,30 @@ output "DP-1" {
 Gamma-control clients (night light tools like wlsunset or gammastep) keep working: their ramp is applied on top of the mapping.
 Only the TTY backend supports this, and only when the GPU driver exposes `DEGAMMA_LUT` and `CTM` on the CRTC (amdgpu, i915 and most others do); otherwise a warning is logged and the option is ignored.
 Screenshots and screencasts are not affected: they keep the plain sRGB content.
+
+### `hdr`
+
+<sup>arbor</sup>
+
+Drive the output in HDR: the monitor receives a 10-bit PQ (SMPTE ST 2084) BT.2020 signal, and all desktop content (which is SDR sRGB) is shown with sRGB white at `sdr-brightness` nits.
+
+```kdl
+output "DP-1" {
+    hdr {
+        sdr-brightness 560  // nits for sRGB white, default 203
+        max-luminance 560   // peak sent in the HDR metadata, default sdr-brightness
+        // off
+    }
+}
+```
+
+The conversion happens in the display hardware (KMS CRTC colour pipeline: sRGB EOTF, sRGB to BT.2020 matrix, PQ), so it costs no GPU time and also covers the cursor and direct-scanout windows.
+The connector gets `Colorspace` = BT2020_RGB, PQ `HDR_OUTPUT_METADATA` (with the panel's EDID primaries as the mastering display) and `max bpc` 10.
+When `hdr` is on, `color-profile` is ignored: the monitor maps BT.2020 to its panel itself.
+
+There is no HDR client support yet (no `wp_color_management_v1`): HDR videos and games are shown as SDR.
+Turning HDR on or off makes the monitor resync (a short blank).
+Night light (gamma-control) still works on top.
 
 ### `focus-at-startup`
 
