@@ -34,6 +34,11 @@ arbor changes in new files where possible so rebases stay small.
 - **Double-click title / maximize:** frame that window on its own (camera),
   again to return.
 
+## Touchpad
+
+3- and 4-finger swipes work like macOS: vertical opens/closes the overview,
+horizontal switches workspaces (both interactive).
+
 ## Camera (milestone 2)
 
 The dock tree is laid out at its own *canvas size*, which may be larger than
