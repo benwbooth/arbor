@@ -108,3 +108,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: holds `DockSpace` where niri held
   `ScrollingSpace`.
+- `src/protocols/kde_appmenu.rs`: server side of `org_kde_kwin_appmenu`.
+  The menu's DBus address shows up as `app_menu` on IPC windows
+  (`WindowOpenedOrChanged` fires when it changes). Qt only exports its menu
+  if `com.canonical.AppMenu.Registrar` is on the session bus when the app
+  starts, so the shell has to own that name (a stub is enough).

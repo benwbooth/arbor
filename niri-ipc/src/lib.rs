@@ -1359,6 +1359,22 @@ pub struct Window {
     ///
     /// The timestamp comes from the monotonic clock.
     pub focus_timestamp: Option<Timestamp>,
+    /// DBus location of the window's menu bar, if the app exported one.
+    ///
+    /// Set by apps through the KDE appmenu Wayland protocol. The object at this location
+    /// implements `com.canonical.dbusmenu`.
+    #[serde(default)]
+    pub app_menu: Option<AppMenu>,
+}
+
+/// DBus location of a window's menu bar (`com.canonical.dbusmenu`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct AppMenu {
+    /// DBus service name (unique or well-known) on the session bus.
+    pub service_name: String,
+    /// DBus object path.
+    pub object_path: String,
 }
 
 /// A moment in time.

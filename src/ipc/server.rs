@@ -34,6 +34,7 @@ use crate::backend::IpcOutputMap;
 use crate::input::pick_window_grab::PickWindowGrab;
 use crate::layout::workspace::WorkspaceId;
 use crate::niri::State;
+use crate::protocols::kde_appmenu::app_menu_address;
 use crate::utils::{version, with_toplevel_role};
 use crate::window::Mapped;
 
@@ -512,11 +513,13 @@ async fn handle_event_stream_client(client: EventStreamClient) -> anyhow::Result
     Ok(())
 }
 
-fn make_ipc_window(
+pub(crate) fn make_ipc_window(
     mapped: &Mapped,
     workspace_id: Option<WorkspaceId>,
     layout: WindowLayout,
 ) -> niri_ipc::Window {
+    // Outside with_toplevel_role(): both lock the same surface's states.
+    let app_menu = ipc_app_menu(mapped);
     with_toplevel_role(mapped.toplevel(), |role| niri_ipc::Window {
         id: mapped.id().get(),
         title: role.title.clone(),
@@ -529,6 +532,14 @@ fn make_ipc_window(
         is_urgent: mapped.is_urgent(),
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
+        app_menu,
+    })
+}
+
+fn ipc_app_menu(mapped: &Mapped) -> Option<niri_ipc::AppMenu> {
+    app_menu_address(mapped.toplevel().wl_surface()).map(|address| niri_ipc::AppMenu {
+        service_name: address.service_name,
+        object_path: address.object_path,
     })
 }
 
@@ -725,6 +736,8 @@ impl State {
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id
             });
+
+            changed |= ipc_win.app_menu != ipc_app_menu(mapped);
 
             if changed {
                 let window = make_ipc_window(mapped, ws_id, window_layout);

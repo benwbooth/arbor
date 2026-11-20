@@ -707,6 +707,13 @@ fn print_window(window: &Window) {
         println!("  Workspace ID: (none)");
     }
 
+    if let Some(app_menu) = &window.app_menu {
+        println!(
+            "  App menu: {} {}",
+            app_menu.service_name, app_menu.object_path
+        );
+    }
+
     let WindowLayout {
         pos_in_scrolling_layout,
         tile_size,
