@@ -32,6 +32,8 @@ use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_protocols_plasma::appmenu::client::org_kde_kwin_appmenu::OrgKdeKwinAppmenu;
+use wayland_protocols_plasma::appmenu::client::org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager;
 
 use crate::utils::id::IdCounter;
 
@@ -55,6 +57,7 @@ pub struct State {
     pub layer_shell: Option<ZwlrLayerShellV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
+    pub appmenu_manager: Option<OrgKdeKwinAppmenuManager>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -181,6 +184,7 @@ impl Client {
             layer_shell: None,
             spbm: None,
             viewporter: None,
+            appmenu_manager: None,
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -518,6 +522,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == WpViewporter::interface().name {
                     let version = min(version, WpViewporter::interface().version);
                     state.viewporter = Some(registry.bind(name, version, qh, ()));
+                } else if interface == OrgKdeKwinAppmenuManager::interface().name {
+                    let version = min(version, OrgKdeKwinAppmenuManager::interface().version);
+                    state.appmenu_manager = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -768,6 +775,32 @@ impl Dispatch<WpViewport, ()> for State {
         _state: &mut Self,
         _proxy: &WpViewport,
         _event: <WpViewport as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<OrgKdeKwinAppmenuManager, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinAppmenuManager,
+        _event: <OrgKdeKwinAppmenuManager as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<OrgKdeKwinAppmenu, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &OrgKdeKwinAppmenu,
+        _event: <OrgKdeKwinAppmenu as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
