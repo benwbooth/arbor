@@ -223,6 +223,15 @@ pub fn degamma_lut(size: usize) -> Vec<u16> {
     [ch.as_slice(), &ch, &ch].concat()
 }
 
+/// How GAMMA_LUT encodes the linear light coming out of the CTM.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutputTransfer {
+    /// sRGB-encoded SDR signal.
+    Srgb,
+    /// SMPTE ST 2084 (PQ) signal; linear 1.0 (sRGB white) is shown at `sdr_white` nits.
+    Pq { sdr_white: f64 },
+}
+
 /// `GAMMA_LUT` contents for a linear-light input (after DEGAMMA and CTM): the inverse sRGB
 /// EOTF, followed by the gamma-control client ramp if any.
 ///
@@ -230,9 +239,30 @@ pub fn degamma_lut(size: usize) -> Vec<u16> {
 /// number of entries per channel; it expects encoded input, so it is applied after the
 /// inverse EOTF.
 pub fn gamma_lut(size: usize, client_ramp: Option<&[u16]>) -> Vec<u16> {
+    output_lut(size, client_ramp, OutputTransfer::Srgb)
+}
+
+/// `GAMMA_LUT` contents for a linear-light input with the given output encoding.
+///
+/// The client ramp (if any) is applied in the sRGB-encoded domain it was made for: linear ->
+/// sRGB -> ramp -> linear -> output transfer.
+pub fn output_lut(size: usize, client_ramp: Option<&[u16]>, transfer: OutputTransfer) -> Vec<u16> {
+    let encode = |l: f64, ch: Option<&[u16]>| {
+        let srgb = match ch {
+            Some(ch) => sample(ch, srgb_inv_eotf(l)),
+            None => srgb_inv_eotf(l),
+        };
+        match transfer {
+            OutputTransfer::Srgb => srgb,
+            OutputTransfer::Pq { sdr_white } => {
+                pq_inv_eotf(srgb_eotf(srgb) * sdr_white / PQ_MAX_NITS)
+            }
+        }
+    };
+
     match client_ramp {
         None => {
-            let ch = lut_channel(size, srgb_inv_eotf);
+            let ch = lut_channel(size, |l| encode(l, None));
             [ch.as_slice(), &ch, &ch].concat()
         }
         Some(ramp) => {
@@ -241,11 +271,71 @@ pub fn gamma_lut(size: usize, client_ramp: Option<&[u16]>) -> Vec<u16> {
             let (g, b) = rest.split_at(n);
             let mut out = Vec::with_capacity(size * 3);
             for ch in [&r[..n], &g[..n], &b[..n]] {
-                out.extend(lut_channel(size, |l| sample(ch, srgb_inv_eotf(l))));
+                out.extend(lut_channel(size, |l| encode(l, Some(ch))));
             }
             out
         }
     }
+}
+
+/// BT.2020 primaries with D65 white.
+pub const BT2020: Chromaticities = Chromaticities {
+    red: Xy { x: 0.708, y: 0.292 },
+    green: Xy { x: 0.170, y: 0.797 },
+    blue: Xy { x: 0.131, y: 0.046 },
+    white: SRGB.white,
+};
+
+pub const PQ_MAX_NITS: f64 = 10000.;
+
+/// Inverse PQ EOTF (SMPTE ST 2084): normalized luminance (1.0 = 10000 nits) -> signal.
+pub fn pq_inv_eotf(y: f64) -> f64 {
+    const M1: f64 = 2610. / 16384.;
+    const M2: f64 = 2523. / 4096. * 128.;
+    const C1: f64 = 3424. / 4096.;
+    const C2: f64 = 2413. / 4096. * 32.;
+    const C3: f64 = 2392. / 4096. * 32.;
+    let yp = y.clamp(0., 1.).powf(M1);
+    ((C1 + C2 * yp) / (1. + C3 * yp)).powf(M2)
+}
+
+/// `struct hdr_output_metadata` for the `HDR_OUTPUT_METADATA` connector property: static
+/// metadata type 1, PQ EOTF.
+pub fn hdr_output_metadata(mastering: &Chromaticities, max_nits: f64, min_nits: f64) -> Vec<u8> {
+    // Chromaticities in units of 0.00002, luminance in nits (max) and 0.0001 nits (min).
+    let xy = |c: Xy| {
+        [
+            (c.x / 0.00002).round().clamp(0., 50000.) as u16,
+            (c.y / 0.00002).round().clamp(0., 50000.) as u16,
+        ]
+    };
+    let max = max_nits.round().clamp(0., 65535.) as u16;
+    let min = (min_nits * 10000.).round().clamp(0., 65535.) as u16;
+
+    let mut out = Vec::with_capacity(32);
+    // __u32 metadata_type (HDMI_STATIC_METADATA_TYPE1 = 0).
+    out.extend(0u32.to_ne_bytes());
+    // struct hdr_metadata_infoframe: __u8 eotf (HDMI_EOTF_SMPTE_ST2084 = 2), __u8 metadata_type.
+    out.push(2);
+    out.push(0);
+    let mut push = |v: u16| out.extend(v.to_ne_bytes());
+    for c in [
+        mastering.red,
+        mastering.green,
+        mastering.blue,
+        mastering.white,
+    ] {
+        let [x, y] = xy(c);
+        push(x);
+        push(y);
+    }
+    push(max); // max_display_mastering_luminance
+    push(min); // min_display_mastering_luminance
+    push(max); // max_cll
+    push(max); // max_fall
+               // sizeof(struct hdr_output_metadata) is 32 (u32 alignment); the kernel checks it.
+    out.extend([0, 0]);
+    out
 }
 
 #[cfg(test)]
@@ -475,5 +565,50 @@ mod tests {
         // Roughly a DCI-P3-class panel.
         assert!(m[0][0] > 0.75 && m[0][0] < 0.9, "{m:?}");
         assert!(m[1][1] > 0.9 && m[1][1] < 1.0, "{m:?}");
+    }
+
+    #[test]
+    fn pq_reference_points() {
+        assert!(pq_inv_eotf(0.) < 1e-6);
+        assert!((pq_inv_eotf(1.) - 1.).abs() < 1e-9);
+        // 100 nits ~ 0.5081, 203 nits ~ 0.5807, 1000 nits ~ 0.7518.
+        assert!((pq_inv_eotf(0.01) - 0.5081).abs() < 1e-3);
+        assert!((pq_inv_eotf(0.0203) - 0.5807).abs() < 1e-3);
+        assert!((pq_inv_eotf(0.1) - 0.7518).abs() < 1e-3);
+    }
+
+    #[test]
+    fn pq_output_lut() {
+        let n = 4096;
+        let lut = output_lut(n, None, OutputTransfer::Pq { sdr_white: 560. });
+        assert_eq!(lut.len(), n * 3);
+        assert_eq!(lut[0], 0);
+        // Linear 1.0 (sRGB white) lands at 560 nits.
+        let top = lut[n - 1] as f64 / 65535.;
+        assert!((top - pq_inv_eotf(0.056)).abs() < 1e-4);
+        // Monotonic.
+        assert!(lut[..n].windows(2).all(|w| w[0] <= w[1]));
+        // A night-light ramp halving blue halves blue's encoded sRGB value before PQ.
+        let lin: Vec<u16> = (0..n).map(|i| (i * 65535 / (n - 1)) as u16).collect();
+        let half: Vec<u16> = lin.iter().map(|v| v / 2).collect();
+        let ramp = [lin.as_slice(), &lin, &half].concat();
+        let out = output_lut(n, Some(&ramp), OutputTransfer::Pq { sdr_white: 560. });
+        let b_top = out[3 * n - 1] as f64 / 65535.;
+        let expected = pq_inv_eotf(srgb_eotf(0.5) * 0.056);
+        assert!((b_top - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn hdr_metadata_layout() {
+        let m = hdr_output_metadata(&BT2020, 800., 0.);
+        assert_eq!(m.len(), 32);
+        assert_eq!(&m[0..4], &[0, 0, 0, 0]);
+        assert_eq!(m[4], 2);
+        let u16_at = |i: usize| u16::from_ne_bytes([m[i], m[i + 1]]);
+        assert_eq!(u16_at(6), 35400); // red x 0.708
+        assert_eq!(u16_at(18), 15635); // white x 0.3127
+        assert_eq!(u16_at(22), 800);
+        assert_eq!(u16_at(24), 0);
+        assert_eq!(u16_at(26), 800);
     }
 }
