@@ -40,16 +40,42 @@ horizontal switches workspaces (both interactive).
 
 ## Camera (milestone 2)
 
-The dock tree is laid out at its own *canvas size*, which may be larger than
-the screen (each leaf has a minimum useful size). A 2D camera (offset +
-zoom) maps canvas to screen, reusing the overview's scaled rendering path.
+The dock tree is laid out on a *canvas*: the working area, grown where
+leaves would get smaller than the minimum useful size (`min-leaf-width` x
+`min-leaf-height`; children below their minimum take room from their
+siblings first, so the canvas only grows when everything can't fit). A
+camera (offset + zoom, per workspace) maps canvas to screen:
+`view = (canvas - offset) * zoom`. Docked windows render through it
+(`RescaleRenderElement` when zoomed, as the overview does); the floating
+Desktop does not move.
 
-- Zoom out / in a level, frame a node, frame a rectangle (drag with a
-  modifier), neighbours left/right/up/down, back/forward history.
+- Modes: *follow* (actual size, auto-pans so the focused window is fully
+  shown — the default; identical to milestone 1 while the canvas is the
+  screen), *framed* (fits the node at some depth on the path to the
+  focused window), *show-all*, *free* (pinch).
+- Actions (binds and IPC): `camera-zoom-out` (one level up: the parent of
+  the focused node, skipping levels that would only pan; ultimately
+  everything), `camera-zoom-in` (one level toward the focused window, then
+  actual size), `camera-show-all`, `camera-frame-window`,
+  `camera-pan-left/right/up/down` (focus the neighbour, camera follows),
+  `camera-back` / `camera-forward` (history, restores focus too). Moves
+  use the `horizontal-view-movement` animation.
+- Mod+touchpad pinch zooms around the pointer.
+- While zoomed, docked windows take no input: a click activates and starts
+  a move (drag still docks), a double-click frames the window. Dividers
+  still drag.
 - Leaves rendered below a size threshold become an app-icon tile; a whole
   subtree below threshold becomes one tile showing its split lines.
-  Double-click one to zoom into it.
-- One animation curve for split, dock, close, and camera moves.
+
+```kdl
+layout {
+    camera {
+        min-leaf-width 480
+        min-leaf-height 320
+        icon-threshold 160
+    }
+}
+```
 
 ## Milestones
 
@@ -73,6 +99,10 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
    - [x] inserting splits the target's share only; removing gives the share
      back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
+   - [x] canvas with minimum leaf size, camera follow/frame/show-all/zoom
+     levels/pan/history, scaled rendering and input mapping, Mod+pinch,
+     click/double-click while zoomed
+   - [ ] icon tiles
 3. Tab groups (reuse niri's tabbed column display), saved views.
    - [x] tab groups: a leaf holds several tiles with one shown and niri's
      tab indicator; dropping a docked window on the middle of another joins
@@ -152,6 +182,8 @@ without `prefer-no-csd`, so that Qt stops drawing its own bar.
   on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
   `niri-config/src/title_bar.rs`: server-side title bars.
+- `src/layout/camera.rs`: camera math (framing, panning, history);
+  `src/input/camera.rs`: pinch and zoomed clicks.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: holds `DockSpace` where niri held
   `ScrollingSpace`.

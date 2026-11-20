@@ -47,6 +47,7 @@ use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_a11y::KbMonBlock;
+use crate::layout::dock::DockSide;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
@@ -56,6 +57,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
+mod camera;
 mod dock_divider;
 pub mod move_grab;
 pub mod pick_color_grab;
@@ -2317,6 +2319,56 @@ impl State {
                 self.maybe_warp_cursor_to_focus();
                 self.niri.queue_redraw_all();
             }
+            Action::CameraZoomOut => {
+                self.niri.layout.camera_action(|d| d.camera_zoom_out());
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraZoomIn => {
+                self.niri.layout.camera_action(|d| d.camera_zoom_in());
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraShowAll => {
+                self.niri.layout.camera_action(|d| d.camera_show_all());
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraFrameWindow => {
+                self.niri
+                    .layout
+                    .camera_action(|d| d.camera_frame_window(None));
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraPanLeft => {
+                self.niri
+                    .layout
+                    .camera_action(|d| d.camera_pan(DockSide::Left));
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraPanRight => {
+                self.niri
+                    .layout
+                    .camera_action(|d| d.camera_pan(DockSide::Right));
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraPanUp => {
+                self.niri
+                    .layout
+                    .camera_action(|d| d.camera_pan(DockSide::Top));
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraPanDown => {
+                self.niri
+                    .layout
+                    .camera_action(|d| d.camera_pan(DockSide::Bottom));
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraBack => {
+                self.niri.layout.camera_action(|d| d.camera_back());
+                self.niri.queue_redraw_all();
+            }
+            Action::CameraForward => {
+                self.niri.layout.camera_action(|d| d.camera_forward());
+                self.niri.queue_redraw_all();
+            }
             Action::FocusTabNext => {
                 self.niri.layout.focus_tab(true);
                 self.niri.queue_redraw_all();
@@ -2918,6 +2970,8 @@ impl State {
             if self.try_start_dock_divider_resize(button, button_code, serial) {
                 // arbor: dragging a dock divider.
                 self.niri.queue_redraw_all();
+            } else if self.try_zoomed_dock_press(button, button_code, serial) {
+                // arbor: clicking the zoomed-out dock tree.
             } else if self.try_title_bar_press(button, button_code, serial) {
                 // arbor: server-side title bar.
             } else if let Some(mapped) = self.niri.window_under_cursor() {
@@ -3980,6 +4034,11 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        // arbor: Mod+pinch zooms the camera.
+        if self.camera_pinch_begin() {
+            return;
+        }
+
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 
@@ -3998,6 +4057,10 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+        if self.camera_pinch_update(event.scale()) {
+            return;
+        }
+
         let pointer = self.niri.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
@@ -4016,6 +4079,10 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        if self.camera_pinch_end() {
+            return;
+        }
+
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 

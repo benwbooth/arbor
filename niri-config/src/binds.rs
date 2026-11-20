@@ -398,6 +398,16 @@ pub enum Action {
     RestoreWindowById(u64),
     FocusTabNext,
     FocusTabPrev,
+    CameraZoomOut,
+    CameraZoomIn,
+    CameraShowAll,
+    CameraFrameWindow,
+    CameraPanLeft,
+    CameraPanRight,
+    CameraPanUp,
+    CameraPanDown,
+    CameraBack,
+    CameraForward,
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -715,6 +725,16 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::RestoreWindow { id: Some(id) } => Self::RestoreWindowById(id),
             niri_ipc::Action::FocusTabNext {} => Self::FocusTabNext,
             niri_ipc::Action::FocusTabPrev {} => Self::FocusTabPrev,
+            niri_ipc::Action::CameraZoomOut {} => Self::CameraZoomOut,
+            niri_ipc::Action::CameraZoomIn {} => Self::CameraZoomIn,
+            niri_ipc::Action::CameraShowAll {} => Self::CameraShowAll,
+            niri_ipc::Action::CameraFrameWindow {} => Self::CameraFrameWindow,
+            niri_ipc::Action::CameraPanLeft {} => Self::CameraPanLeft,
+            niri_ipc::Action::CameraPanRight {} => Self::CameraPanRight,
+            niri_ipc::Action::CameraPanUp {} => Self::CameraPanUp,
+            niri_ipc::Action::CameraPanDown {} => Self::CameraPanDown,
+            niri_ipc::Action::CameraBack {} => Self::CameraBack,
+            niri_ipc::Action::CameraForward {} => Self::CameraForward,
         }
     }
 }

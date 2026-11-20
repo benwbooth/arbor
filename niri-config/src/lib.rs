@@ -31,6 +31,7 @@ pub mod macros;
 pub mod animations;
 pub mod appearance;
 pub mod binds;
+pub mod camera;
 pub mod debug;
 pub mod error;
 pub mod gestures;
@@ -48,6 +49,7 @@ pub mod workspace;
 pub use crate::animations::{Animation, Animations};
 pub use crate::appearance::*;
 pub use crate::binds::*;
+pub use crate::camera::{Camera, CameraPart};
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
@@ -1545,6 +1547,11 @@ mod tests {
                         b: 0.69411767,
                         a: 1.0,
                     },
+                },
+                camera: Camera {
+                    min_leaf_width: 480.0,
+                    min_leaf_height: 320.0,
+                    icon_threshold: 160.0,
                 },
             },
             prefer_no_csd: true,

@@ -70,8 +70,11 @@ impl<W: LayoutElement> Workspace<W> {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(&crate::layout::tile::Tile<W>, Point<f64, Logical>)> {
+        let zoomed = self.scrolling.is_zoomed();
         self.tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
+            // Zoomed-out docked windows have no title bar interaction.
+            .filter(|(tile, _, _)| !zoomed || self.floating.has_window(tile.window().id()))
             .find(|(tile, tile_pos, _)| tile.hit(pos - *tile_pos).is_some())
             .map(|(tile, tile_pos, _)| (tile, tile_pos))
     }
@@ -93,6 +96,21 @@ impl<W: LayoutElement> Workspace<W> {
             changed |= tile.set_title_bar_hover(point);
         }
         changed
+    }
+
+    /// The dock tree (for camera actions).
+    pub fn dock_mut(&mut self) -> &mut crate::layout::dock::DockSpace<W> {
+        &mut self.scrolling
+    }
+
+    /// The docked window under `pos` while the camera is zoomed (when docked windows only take
+    /// activation clicks).
+    pub fn zoomed_dock_window_under(&self, pos: Point<f64, Logical>) -> Option<&W> {
+        if !self.scrolling.is_zoomed() {
+            return None;
+        }
+        let (win, _) = self.window_under(pos)?;
+        (!self.floating.has_window(win.id())).then_some(win)
     }
 
     pub fn is_minimized(&self, id: &W::Id) -> bool {

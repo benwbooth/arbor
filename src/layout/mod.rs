@@ -76,6 +76,7 @@ use crate::utils::{
 use crate::window::ResolvedWindowRules;
 
 mod arbor;
+pub mod camera;
 pub mod closing_window;
 pub mod dock;
 pub mod floating;

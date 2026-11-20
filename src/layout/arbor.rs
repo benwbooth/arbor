@@ -92,6 +92,57 @@ impl<W: LayoutElement> Layout<W> {
         changed
     }
 
+    /// Runs a camera action on the active workspace's dock tree.
+    pub fn camera_action(&mut self, f: impl FnOnce(&mut super::dock::DockSpace<W>)) {
+        if let Some(ws) = self.active_workspace_mut() {
+            f(ws.dock_mut());
+        }
+    }
+
+    /// Frames `window` with its workspace's camera and focuses it.
+    pub fn camera_frame_window(&mut self, window: &W::Id) {
+        self.activate_window(window);
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.has_window(window)) {
+            ws.dock_mut().camera_frame_window(Some(window));
+        }
+    }
+
+    /// Zooms the camera of the workspace under the pointer by `factor` around the pointer.
+    pub fn camera_zoom_at(
+        &mut self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+        factor: f64,
+    ) {
+        if self.is_overview_open() {
+            return;
+        }
+        let Some(mon) = self.monitor_for_output(output) else {
+            return;
+        };
+        let Some((ws, geo)) = mon.workspace_under(pos_within_output) else {
+            return;
+        };
+        let (id, pos) = (ws.id(), pos_within_output - geo.loc);
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.id() == id) {
+            ws.dock_mut().camera_zoom_by(factor, pos);
+        }
+    }
+
+    /// The docked window under the pointer while its camera is zoomed.
+    pub fn zoomed_dock_window_under(
+        &self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<&W> {
+        if self.interactive_move.is_some() || self.is_overview_open() {
+            return None;
+        }
+        let mon = self.monitor_for_output(output)?;
+        let (ws, geo) = mon.workspace_under(pos_within_output)?;
+        ws.zoomed_dock_window_under(pos_within_output - geo.loc)
+    }
+
     pub fn is_minimized(&self, window: &W::Id) -> bool {
         self.workspaces()
             .any(|(_, _, ws)| ws.has_window(window) && ws.is_minimized(window))

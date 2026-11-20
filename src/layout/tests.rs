@@ -642,6 +642,18 @@ enum Op {
     FocusTab {
         forwards: bool,
     },
+    CameraZoomOut,
+    CameraZoomIn,
+    CameraShowAll,
+    CameraFrameWindow,
+    CameraPanRight,
+    CameraPanDown,
+    CameraBack,
+    CameraForward,
+    CameraZoomBy {
+        #[proptest(strategy = "0.2..2.0f64")]
+        factor: f64,
+    },
     MoveFloatingWindow {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
@@ -1381,6 +1393,21 @@ impl Op {
                 layout.restore_window(id.as_ref());
             }
             Op::FocusTab { forwards } => layout.focus_tab(forwards),
+            Op::CameraZoomOut => layout.camera_action(|d| d.camera_zoom_out()),
+            Op::CameraZoomIn => layout.camera_action(|d| d.camera_zoom_in()),
+            Op::CameraShowAll => layout.camera_action(|d| d.camera_show_all()),
+            Op::CameraFrameWindow => layout.camera_action(|d| d.camera_frame_window(None)),
+            Op::CameraPanRight => {
+                layout.camera_action(|d| d.camera_pan(crate::layout::dock::DockSide::Right))
+            }
+            Op::CameraPanDown => {
+                layout.camera_action(|d| d.camera_pan(crate::layout::dock::DockSide::Bottom))
+            }
+            Op::CameraBack => layout.camera_action(|d| d.camera_back()),
+            Op::CameraForward => layout.camera_action(|d| d.camera_forward()),
+            Op::CameraZoomBy { factor } => layout.camera_action(|d| {
+                d.camera_zoom_by(factor, Point::from((100., 100.)));
+            }),
             Op::FocusFloating => {
                 layout.focus_floating();
             }

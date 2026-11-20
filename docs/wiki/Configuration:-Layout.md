@@ -561,3 +561,39 @@ layout {
 ```
 
 You can also set the color per-output [in the output config](./Configuration:-Outputs.md#layout-config-overrides).
+
+### arbor: `camera`
+
+The dock tree is laid out on a canvas that grows past the screen when leaves would get smaller
+than the minimum size; a camera shows part of it (see `ARBOR.md`).
+
+```kdl
+layout {
+    camera {
+        // Smallest useful leaf size; set both to 0 to keep the canvas at the screen size.
+        min-leaf-width 480
+        min-leaf-height 320
+        // Leaves narrower than this on screen draw as icon tiles.
+        icon-threshold 160
+    }
+}
+```
+
+Camera actions: `camera-zoom-out`, `camera-zoom-in`, `camera-show-all`, `camera-frame-window`,
+`camera-pan-left`, `camera-pan-right`, `camera-pan-up`, `camera-pan-down`, `camera-back`,
+`camera-forward`. Mod+pinch on a touchpad zooms around the pointer.
+
+### arbor: `title-bars`
+
+```kdl
+layout {
+    title-bars {
+        // off
+        height 28
+        active-color "#31363b"
+        inactive-color "#202326"
+        active-text-color "#fcfcfc"
+        inactive-text-color "#a1a9b1"
+    }
+}
+```

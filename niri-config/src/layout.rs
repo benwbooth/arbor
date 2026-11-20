@@ -29,6 +29,8 @@ pub struct Layout {
     pub background_color: Color,
     /// arbor: server-side title bars.
     pub title_bars: TitleBars,
+    /// arbor: the dock tree camera.
+    pub camera: crate::Camera,
 }
 
 impl Default for Layout {
@@ -58,6 +60,7 @@ impl Default for Layout {
             ],
             background_color: DEFAULT_BACKGROUND_COLOR,
             title_bars: TitleBars::default(),
+            camera: crate::Camera::default(),
         }
     }
 }
@@ -72,6 +75,7 @@ impl MergeWith<LayoutPart> for Layout {
             tab_indicator,
             insert_hint,
             title_bars,
+            camera,
             always_center_single_column,
             empty_workspace_above_first,
             gaps,
@@ -136,6 +140,9 @@ pub struct LayoutPart {
     /// arbor: server-side title bars.
     #[knuffel(child)]
     pub title_bars: Option<TitleBarsPart>,
+    /// arbor: the dock tree camera.
+    #[knuffel(child)]
+    pub camera: Option<crate::CameraPart>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]

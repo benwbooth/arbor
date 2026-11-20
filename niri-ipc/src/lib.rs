@@ -965,6 +965,27 @@ pub enum Action {
     FocusTabNext {},
     /// Show the previous tab of the focused tab group (arbor).
     FocusTabPrev {},
+    /// Zoom the camera out one level: show the parent of the focused window's node, ultimately
+    /// everything (arbor).
+    CameraZoomOut {},
+    /// Zoom the camera in one level toward the focused window, finally to actual size (arbor).
+    CameraZoomIn {},
+    /// Show the whole dock tree (arbor).
+    CameraShowAll {},
+    /// Fit the focused window in view (arbor).
+    CameraFrameWindow {},
+    /// Move focus and the camera to the neighbour on the left (arbor).
+    CameraPanLeft {},
+    /// Move focus and the camera to the neighbour on the right (arbor).
+    CameraPanRight {},
+    /// Move focus and the camera to the neighbour above (arbor).
+    CameraPanUp {},
+    /// Move focus and the camera to the neighbour below (arbor).
+    CameraPanDown {},
+    /// Go back to the previous camera position (arbor).
+    CameraBack {},
+    /// Go forward in camera history (arbor).
+    CameraForward {},
 }
 
 /// Change in window or column size.

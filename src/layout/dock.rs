@@ -18,9 +18,11 @@ use std::time::Duration;
 use niri_config::utils::MergeWith as _;
 use niri_config::PresetSize;
 use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
+use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
+use super::camera::{clamp_to_bounds, pan_to_show, Camera, CameraMode, CameraView};
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
 use super::scrolling::{
@@ -137,10 +139,17 @@ pub struct DockInsert {
 }
 
 niri_render_elements! {
-    DockSpaceRenderElement<R> => {
+    DockInnerRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
         TabIndicator = TabIndicatorRenderElement,
+    }
+}
+
+niri_render_elements! {
+    DockSpaceRenderElement<R> => {
+        Inner = DockInnerRenderElement<R>,
+        Camera = RescaleRenderElement<DockInnerRenderElement<R>>,
     }
 }
 
@@ -233,6 +242,9 @@ pub struct DockSpace<W: LayoutElement> {
 
     /// Windows in the closing animation.
     closing_windows: Vec<ClosingWindow>,
+
+    /// The camera over the canvas (arbor milestone 2).
+    camera: Camera,
 
     /// A drag resting over the middle of a docked window: the leaf, since when, and when the
     /// drag was last seen there.
@@ -364,6 +376,22 @@ impl<W: LayoutElement> DockLeaf<W> {
             SizingMode::Maximized
         } else {
             SizingMode::Normal
+        }
+    }
+
+    /// Whether tab `idx` is positioned on the canvas (and so seen through the camera), rather
+    /// than in view coordinates (the shown tab when fullscreen or maximized).
+    fn tab_on_canvas(&self, idx: usize) -> bool {
+        idx != self.active_tab || self.tile().sizing_mode().is_normal()
+    }
+
+    /// Position of tab `idx` in view coordinates through `cam`, including the render offset.
+    fn tab_view_pos(&self, idx: usize, parent_area: Rect, cam: CameraView) -> Point<f64, Logical> {
+        let pos = self.tab_origin(idx, parent_area) + self.tiles[idx].render_offset();
+        if self.tab_on_canvas(idx) {
+            cam.to_view(pos)
+        } else {
+            pos
         }
     }
 
@@ -515,7 +543,9 @@ impl<W: LayoutElement> Node<W> {
         }
     }
 
-    fn layout(&mut self, rect: Rect, gaps: f64, scale: f64) {
+    /// Lays the subtree out in `rect`, keeping leaves at least `min` large where the room
+    /// allows (the canvas is sized so that it does).
+    fn layout(&mut self, rect: Rect, gaps: f64, scale: f64, min: Size<f64, Logical>) {
         match self {
             Node::Leaf(leaf) => leaf.rect = rect,
             Node::Split(split) => {
@@ -527,6 +557,26 @@ impl<W: LayoutElement> Node<W> {
                     .filter(|(_, v)| **v)
                     .map(|(f, _)| *f)
                     .collect();
+
+                // Children that would get less than they need take what they need, from the
+                // others in proportion.
+                let n = fractions.len();
+                let avail = f64::max(
+                    0.,
+                    axis_len(rect.size, split.axis) - gaps * n.saturating_sub(1) as f64,
+                );
+                let fractions = if avail > 0. && (min.w > 0. || min.h > 0.) {
+                    let mins: Vec<f64> = zip(&split.children, &visible)
+                        .filter(|(_, v)| **v)
+                        .map(|(child, _)| {
+                            axis_len(required_size(child, min, gaps), split.axis) / avail
+                        })
+                        .collect();
+                    enforce_min_fractions(&fractions, &mins)
+                } else {
+                    fractions
+                };
+
                 let mut rects = split_rects(rect, split.axis, &fractions, gaps, scale).into_iter();
                 for (child, visible) in zip(&mut split.children, visible) {
                     let rect = if visible {
@@ -534,7 +584,7 @@ impl<W: LayoutElement> Node<W> {
                     } else {
                         Rect::new(rect.loc, Size::default())
                     };
-                    child.layout(rect, gaps, scale);
+                    child.layout(rect, gaps, scale, min);
                 }
             }
         }
@@ -594,6 +644,56 @@ fn renormalize(fractions: &mut [f64], n: usize) {
     } else {
         fractions.fill(1. / n as f64);
     }
+}
+
+/// Adjusts fractions so that every child gets at least its minimum share (`mins`, fractions of
+/// the available length), taking the room from the other children in proportion.
+fn enforce_min_fractions(fractions: &[f64], mins: &[f64]) -> Vec<f64> {
+    let n = fractions.len();
+    let sum: f64 = fractions.iter().sum();
+    let fracs: Vec<f64> = if sum > 0. {
+        fractions.iter().map(|f| f / sum).collect()
+    } else {
+        vec![1. / n as f64; n]
+    };
+
+    let total_min: f64 = mins.iter().sum();
+    if total_min >= 1. {
+        // Not enough room: everyone at their minimum, scaled down.
+        return if total_min > 0. {
+            mins.iter().map(|m| m / total_min).collect()
+        } else {
+            fracs
+        };
+    }
+
+    let mut fixed = vec![false; n];
+    let mut out = fracs.clone();
+    loop {
+        let fixed_total: f64 = (0..n).filter(|&i| fixed[i]).map(|i| mins[i]).sum();
+        let free_total: f64 = (0..n).filter(|&i| !fixed[i]).map(|i| fracs[i]).sum();
+        let rem = 1. - fixed_total;
+        let mut changed = false;
+        for i in 0..n {
+            if fixed[i] {
+                out[i] = mins[i];
+            } else {
+                out[i] = if free_total > 0. {
+                    fracs[i] / free_total * rem
+                } else {
+                    rem / n as f64
+                };
+                if out[i] < mins[i] - 1e-12 {
+                    fixed[i] = true;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    out
 }
 
 fn round_phys(x: f64, scale: f64) -> f64 {
@@ -875,6 +975,7 @@ impl<W: LayoutElement> DockSpace<W> {
             interactive_resize: None,
             closing_windows: Vec::new(),
             tab_hover: Cell::new(None),
+            camera: Camera::default(),
             view_size,
             working_area,
             parent_area,
@@ -920,6 +1021,7 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn advance_animations(&mut self) {
+        self.camera.advance_animations();
         for leaf in self.leaves_mut() {
             for tile in &mut leaf.tiles {
                 tile.advance_animations();
@@ -939,6 +1041,7 @@ impl<W: LayoutElement> DockSpace<W> {
                 || leaf.tab_indicator.are_animations_ongoing()
         }) || !self.closing_windows.is_empty()
             || self.is_tab_hover_pending()
+            || self.camera.is_animating()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
@@ -952,9 +1055,13 @@ impl<W: LayoutElement> DockSpace<W> {
         let active = self.active;
         let parent_area = self.parent_area;
         let view_size = self.view_size;
+        let cam = self.camera_view();
         for leaf in self.leaves_mut() {
             let is_active = is_active && Some(leaf.id) == active;
-            let pos = leaf.origin(parent_area) + leaf.tile().render_offset();
+            let mut pos = leaf.origin(parent_area) + leaf.tile().render_offset();
+            if leaf.tab_on_canvas(leaf.active_tab) {
+                pos -= cam.offset;
+            }
             let view_rect = Rect::new(pos.upscale(-1.), view_size);
             let active_tab = leaf.active_tab;
             for (idx, tile) in leaf.tiles.iter_mut().enumerate() {
@@ -1106,6 +1213,255 @@ impl<W: LayoutElement> DockSpace<W> {
         Rect::new(loc, size)
     }
 
+    /// The rectangle the tree is laid out in: the root rectangle, grown where leaves would get
+    /// smaller than the minimum useful size.
+    fn canvas_rect(&self) -> Rect {
+        let root = self.root_rect();
+        let Some(node) = &self.root else {
+            return root;
+        };
+        let camera = self.options.layout.camera;
+        let min = Size::from((camera.min_leaf_width, camera.min_leaf_height));
+        let gaps = self.options.layout.gaps;
+        let required = required_size(node, min, gaps);
+        let size = Size::from((
+            round_phys(f64::max(root.size.w, required.w), self.scale),
+            round_phys(f64::max(root.size.h, required.h), self.scale),
+        ));
+        Rect::new(root.loc, size)
+    }
+
+    /// The canvas including the outer gaps: what the camera keeps within view.
+    fn camera_bounds(&self) -> Rect {
+        let gaps = self.options.layout.gaps;
+        let canvas = self.canvas_rect();
+        Rect::new(
+            canvas.loc - Point::from((gaps, gaps)),
+            canvas.size + Size::from((gaps * 2., gaps * 2.)),
+        )
+    }
+
+    /// The current camera position (animated).
+    pub fn camera_view(&self) -> CameraView {
+        self.camera.current(self.working_area)
+    }
+
+    /// Whether the camera shows the canvas scaled (windows are then not interactive).
+    pub fn is_zoomed(&self) -> bool {
+        self.camera_view().zoom != 1.
+    }
+
+    fn camera_anim(&self) -> Animation {
+        Animation::new(
+            self.clock.clone(),
+            0.,
+            1.,
+            0.,
+            self.options.animations.horizontal_view_movement.0,
+        )
+    }
+
+    /// Path from the root to the active leaf.
+    fn active_path(&self) -> Option<Vec<usize>> {
+        self.path_of_leaf(self.active?)
+    }
+
+    /// Where the camera should be for its mode.
+    fn camera_target(&self) -> CameraView {
+        let area = self.working_area;
+        let bounds = self.camera_bounds();
+        let gaps = self.options.layout.gaps;
+        let expand = |r: Rect| {
+            Rect::new(
+                r.loc - Point::from((gaps, gaps)),
+                r.size + Size::from((gaps * 2., gaps * 2.)),
+            )
+        };
+
+        match self.camera.mode {
+            CameraMode::Follow => {
+                let view = CameraView {
+                    offset: self.camera.target.offset,
+                    zoom: 1.,
+                };
+                match self.active_leaf() {
+                    Some(leaf) => pan_to_show(view, leaf.rect, gaps, area, bounds),
+                    None => clamp_to_bounds(view, area, bounds),
+                }
+            }
+            CameraMode::Framed { depth } => {
+                let rect = match self.active_path() {
+                    Some(path) => {
+                        let depth = depth.min(path.len());
+                        node_rect(self.node(&path[..depth]))
+                    }
+                    None => bounds,
+                };
+                CameraView::framing(expand(rect), area)
+            }
+            CameraMode::ShowAll => CameraView::framing(bounds, area),
+            CameraMode::Free => self.camera.target,
+        }
+    }
+
+    /// Moves the camera to where its mode wants it.
+    fn update_camera(&mut self, animate: bool) {
+        let target = self.camera_target();
+        let anim = animate.then(|| self.camera_anim());
+        let area = self.working_area;
+        self.camera.move_to(target, area, anim);
+    }
+
+    /// Switches the camera mode, remembering the previous position for camera-back.
+    fn set_camera_mode(&mut self, mode: CameraMode) {
+        self.camera.push_history(self.active.map(|id| id.0));
+        self.camera.mode = mode;
+        self.update_camera(true);
+    }
+
+    // Camera actions.
+
+    /// Shows one level more of the tree around the focused window.
+    pub fn camera_zoom_out(&mut self) {
+        let Some(path) = self.active_path() else {
+            return;
+        };
+        let depth = match self.camera.mode {
+            CameraMode::Framed { depth } => depth.min(path.len()),
+            CameraMode::ShowAll => return,
+            CameraMode::Follow | CameraMode::Free => path.len(),
+        };
+        if depth == 0 {
+            self.set_camera_mode(CameraMode::ShowAll);
+            return;
+        }
+
+        // Go up until the view actually zooms out (levels that fit at the current zoom would
+        // only pan).
+        let prev_mode = self.camera.mode;
+        let current_zoom = self.camera_view().zoom;
+        let mut depth = depth - 1;
+        loop {
+            self.camera.mode = CameraMode::Framed { depth };
+            let target = self.camera_target();
+            if target.zoom < current_zoom - 1e-6 || depth == 0 {
+                break;
+            }
+            depth -= 1;
+        }
+        self.camera.mode = prev_mode;
+        let mode = if depth == 0 {
+            CameraMode::ShowAll
+        } else {
+            CameraMode::Framed { depth }
+        };
+        self.set_camera_mode(mode);
+    }
+
+    /// Shows one level less of the tree, toward the focused window; past the window itself,
+    /// returns to actual size.
+    pub fn camera_zoom_in(&mut self) {
+        let Some(path) = self.active_path() else {
+            return;
+        };
+        let mode = match self.camera.mode {
+            CameraMode::Framed { depth } if depth < path.len() => {
+                CameraMode::Framed { depth: depth + 1 }
+            }
+            CameraMode::ShowAll => CameraMode::Framed {
+                depth: usize::from(!path.is_empty()),
+            },
+            CameraMode::Free if self.camera.target.zoom < 1. => {
+                CameraMode::Framed { depth: path.len() }
+            }
+            _ => CameraMode::Follow,
+        };
+        self.set_camera_mode(mode);
+    }
+
+    pub fn camera_show_all(&mut self) {
+        self.set_camera_mode(CameraMode::ShowAll);
+    }
+
+    /// Fits the focused window (or `window`) in view.
+    pub fn camera_frame_window(&mut self, window: Option<&W::Id>) {
+        if let Some(window) = window {
+            if let Some(id) = self.leaf_by_window(window).map(|leaf| leaf.id) {
+                self.activate_leaf(id);
+            }
+        }
+        let Some(path) = self.active_path() else {
+            return;
+        };
+        self.set_camera_mode(CameraMode::Framed { depth: path.len() });
+    }
+
+    /// Moves focus to the neighbouring window and the camera with it, keeping the zoom level.
+    pub fn camera_pan(&mut self, dir: DockSide) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(neighbor) = self.neighbor_in_direction(active, dir) else {
+            return;
+        };
+        self.camera.push_history(self.active.map(|id| id.0));
+        self.activate_leaf(neighbor);
+    }
+
+    pub fn camera_back(&mut self) {
+        let focus = self.active.map(|id| id.0);
+        if let Some((view, mode, focus)) = self.camera.back(focus) {
+            self.apply_camera(view, mode, focus);
+        }
+    }
+
+    pub fn camera_forward(&mut self) {
+        if let Some((view, mode, focus)) = self.camera.forward() {
+            self.apply_camera(view, mode, focus);
+        }
+    }
+
+    fn apply_camera(&mut self, view: CameraView, mode: CameraMode, focus: Option<u64>) {
+        // Focus what was focused then, if it is still around and shown.
+        if let Some(id) = focus.map(LeafId) {
+            if self
+                .leaf_by_id(id)
+                .is_some_and(|leaf| leaf.minimized.is_none())
+            {
+                self.active = Some(id);
+            }
+        }
+        self.camera.mode = mode;
+        let anim = Some(self.camera_anim());
+        let area = self.working_area;
+        self.camera.move_to(view, area, anim);
+        self.update_camera(true);
+    }
+
+    /// Zooms freely around a point in view coordinates (pinch gestures).
+    pub fn camera_zoom_by(&mut self, factor: f64, around: Point<f64, Logical>) {
+        let current = self.camera_view();
+        let zoom = (current.zoom * factor).clamp(0.05, 1.);
+        let anchor = current.to_canvas(around);
+        let view = CameraView {
+            offset: anchor - around.downscale(zoom),
+            zoom,
+        };
+        if self.camera.mode != CameraMode::Free {
+            self.camera.push_history(self.active.map(|id| id.0));
+        }
+        self.camera.mode = if zoom == 1. {
+            CameraMode::Follow
+        } else {
+            CameraMode::Free
+        };
+        let area = self.working_area;
+        self.camera.move_to(view, area, None);
+        if zoom == 1. {
+            self.update_camera(true);
+        }
+    }
+
     /// Recomputes leaf rectangles and requests the corresponding tile sizes.
     fn relayout(
         &mut self,
@@ -1120,12 +1476,15 @@ impl<W: LayoutElement> DockSpace<W> {
             .map(|leaf| (leaf.id, leaf.origin(parent_area)))
             .collect();
 
-        let rect = self.root_rect();
+        let rect = self.canvas_rect();
         let gaps = self.options.layout.gaps;
         let scale = self.scale;
         if let Some(root) = &mut self.root {
-            root.layout(rect, gaps, scale);
+            let camera = self.options.layout.camera;
+            let min = Size::from((camera.min_leaf_width, camera.min_leaf_height));
+            root.layout(rect, gaps, scale, min);
         }
+        self.update_camera(animate_moves);
 
         for leaf in self.leaves_mut() {
             // Minimized windows keep their size for when they come back.
@@ -1367,9 +1726,14 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     fn activate_leaf(&mut self, id: LeafId) {
+        let changed = self.active != Some(id);
         self.active = Some(id);
         if let Some(leaf) = self.active_leaf_mut() {
             leaf.tile_mut().ensure_alpha_animates_to_1();
+        }
+        // Keep the focused window in view.
+        if changed {
+            self.update_camera(true);
         }
     }
 
@@ -1720,6 +2084,9 @@ impl<W: LayoutElement> DockSpace<W> {
             });
         }
 
+        // The rest is about docked windows: work on the canvas.
+        let pos = self.camera_view().to_canvas(pos);
+
         // Resting over the middle of a docked window: join its tab group.
         if let Some(id) = self.tab_zone_target(pos) {
             return InsertPosition::Dock(DockInsert {
@@ -1804,8 +2171,11 @@ impl<W: LayoutElement> DockSpace<W> {
             return None;
         }
 
+        let cam = self.camera_view();
+        let pos = cam.to_canvas(pos);
         let gaps = self.options.layout.gaps;
-        let pad = f64::max(0., (DIVIDER_HIT - gaps) / 2.);
+        // The grab band is in screen pixels.
+        let pad = f64::max(0., (DIVIDER_HIT / cam.zoom - gaps) / 2.);
         divider_under(root, pos, pad).map(|(leaf, edge)| (leaf.tile().window().id().clone(), edge))
     }
 
@@ -1832,6 +2202,9 @@ impl<W: LayoutElement> DockSpace<W> {
                 });
             }
         }
+
+        // The rest is about docked windows: work on the canvas.
+        let pos = self.camera_view().to_canvas(pos);
 
         // Resting over the middle of a docked window: join its tab group.
         if let Some(id) = self.tab_zone_target(pos) {
@@ -1875,10 +2248,13 @@ impl<W: LayoutElement> DockSpace<W> {
 
     pub(super) fn insert_hint_area(&self, position: InsertPosition) -> Option<Rect> {
         match position {
-            InsertPosition::Dock(dock) => Some(self.hint_rect(dock)),
-            InsertPosition::NewColumn(_) | InsertPosition::InColumn(_, _) => {
-                Some(self.hint_rect(self.default_insert()))
+            InsertPosition::Dock(dock) => {
+                Some(self.camera_view().rect_to_view(self.hint_rect(dock)))
             }
+            InsertPosition::NewColumn(_) | InsertPosition::InColumn(_, _) => Some(
+                self.camera_view()
+                    .rect_to_view(self.hint_rect(self.default_insert())),
+            ),
             InsertPosition::Floating => None,
         }
     }
@@ -1888,6 +2264,7 @@ impl<W: LayoutElement> DockSpace<W> {
     ) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>, bool)> {
         let scale = self.scale;
         let parent_area = self.parent_area;
+        let cam = self.camera_view();
         let minimized = self.leaves().into_iter().filter(|leaf| leaf.is_minimized());
         self.leaves_in_render_order()
             .into_iter()
@@ -1898,7 +2275,7 @@ impl<W: LayoutElement> DockSpace<W> {
                     .chain((0..leaf.tiles.len()).filter(move |idx| *idx != leaf.active_tab));
                 order.map(move |idx| {
                     let tile = &leaf.tiles[idx];
-                    let pos = leaf.tab_origin(idx, parent_area) + tile.render_offset();
+                    let pos = leaf.tab_view_pos(idx, parent_area, cam);
                     // Round to physical pixels.
                     let pos = pos.to_physical_precise_round(scale).to_logical(scale);
                     let visible = !leaf.is_minimized() && idx == leaf.active_tab;
@@ -1914,15 +2291,20 @@ impl<W: LayoutElement> DockSpace<W> {
         let scale = self.scale;
         let parent_area = self.parent_area;
         let active = self.active;
+        let cam = self.camera_view();
         let mut leaves = self.leaves_mut();
         leaves.sort_by_key(|leaf| render_rank(leaf, active));
         leaves.into_iter().flat_map(move |leaf| {
             let active_tab = leaf.active_tab;
             let origin = leaf.origin(parent_area);
             let tabs_loc = leaf.tiles_rect().loc;
+            let active_on_canvas = leaf.tab_on_canvas(active_tab);
             leaf.tiles.iter_mut().enumerate().map(move |(idx, tile)| {
                 let loc = if idx == active_tab { origin } else { tabs_loc };
                 let mut pos = loc + tile.render_offset();
+                if idx != active_tab || active_on_canvas {
+                    pos = cam.to_view(pos);
+                }
                 if round {
                     pos = pos.to_physical_precise_round(scale).to_logical(scale);
                 }
@@ -1934,9 +2316,13 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scale = self.scale;
         let parent_area = self.parent_area;
+        let cam = self.camera_view();
         self.leaves().into_iter().flat_map(move |leaf| {
             leaf.tiles.iter().enumerate().map(move |(idx, tile)| {
-                let pos = leaf.tab_origin(idx, parent_area);
+                let mut pos = leaf.tab_origin(idx, parent_area);
+                if leaf.tab_on_canvas(idx) {
+                    pos = cam.to_view(pos);
+                }
                 let pos = pos.to_physical_precise_round(scale).to_logical(scale);
                 let layout = WindowLayout {
                     pos_in_scrolling_layout: None,
@@ -1951,7 +2337,10 @@ impl<W: LayoutElement> DockSpace<W> {
     /// Returns the geometry of the active tile relative to and clamped to the view.
     pub fn active_tile_visual_rectangle(&self) -> Option<Rect> {
         let leaf = self.active_leaf()?;
-        let rect = Rect::new(leaf.origin(self.parent_area), leaf.tile().tile_size());
+        let mut rect = Rect::new(leaf.origin(self.parent_area), leaf.tile().tile_size());
+        if leaf.tab_on_canvas(leaf.active_tab) {
+            rect = self.camera_view().rect_to_view(rect);
+        }
         Rect::from_size(self.view_size).intersection(rect)
     }
 
@@ -1959,7 +2348,11 @@ impl<W: LayoutElement> DockSpace<W> {
         let leaf = self.leaf_by_window(id)?;
         let idx = leaf.tab_of(id)?;
         let mut target = self.parent_area;
-        target.loc -= leaf.tab_origin(idx, self.parent_area);
+        let mut origin = leaf.tab_origin(idx, self.parent_area);
+        if leaf.tab_on_canvas(idx) {
+            origin -= self.camera_view().offset;
+        }
+        target.loc -= origin;
         target.loc -= leaf.tiles[idx].window_loc();
         Some(target)
     }
@@ -1970,20 +2363,23 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        let cam = self.camera_view();
+
         // The tab indicators of tab groups.
         for leaf in self.leaves_in_render_order() {
             if !leaf.shows_tab_indicator() {
                 continue;
             }
-            let tile_pos = leaf.origin(self.parent_area) + leaf.tile().render_offset();
+            let tile_pos = leaf.tab_view_pos(leaf.active_tab, self.parent_area, cam);
             let tile_pos = tile_pos
                 .to_physical_precise_round(self.scale)
                 .to_logical(self.scale);
+            // The indicator only shows for normal tiles, which go through the camera.
             if let Some(idx) = leaf.tab_indicator.hit(
                 leaf.tab_indicator_area(),
                 leaf.tiles.len(),
                 self.scale,
-                pos - tile_pos,
+                (pos - tile_pos).downscale(cam.zoom),
             ) {
                 let hit = HitType::Activate {
                     is_tab_indicator: true,
@@ -1993,9 +2389,24 @@ impl<W: LayoutElement> DockSpace<W> {
         }
 
         // This matches self.tiles_with_render_positions().
+        if cam.zoom == 1. {
+            return self
+                .tiles_with_render_positions()
+                .filter(|(_, _, visible)| *visible)
+                .find_map(|(tile, tile_pos, _)| HitType::hit_tile(tile, tile_pos, pos));
+        }
+
+        // Zoomed: windows on the canvas are not interactive, only activatable.
         self.tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
-            .find_map(|(tile, tile_pos, _)| HitType::hit_tile(tile, tile_pos, pos))
+            .find_map(|(tile, tile_pos, _)| {
+                if tile.sizing_mode().is_normal() {
+                    tile.hit((pos - tile_pos).downscale(cam.zoom))
+                        .map(|hit| (tile.window(), hit.to_activate()))
+                } else {
+                    HitType::hit_tile(tile, tile_pos, pos)
+                }
+            })
     }
 
     pub fn scroll_amount_to_activate(&self, _window: &W::Id) -> f64 {
@@ -2015,26 +2426,44 @@ impl<W: LayoutElement> DockSpace<W> {
         let view_rect = Rect::from_size(self.view_size);
         for closing in self.closing_windows.iter().rev() {
             let elem = closing.render(ctx.as_gles(), view_rect, scale);
-            push(elem.into());
+            push(DockSpaceRenderElement::Inner(elem.into()));
         }
 
+        let cam = self.camera_view();
+        let zoom = cam.zoom;
         let active = self.active;
         let parent_area = self.parent_area;
         for leaf in self.leaves_in_render_order() {
-            let tile_pos = leaf.origin(parent_area) + leaf.tile().render_offset();
+            // Normal tiles are on the canvas and go through the camera: render them at
+            // (canvas - offset) and scale around the origin. Fullscreen and maximized tiles are
+            // in view coordinates already.
+            let through_camera = leaf.tile().sizing_mode().is_normal();
+            let mut push_elem = |elem: DockInnerRenderElement<R>| {
+                if through_camera && zoom != 1. {
+                    let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
+                    push(DockSpaceRenderElement::Camera(elem));
+                } else {
+                    push(DockSpaceRenderElement::Inner(elem));
+                }
+            };
+
+            let mut tile_pos = leaf.origin(parent_area) + leaf.tile().render_offset();
+            if through_camera {
+                tile_pos -= cam.offset;
+            }
             let tile_pos = tile_pos
                 .to_physical_precise_round(self.scale)
                 .to_logical(self.scale);
 
             // The tab indicator goes on top of the tile.
             leaf.tab_indicator
-                .render(ctx.renderer, tile_pos, &mut |elem| push(elem.into()));
+                .render(ctx.renderer, tile_pos, &mut |elem| push_elem(elem.into()));
 
             let focus_ring = focus_ring && Some(leaf.id) == active;
             let xray_pos = xray_pos.offset(tile_pos);
             leaf.tile()
                 .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                    push(elem.into())
+                    push_elem(elem.into())
                 });
         }
     }
@@ -2823,6 +3252,8 @@ impl<W: LayoutElement> DockSpace<W> {
         let edges = resize.data.edges;
         let horizontal = resize.horizontal.clone();
         let vertical = resize.vertical.clone();
+        // The pointer moves in view pixels; dividers live on the canvas.
+        let delta = delta.downscale(self.camera_view().zoom);
 
         if let Some(drag) = horizontal {
             let dx = if edges.contains(ResizeEdge::LEFT) {
@@ -3078,6 +3509,10 @@ impl<W: LayoutElement> DockSpace<W> {
             }
         }
 
+        let cam = self.camera_view();
+        assert!(cam.zoom.is_finite() && cam.zoom > 0. && cam.zoom <= 1. + 1e-9);
+        assert!(cam.offset.x.is_finite() && cam.offset.y.is_finite());
+
         if let Some(resize) = &self.interactive_resize {
             assert!(
                 self.leaf_by_window(&resize.window).is_some(),
@@ -3101,6 +3536,46 @@ fn node_rect<W: LayoutElement>(node: &Node<W>) -> Rect {
     match node {
         Node::Leaf(leaf) => leaf.rect,
         Node::Split(split) => split.rect,
+    }
+}
+
+/// Size a subtree needs so that no visible leaf is smaller than `min`, given its fractions.
+fn required_size<W: LayoutElement>(
+    node: &Node<W>,
+    min: Size<f64, Logical>,
+    gaps: f64,
+) -> Size<f64, Logical> {
+    match node {
+        Node::Leaf(leaf) if leaf.minimized.is_some() => Size::default(),
+        Node::Leaf(_) => min,
+        Node::Split(split) => {
+            let visible: Vec<(Size<f64, Logical>, f64)> = zip(&split.children, &split.fractions)
+                .filter(|(child, _)| child.is_visible())
+                .map(|(child, frac)| (required_size(child, min, gaps), *frac))
+                .collect();
+            if visible.is_empty() {
+                return Size::default();
+            }
+            let n_gaps = gaps * (visible.len() - 1) as f64;
+            // Along the axis the children need their lengths side by side (the layout gives
+            // children below their minimum extra room from the others).
+            let along = visible
+                .iter()
+                .map(|(size, _)| axis_len(*size, split.axis))
+                .sum::<f64>()
+                + n_gaps;
+            let across = visible
+                .iter()
+                .map(|(size, _)| match split.axis {
+                    Axis::Horizontal => size.h,
+                    Axis::Vertical => size.w,
+                })
+                .fold(0., f64::max);
+            match split.axis {
+                Axis::Horizontal => Size::from((along, across)),
+                Axis::Vertical => Size::from((across, along)),
+            }
+        }
     }
 }
 

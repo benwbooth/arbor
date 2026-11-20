@@ -5,9 +5,17 @@ use crate::layout::dock::{DockInsert, DockSide, DockSpace, DockTarget};
 use crate::layout::monitor::InsertPosition;
 use crate::utils::transaction::Transaction;
 
+/// Dock space without a minimum leaf size, so the canvas is always the screen.
 fn space() -> DockSpace<TestWindow> {
+    let mut options = Options::default();
+    options.layout.camera.min_leaf_width = 0.;
+    options.layout.camera.min_leaf_height = 0.;
+    space_with(options)
+}
+
+fn space_with(options: Options) -> DockSpace<TestWindow> {
     let view_size = Size::from((1280., 720.));
-    let options = Rc::new(Options::default());
+    let options = Rc::new(options);
     DockSpace::new(
         view_size,
         Rectangle::from_size(view_size),
@@ -1198,4 +1206,209 @@ fn floating_drag_rests_into_tab_group() {
     );
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
+}
+
+fn camera_space() -> DockSpace<TestWindow> {
+    let s = space_with(Options::default());
+    let mut clock = s.clock().clone();
+    clock.set_complete_instantly(true);
+    s
+}
+
+fn view_rect_of(s: &DockSpace<TestWindow>, id: usize) -> Rectangle<f64, Logical> {
+    s.camera_view().rect_to_view(s.window_rect(&id).unwrap())
+}
+
+#[test]
+fn canvas_grows_and_camera_follows_focus() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    assert_eq!(s.tree_string(), "H[1,2,3]");
+    // Three 480 px minimum leaves need a 1472 px wide canvas: they all get their minimum
+    // (the fractions [0.5, 0.25, 0.25] would leave 2 and 3 too small).
+    for id in 1..=3 {
+        assert_eq!(s.window_rect(&id).unwrap().size.w, 480.);
+    }
+    let r3 = s.window_rect(&3).unwrap();
+    assert!(r3.loc.x + r3.size.w > 1280.);
+
+    // Window 3 is focused: the camera pans so that it is fully in view, at actual size.
+    s.advance_animations();
+    let cam = s.camera_view();
+    assert_eq!(cam.zoom, 1.);
+    let v3 = view_rect_of(&s, 3);
+    assert!(v3.loc.x >= 0. && v3.loc.x + v3.size.w <= 1280., "{v3:?}");
+
+    // Focusing the first window pans back.
+    s.focus_column_first();
+    s.advance_animations();
+    assert_eq!(s.camera_view().offset.x, 0.);
+    let v1 = view_rect_of(&s, 1);
+    assert_eq!(v1.loc.x, 16.);
+}
+
+#[test]
+fn camera_show_all_frame_and_history() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    s.advance_animations();
+    let follow = s.camera_view();
+
+    s.camera_show_all();
+    s.advance_animations();
+    let all = s.camera_view();
+    assert!(all.zoom < 1.);
+    // Everything is in view.
+    for id in 1..=3 {
+        let r = view_rect_of(&s, id);
+        assert!(
+            r.loc.x >= 0. && r.loc.x + r.size.w <= 1280.01,
+            "{id}: {r:?}"
+        );
+        assert!(r.loc.y >= 0. && r.loc.y + r.size.h <= 720.01, "{id}: {r:?}");
+    }
+    assert!(s.is_zoomed());
+
+    // Zoomed out, windows only take activation clicks.
+    let r1 = view_rect_of(&s, 1);
+    // (Test windows stay 100x200 until they get configured, so aim near the corner.)
+    let point = r1.loc + Point::from((5., 5.));
+    let (win, hit) = s.window_under(point).unwrap();
+    assert_eq!(*win.id(), 1);
+    assert!(matches!(hit, HitType::Activate { .. }));
+
+    // Framing a window shows it at actual size (it fits), centered in the working area.
+    s.camera_frame_window(Some(&1));
+    s.advance_animations();
+    assert_eq!(s.camera_view().zoom, 1.);
+    assert_eq!(active(&s), 1);
+    let r1 = view_rect_of(&s, 1);
+    assert!((r1.loc.x + r1.size.w / 2. - 640.).abs() <= 1., "{r1:?}");
+
+    // Back goes to show-all, back again to following, forward returns.
+    s.camera_back();
+    s.advance_animations();
+    assert_eq!(s.camera_view(), all);
+    s.camera_back();
+    s.advance_animations();
+    assert_eq!(s.camera_view(), follow);
+    s.camera_forward();
+    s.advance_animations();
+    assert_eq!(s.camera_view(), all);
+}
+
+#[test]
+fn camera_zoom_levels() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    dock(&mut s, 3, 2, DockSide::Bottom);
+    dock(&mut s, 4, 1, DockSide::Right);
+    assert_eq!(s.tree_string(), "H[1,4,V[2,3]]");
+    s.activate_window(&3);
+    s.advance_animations();
+
+    // Zooming out frames the parent (the stack of 2 and 3); it fits, so the next level up.
+    s.camera_zoom_out();
+    s.advance_animations();
+    let level = s.camera_view();
+    for id in 1..=4 {
+        let r = view_rect_of(&s, id);
+        assert!(
+            r.loc.x >= -0.01 && r.loc.x + r.size.w <= 1280.01,
+            "{id}: {r:?}"
+        );
+    }
+    assert!(level.zoom < 1.);
+
+    // Zooming out at the root does nothing more than show everything.
+    s.camera_zoom_out();
+    s.advance_animations();
+    assert!((s.camera_view().zoom - level.zoom).abs() < 1e-9);
+
+    // Zooming in walks back down toward the focused window and finally to actual size.
+    for _ in 0..4 {
+        s.camera_zoom_in();
+        s.advance_animations();
+    }
+    assert_eq!(s.camera_view().zoom, 1.);
+    let r3 = view_rect_of(&s, 3);
+    assert!(r3.loc.x >= 0. && r3.loc.x + r3.size.w <= 1280.);
+}
+
+#[test]
+fn camera_pan_moves_focus_and_view() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    s.focus_column_first();
+    s.advance_animations();
+    assert_eq!(s.camera_view().offset.x, 0.);
+
+    s.camera_pan(DockSide::Right);
+    s.camera_pan(DockSide::Right);
+    s.advance_animations();
+    assert_eq!(active(&s), 3);
+    let v3 = view_rect_of(&s, 3);
+    assert!(v3.loc.x + v3.size.w <= 1280.);
+    s.camera_back();
+    s.camera_back();
+    s.advance_animations();
+    assert_eq!(s.camera_view().offset.x, 0.);
+}
+
+#[test]
+fn camera_zoom_maps_input_and_hints() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    s.camera_zoom_by(0.5, Point::from((0., 0.)));
+    let cam = s.camera_view();
+    assert_eq!(cam.zoom, 0.5);
+
+    // The divider between 1 and 2, seen at half size.
+    let r1 = s.window_rect(&1).unwrap();
+    let gap_x = cam.to_view(Point::from((r1.loc.x + r1.size.w + 8., 300.)));
+    assert_eq!(s.divider_under(gap_x), Some((1, ResizeEdge::RIGHT)));
+
+    // Hints come back in view coordinates.
+    let leaf2 = s.leaf_id_of(&2).unwrap();
+    let hint = s
+        .insert_hint_area(InsertPosition::Dock(DockInsert {
+            target: DockTarget::Tab(leaf2),
+            side: DockSide::Right,
+        }))
+        .unwrap();
+    assert_eq!(hint, cam.rect_to_view(s.window_rect(&2).unwrap()));
+
+    // Dragging the divider by 50 view pixels moves it 100 canvas pixels.
+    let w1 = r1.size.w;
+    assert!(s.interactive_resize_begin(1, ResizeEdge::RIGHT));
+    assert!(s.interactive_resize_update(&1, Point::from((50., 0.))));
+    s.interactive_resize_end(None);
+    assert_eq!(s.window_rect(&1).unwrap().size.w, w1 + 100.);
+}
+
+#[test]
+fn canvas_only_grows_when_needed() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    // Two leaves fit: no camera movement, same as without a minimum.
+    assert_eq!(s.window_rect(&1).unwrap().size.w, 616.);
+    assert!(s.camera_view().is_identity());
+
+    // A small child takes its minimum from its sibling, without growing the canvas.
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    s.set_window_width(Some(&2), SizeChange::SetFixed(100));
+    let w2 = s.window_rect(&2).unwrap().size.w;
+    assert_eq!(w2, 480.);
+    assert_eq!(s.window_rect(&1).unwrap().size.w, 1248. - 16. - 480.);
 }
