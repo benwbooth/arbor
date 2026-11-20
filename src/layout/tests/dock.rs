@@ -463,3 +463,44 @@ fn layout_ops_drag_to_dock() {
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.scrolling().tree_string(), "V[1,2]");
 }
+
+#[test]
+fn consume_and_expel() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    assert_eq!(active(&s), 3);
+
+    // Stack 3 below its left neighbor.
+    s.consume_or_expel_window_left(None);
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[1,V[2,3]]");
+    assert_eq!(active(&s), 3);
+
+    // Already stacked: expel to the right of the stack.
+    s.consume_or_expel_window_right(None);
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[1,2,3]");
+
+    // Consume the right neighbor of the active window below it.
+    s.activate_window(&1);
+    s.consume_into_column();
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[V[1,2],3]");
+    assert_eq!(active(&s), 1);
+
+    s.expel_from_column();
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[2,1,3]");
+
+    // Expel from a vertical root wraps it in a horizontal split.
+    let mut s = space();
+    add(&mut s, 1);
+    dock(&mut s, 2, 1, DockSide::Bottom);
+    dock(&mut s, 3, 2, DockSide::Bottom);
+    assert_eq!(s.tree_string(), "V[1,2,3]");
+    s.consume_or_expel_window_left(None);
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[3,V[1,2]]");
+}

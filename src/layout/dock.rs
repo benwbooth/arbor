@@ -1847,13 +1847,129 @@ impl<W: LayoutElement> DockSpace<W> {
 
     pub fn move_column_to_last(&mut self) {}
 
-    pub fn consume_or_expel_window_left(&mut self, _window: Option<&W::Id>) {}
+    /// Stacks the window below its left neighbor, or, if it is already in a vertical stack,
+    /// moves it out to the left of that stack.
+    pub fn consume_or_expel_window_left(&mut self, window: Option<&W::Id>) {
+        self.consume_or_expel(window, DockSide::Left);
+    }
 
-    pub fn consume_or_expel_window_right(&mut self, _window: Option<&W::Id>) {}
+    /// Stacks the window below its right neighbor, or, if it is already in a vertical stack,
+    /// moves it out to the right of that stack.
+    pub fn consume_or_expel_window_right(&mut self, window: Option<&W::Id>) {
+        self.consume_or_expel(window, DockSide::Right);
+    }
 
-    pub fn consume_into_column(&mut self) {}
+    /// Stacks the right neighbor of the active window below it.
+    pub fn consume_into_column(&mut self) {
+        let Some(active) = self.active else {
+            return;
+        };
+        let Some(neighbor) = self.neighbor_in_direction(active, DockSide::Right) else {
+            return;
+        };
 
-    pub fn expel_from_column(&mut self) {}
+        // Append to the bottom of the active window's stack, like consuming into a column.
+        let mut target = active;
+        let path = self.path_of_leaf(active).unwrap();
+        if let Some((_, stack_path)) = path.split_last() {
+            let stack = self.node(stack_path).as_split().unwrap();
+            if stack.axis == Axis::Vertical {
+                if let Some(last) = stack.children.last().and_then(Node::as_leaf) {
+                    target = last.id;
+                }
+            }
+        }
+
+        self.relocate_leaf(
+            neighbor,
+            DockInsert {
+                target: DockTarget::Leaf(target),
+                side: DockSide::Bottom,
+            },
+        );
+    }
+
+    /// Moves the active window out of its vertical stack, to the right.
+    pub fn expel_from_column(&mut self) {
+        let Some(path) = self.target_path(None) else {
+            return;
+        };
+        if self.parent_axis(&path) == Some(Axis::Vertical) {
+            self.expel(&path, false);
+        }
+    }
+
+    fn parent_axis(&self, path: &[usize]) -> Option<Axis> {
+        let (_, parent_path) = path.split_last()?;
+        self.node(parent_path).as_split().map(|split| split.axis)
+    }
+
+    fn consume_or_expel(&mut self, window: Option<&W::Id>, side: DockSide) {
+        let Some(path) = self.target_path(window) else {
+            return;
+        };
+
+        if self.parent_axis(&path) == Some(Axis::Vertical) {
+            self.expel(&path, side.is_before());
+            return;
+        }
+
+        let id = self.leaf_at(&path).id;
+        if let Some(neighbor) = self.neighbor_in_direction(id, side) {
+            self.relocate_leaf(
+                id,
+                DockInsert {
+                    target: DockTarget::Leaf(neighbor),
+                    side: DockSide::Bottom,
+                },
+            );
+        }
+    }
+
+    /// Moves the leaf at `path` (whose parent is a vertical split) beside that split.
+    fn expel(&mut self, path: &[usize], before: bool) {
+        self.cancel_interactive_resize();
+
+        let (&idx, stack_path) = path.split_last().unwrap();
+        let stack = self.node_mut(stack_path).as_split_mut().unwrap();
+        let node = stack.children.remove(idx);
+        stack.fractions.remove(idx);
+
+        match stack_path.split_last() {
+            None => {
+                let root = self.root.as_mut().unwrap();
+                wrap_in_split(root, node, Axis::Horizontal, before);
+            }
+            Some((&stack_idx, row_path)) => {
+                // The tree is normalized, so the stack's parent is horizontal.
+                let row = self.node_mut(row_path).as_split_mut().unwrap();
+                let at = if before { stack_idx } else { stack_idx + 1 };
+                row.children.insert(at, node);
+                let n = row.children.len();
+                row.fractions = vec![1. / n as f64; n];
+            }
+        }
+
+        self.root = self.root.take().and_then(normalize);
+        self.relayout(true, true, None);
+    }
+
+    /// Moves a leaf to another dock position, keeping focus as it was.
+    fn relocate_leaf(&mut self, id: LeafId, dock: DockInsert) -> bool {
+        if dock.target == DockTarget::Leaf(id) {
+            return false;
+        }
+        let Some(path) = self.path_of_leaf(id) else {
+            return false;
+        };
+
+        let prev_active = self.active;
+        let leaf = self.take_leaf(&path);
+        self.insert_leaf(leaf, dock);
+        self.active = prev_active;
+        self.relayout(true, true, None);
+        true
+    }
 
     pub fn swap_window_in_direction(&mut self, direction: ScrollDirection) {
         match direction {
