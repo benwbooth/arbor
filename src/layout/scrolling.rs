@@ -798,6 +798,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
+    #[allow(dead_code)] // arbor: replaced by DockSpace.
     pub(super) fn insert_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
         if self.columns.is_empty() {
             return InsertPosition::NewColumn(0);
@@ -2433,6 +2434,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             })
     }
 
+    #[allow(dead_code)] // arbor: replaced by DockSpace.
     pub(super) fn insert_hint_area(
         &self,
         position: InsertPosition,
@@ -2516,7 +2518,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let loc = Point::from((self.column_x(column_index) + origin_x, y));
                 Rectangle::new(loc, size)
             }
-            InsertPosition::Floating => return None,
+            InsertPosition::Floating | InsertPosition::Dock(_) => return None,
         };
 
         // First window on an empty workspace will cancel out any view offset. Replicate this
@@ -3739,6 +3741,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // arbor: unused with DockSpace.
     pub(super) fn view_offset(&self) -> &ViewOffset {
         &self.view_offset
     }
@@ -3926,7 +3929,7 @@ impl WindowHeight {
 
 impl<W: LayoutElement> Column<W> {
     #[allow(clippy::too_many_arguments)]
-    fn new_with_tile(
+    pub(super) fn new_with_tile(
         tile: Tile<W>,
         view_size: Size<f64, Logical>,
         working_area: Rectangle<f64, Logical>,
@@ -4261,6 +4264,12 @@ impl<W: LayoutElement> Column<W> {
         } else {
             SizingMode::Normal
         }
+    }
+
+    /// Takes the tiles out of this column, together with whether the column is pending
+    /// maximized (arbor: used to dock them).
+    pub(super) fn into_tiles(self) -> (Vec<Tile<W>>, bool) {
+        (self.tiles, self.is_pending_maximized)
     }
 
     pub fn contains(&self, window: &W::Id) -> bool {
@@ -5095,7 +5104,7 @@ impl<W: LayoutElement> Column<W> {
         self.update_tile_sizes(true);
     }
 
-    fn set_maximized(&mut self, maximize: bool) {
+    pub(super) fn set_maximized(&mut self, maximize: bool) {
         if self.is_pending_maximized == maximize {
             return;
         }
@@ -5488,7 +5497,7 @@ fn compute_new_view_offset(
     }
 }
 
-fn compute_working_area(
+pub(super) fn compute_working_area(
     parent_area: Rectangle<f64, Logical>,
     scale: f64,
     struts: Struts,
@@ -5518,7 +5527,7 @@ fn compute_working_area(
     working_area
 }
 
-fn compute_toplevel_bounds(
+pub(super) fn compute_toplevel_bounds(
     border_config: niri_config::Border,
     working_area_size: Size<f64, Logical>,
     extra_size: Size<f64, Logical>,

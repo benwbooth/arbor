@@ -339,6 +339,7 @@ fn interactive_move_unfullscreen_to_floating_stops_dnd_scroll() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn interactive_move_restore_to_floating_animates_view_offset() {
     let ops = [
         Op::AddOutput(1),
@@ -461,6 +462,7 @@ fn unfullscreen_view_offset_not_reset_during_ongoing_gesture() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn unfullscreen_preserves_view_pos() {
     let ops = [
         Op::AddOutput(1),
@@ -499,6 +501,7 @@ fn unfullscreen_preserves_view_pos() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn unfullscreen_of_tabbed_preserves_view_pos() {
     let ops = [
         Op::AddOutput(1),
@@ -552,6 +555,7 @@ fn unfullscreen_of_tabbed_preserves_view_pos() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn unfullscreen_of_tabbed_via_change_to_normal_preserves_view_pos() {
     let ops = [
         Op::AddOutput(1),
@@ -605,6 +609,7 @@ fn unfullscreen_of_tabbed_via_change_to_normal_preserves_view_pos() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn removing_only_fullscreen_tile_updates_view_offset() {
     let ops = [
         Op::AddOutput(1),

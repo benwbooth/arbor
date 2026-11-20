@@ -76,6 +76,7 @@ use crate::utils::{
 use crate::window::ResolvedWindowRules;
 
 pub mod closing_window;
+pub mod dock;
 pub mod floating;
 pub mod focus_ring;
 pub mod insert_hint_element;
@@ -4250,6 +4251,9 @@ impl<W: LayoutElement> Layout<W> {
                             move_.is_full_width,
                             false,
                         );
+                    }
+                    InsertPosition::Dock(dock) => {
+                        mon.add_tile_docked(ws_idx, dock, move_.tile, allow_to_activate_workspace);
                     }
                     InsertPosition::InColumn(column_idx, tile_idx) => {
                         mon.add_tile_to_column(

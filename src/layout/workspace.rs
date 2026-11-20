@@ -17,10 +17,9 @@ use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
+use super::dock::{DockInsert, DockSpace, DockSpaceRenderElement};
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
-use super::scrolling::{
-    Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
-};
+use super::scrolling::{Column, ColumnWidth, ScrollDirection};
 use super::shadow::Shadow;
 use super::tile::{Tile, TileRenderSnapshot};
 use super::{
@@ -44,8 +43,8 @@ use crate::window::ResolvedWindowRules;
 
 #[derive(Debug)]
 pub struct Workspace<W: LayoutElement> {
-    /// The scrollable-tiling layout.
-    scrolling: ScrollingSpace<W>,
+    /// The tiling layout (arbor: a dock tree in place of niri's scrolling space).
+    scrolling: DockSpace<W>,
 
     /// The floating layout.
     floating: FloatingSpace<W>,
@@ -144,7 +143,7 @@ impl WorkspaceId {
 
 niri_render_elements! {
     WorkspaceRenderElement<R> => {
-        Scrolling = ScrollingSpaceRenderElement<R>,
+        Scrolling = DockSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
     }
 }
@@ -234,7 +233,7 @@ impl<W: LayoutElement> Workspace<W> {
         let view_size = output_size(&output);
         let working_area = compute_working_area(&output);
 
-        let scrolling = ScrollingSpace::new(
+        let scrolling = DockSpace::new(
             view_size,
             working_area,
             scale.fractional_scale(),
@@ -298,7 +297,7 @@ impl<W: LayoutElement> Workspace<W> {
         let view_size = Size::from((1280., 720.));
         let working_area = Rectangle::from_size(Size::from((1280., 720.)));
 
-        let scrolling = ScrollingSpace::new(
+        let scrolling = DockSpace::new(
             view_size,
             working_area,
             scale.fractional_scale(),
@@ -702,6 +701,16 @@ impl<W: LayoutElement> Workspace<W> {
         self.enter_output_for_window(tile.window());
         self.scrolling
             .add_tile_to_column(col_idx, tile_idx, tile, activate);
+
+        if activate {
+            self.floating_is_active = FloatingActive::No;
+        }
+    }
+
+    pub fn add_tile_docked(&mut self, mut tile: Tile<W>, dock: DockInsert, activate: bool) {
+        self.enter_output_for_window(tile.window());
+        tile.restore_to_floating = false;
+        self.scrolling.add_tile_docked(tile, dock, activate);
 
         if activate {
             self.floating_is_active = FloatingActive::No;
@@ -1978,7 +1987,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     #[cfg(test)]
-    pub fn scrolling(&self) -> &ScrollingSpace<W> {
+    pub fn scrolling(&self) -> &DockSpace<W> {
         &self.scrolling
     }
 

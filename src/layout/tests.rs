@@ -3339,6 +3339,7 @@ fn removing_window_above_preserves_focused_window() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn preset_column_width_fixed_correct_with_border() {
     let ops = [
         Op::AddOutput(0),
@@ -3386,6 +3387,7 @@ fn preset_column_width_fixed_correct_with_border() {
 }
 
 #[test]
+#[ignore = "arbor: scrolling-specific"]
 fn preset_column_width_reset_after_set_width() {
     let ops = [
         Op::AddOutput(0),

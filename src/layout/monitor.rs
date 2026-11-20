@@ -10,6 +10,7 @@ use smithay::backend::renderer::element::utils::{
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use super::dock::DockInsert;
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
@@ -129,8 +130,11 @@ pub struct WorkspaceSwitchGesture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InsertPosition {
     NewColumn(usize),
+    #[allow(dead_code)] // arbor: the dock space never produces this.
     InColumn(usize, usize),
     Floating,
+    /// arbor: dock into the dock tree.
+    Dock(DockInsert),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,6 +595,36 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if allow_to_activate_workspace && activate.map_smart(|| false) {
+            self.activate_workspace(workspace_idx);
+        }
+    }
+
+    /// arbor: docks a tile into a workspace's dock tree.
+    pub fn add_tile_docked(
+        &mut self,
+        mut workspace_idx: usize,
+        dock: DockInsert,
+        tile: Tile<W>,
+        allow_to_activate_workspace: bool,
+    ) {
+        let workspace = &mut self.workspaces[workspace_idx];
+
+        workspace.add_tile_docked(tile, dock, true);
+
+        // After adding a new window, workspace becomes this output's own.
+        if workspace.name().is_none() {
+            workspace.original_output = OutputId::new(&self.output);
+        }
+
+        if workspace_idx == self.workspaces.len() - 1 {
+            self.add_workspace_bottom();
+        }
+        if self.options.layout.empty_workspace_above_first && workspace_idx == 0 {
+            self.add_workspace_top();
+            workspace_idx += 1;
+        }
+
+        if allow_to_activate_workspace {
             self.activate_workspace(workspace_idx);
         }
     }
