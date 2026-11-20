@@ -501,6 +501,21 @@ window-rule {
 }
 ```
 
+#### `open-docked`
+
+arbor: windows open floating on the Desktop by default. Set this to `true` to dock the window into
+the dock tree instead (to the right of the most recently focused docked window). Dialogs and
+fixed-height windows still open floating; `open-floating` takes precedence when set.
+
+```kdl
+// Dock terminals automatically.
+window-rule {
+    match app-id="^Alacritty$"
+
+    open-docked true
+}
+```
+
 #### `open-focused`
 
 <sup>Since: 25.01</sup>

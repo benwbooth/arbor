@@ -1870,6 +1870,20 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_position(pos)
     }
 
+    /// arbor: where an interactively moved window lands. Floating windows dock only when dropped
+    /// on a dock zone, and stay on the Desktop otherwise.
+    pub(super) fn drop_position(
+        &self,
+        pos: Point<f64, Logical>,
+        is_floating: bool,
+    ) -> InsertPosition {
+        if is_floating {
+            self.scrolling.floating_drop_position(pos)
+        } else {
+            self.scrolling.insert_position(pos)
+        }
+    }
+
     pub(super) fn insert_hint_area(
         &self,
         position: InsertPosition,

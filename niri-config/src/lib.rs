@@ -1787,6 +1787,7 @@ mod tests {
                     open_floating: Some(
                         false,
                     ),
+                    open_docked: None,
                     open_focused: Some(
                         true,
                     ),

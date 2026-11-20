@@ -49,6 +49,11 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 1. DockSpace replacing ScrollingSpace in `Workspace`: tree layout, keyboard
    focus/move by direction, drag-to-dock with insert hint, divider resize,
    fullscreen/maximize. Floating Desktop unchanged.
+   - [x] dock tree, focus/move by direction, drag-to-dock, insert hint
+   - [x] new windows open floating; `open-docked true` window rule docks;
+     `toggle-window-floating` / `move-window-to-tiling` dock right of the
+     last focused docked window; dragging a floating window onto a dock
+     zone (screen edge band, edge band of a docked window) docks it
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
 3. Tab groups (reuse niri's tabbed column display), saved views.
 4. KDE appmenu protocol for hearth's global menu bar.

@@ -504,3 +504,102 @@ fn consume_and_expel() {
     s.verify_invariants();
     assert_eq!(s.tree_string(), "H[3,V[1,2]]");
 }
+
+#[test]
+fn toggle_floating_docks_right_of_last_docked() {
+    let mut floating = TestWindowParams::new(3);
+    floating.is_floating = true;
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWindow(1),
+        Op::AddWindow { params: floating },
+        // The floating window is focused; docking it goes right of 1, the last docked focus.
+        Op::ToggleWindowFloating { id: None },
+    ];
+
+    let mut layout = check_ops(ops);
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "H[1,3,2]");
+    assert!(!ws.is_floating(&3));
+
+    // And back out to the Desktop.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::SetWindowFloating {
+            id: None,
+            floating: true,
+        }],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "H[1,2]");
+    assert!(ws.is_floating(&3));
+}
+
+fn floating_drag(window: usize, from: (f64, f64), to: (f64, f64)) -> [Op; 4] {
+    [
+        Op::InteractiveMoveBegin {
+            window,
+            output_idx: 1,
+            px: from.0,
+            py: from.1,
+        },
+        Op::InteractiveMoveUpdate {
+            window,
+            dx: 0.,
+            dy: 0.,
+            output_idx: 1,
+            px: from.0,
+            py: from.1,
+        },
+        Op::InteractiveMoveUpdate {
+            window,
+            dx: to.0 - from.0,
+            dy: to.1 - from.1,
+            output_idx: 1,
+            px: to.0,
+            py: to.1,
+        },
+        Op::InteractiveMoveEnd { window },
+    ]
+}
+
+#[test]
+fn floating_drag_docks_only_on_dock_zones() {
+    let mut p2 = TestWindowParams::new(2);
+    p2.is_floating = true;
+    let mut p3 = TestWindowParams::new(3);
+    p3.is_floating = true;
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow { params: p2 },
+        Op::AddWindow { params: p3 },
+    ]);
+
+    // Dropping a floating window in the middle of a docked window keeps it floating.
+    check_ops_on_layout(&mut layout, floating_drag(3, (640., 360.), (600., 300.)));
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "1");
+    assert!(ws.is_floating(&3));
+
+    // Dropping at the screen edge docks beside everything.
+    check_ops_on_layout(&mut layout, floating_drag(2, (640., 360.), (10., 360.)));
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "H[2,1]");
+    assert!(!ws.is_floating(&2));
+
+    // Dropping on the bottom edge band of a docked window docks below it.
+    let r1 = ws.scrolling().window_rect(&1).unwrap();
+    let to = (r1.loc.x + r1.size.w / 2., r1.loc.y + r1.size.h - 60.);
+    check_ops_on_layout(&mut layout, floating_drag(3, (640., 360.), to));
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "H[2,V[1,3]]");
+}

@@ -2868,11 +2868,7 @@ impl<W: LayoutElement> Layout<W> {
                         .unwrap();
                     let pos_within_workspace =
                         (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
-                    let position = if move_.is_floating {
-                        InsertPosition::Floating
-                    } else {
-                        ws.scrolling_insert_position(pos_within_workspace)
-                    };
+                    let position = ws.drop_position(pos_within_workspace, move_.is_floating);
 
                     let border_width = move_.tile.effective_border_width().unwrap_or(0.);
                     let corner_radius = move_
@@ -4173,14 +4169,11 @@ impl<W: LayoutElement> Layout<W> {
                                     .position(|ws| ws.id() == ws_id)
                                     .unwrap();
 
-                                let position = if move_.is_floating {
-                                    InsertPosition::Floating
-                                } else {
-                                    let pos_within_workspace =
-                                        (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
-                                    let ws = &mut mon.workspaces[ws_idx];
-                                    ws.scrolling_insert_position(pos_within_workspace)
-                                };
+                                let pos_within_workspace =
+                                    (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
+                                let ws = &mut mon.workspaces[ws_idx];
+                                let position =
+                                    ws.drop_position(pos_within_workspace, move_.is_floating);
 
                                 (position, Some(geo.loc))
                             }

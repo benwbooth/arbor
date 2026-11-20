@@ -12,7 +12,16 @@ fn set_up() -> (Fixture, ClientId, WlSurface) {
     set_up_with_config(Config::default())
 }
 
-fn set_up_with_config(config: Config) -> (Fixture, ClientId, WlSurface) {
+fn set_up_with_config(mut config: Config) -> (Fixture, ClientId, WlSurface) {
+    // arbor: windows open floating by default; these tests start from a docked window.
+    config.window_rules.insert(
+        0,
+        niri_config::WindowRule {
+            open_docked: Some(true),
+            ..Default::default()
+        },
+    );
+
     let mut f = Fixture::with_config(config);
     f.add_output(1, (1920, 1080));
     f.add_output(2, (1280, 720));
@@ -530,12 +539,13 @@ fn resize_during_interactive_move_propagates_to_floating() {
     let mapped = niri.layout.windows().next().unwrap().1;
     let window_id = mapped.window.clone();
     niri.layout
-        .interactive_move_begin(window_id.clone(), &output, Point::default());
+        .interactive_move_begin(window_id.clone(), &output, Point::from((960., 540.)));
     niri.layout.interactive_move_update(
         &window_id,
         Point::from((1000., 0.)),
         output,
-        Point::default(),
+        // arbor: away from the screen edge band, which would dock the window.
+        Point::from((960., 540.)),
     );
     f.double_roundtrip(id);
 
@@ -1371,4 +1381,65 @@ fn repeated_size_request() {
         f.client(id).window(&surface).format_recent_configures(),
         @""
     );
+}
+
+// arbor: new windows open floating on the Desktop unless a rule docks them.
+fn open_one_window(config: Config) -> (Fixture, bool) {
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.set_size(100, 100);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    let window = mapped.window.clone();
+    let is_floating = f
+        .niri()
+        .layout
+        .workspaces()
+        .find_map(|(_, _, ws)| ws.has_window(&window).then(|| ws.is_floating(&window)))
+        .unwrap();
+    (f, is_floating)
+}
+
+#[test]
+fn arbor_windows_open_floating_by_default() {
+    let (_f, is_floating) = open_one_window(Config::default());
+    assert!(is_floating);
+}
+
+#[test]
+fn arbor_open_docked_rule() {
+    let config = Config::parse_mem(
+        r##"
+window-rule {
+    open-docked true
+}
+"##,
+    )
+    .unwrap();
+    let (_f, is_floating) = open_one_window(config);
+    assert!(!is_floating);
+
+    // open-floating takes precedence.
+    let config = Config::parse_mem(
+        r##"
+window-rule {
+    open-docked true
+    open-floating true
+}
+"##,
+    )
+    .unwrap();
+    let (_f, is_floating) = open_one_window(config);
+    assert!(is_floating);
 }

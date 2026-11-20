@@ -46,6 +46,10 @@ const MIN_CHILD_LEN: f64 = 50.;
 /// Distance from the working area edge within which a drag docks beside everything.
 const ROOT_EDGE_BAND: f64 = 40.;
 
+/// Largest depth of the edge band of a docked window where a window dragged from the Desktop
+/// docks beside it.
+const LEAF_EDGE_BAND: f64 = 80.;
+
 static LEAF_ID_COUNTER: IdCounter = IdCounter::new();
 
 /// Stable identity of a leaf in the dock tree.
@@ -1396,6 +1400,62 @@ impl<W: LayoutElement> DockSpace<W> {
             target: DockTarget::Leaf(leaf.id),
             side: nearest_side(leaf.rect, pos),
         })
+    }
+
+    /// Where a window dragged from the floating Desktop lands: docked if the pointer is over the
+    /// working area edge band or the edge band of a docked window, otherwise back on the Desktop.
+    pub(super) fn floating_drop_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
+        // Near the working area edge: dock beside everything.
+        let wa = self.working_area;
+        if wa.contains(pos) {
+            let edges = [
+                (DockSide::Left, pos.x - wa.loc.x),
+                (DockSide::Right, wa.loc.x + wa.size.w - pos.x),
+                (DockSide::Top, pos.y - wa.loc.y),
+                (DockSide::Bottom, wa.loc.y + wa.size.h - pos.y),
+            ];
+            let (side, dist) = edges
+                .into_iter()
+                .min_by(|(_, a), (_, b)| f64::total_cmp(a, b))
+                .unwrap();
+            if dist < ROOT_EDGE_BAND {
+                return InsertPosition::Dock(DockInsert {
+                    target: DockTarget::Root,
+                    side,
+                });
+            }
+        }
+
+        // Over the edge band of a docked window: dock beside it.
+        for leaf in self.leaves() {
+            let rect = leaf.rect;
+            if !rect.contains(pos) {
+                continue;
+            }
+            let band_x = f64::min(LEAF_EDGE_BAND, rect.size.w / 4.);
+            let band_y = f64::min(LEAF_EDGE_BAND, rect.size.h / 4.);
+            let edges = [
+                (DockSide::Left, (pos.x - rect.loc.x) / band_x),
+                (DockSide::Right, (rect.loc.x + rect.size.w - pos.x) / band_x),
+                (DockSide::Top, (pos.y - rect.loc.y) / band_y),
+                (
+                    DockSide::Bottom,
+                    (rect.loc.y + rect.size.h - pos.y) / band_y,
+                ),
+            ];
+            let (side, rel) = edges
+                .into_iter()
+                .min_by(|(_, a), (_, b)| f64::total_cmp(a, b))
+                .unwrap();
+            if rel < 1. {
+                return InsertPosition::Dock(DockInsert {
+                    target: DockTarget::Leaf(leaf.id),
+                    side,
+                });
+            }
+        }
+
+        InsertPosition::Floating
     }
 
     pub(super) fn insert_hint_area(&self, position: InsertPosition) -> Option<Rect> {

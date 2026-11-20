@@ -70,6 +70,9 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open floating.
     pub open_floating: Option<bool>,
 
+    /// Whether the window should open docked (arbor).
+    pub open_docked: Option<bool>,
+
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
 
@@ -253,6 +256,10 @@ impl ResolvedWindowRules {
                     resolved.open_floating = Some(x);
                 }
 
+                if let Some(x) = rule.open_docked {
+                    resolved.open_docked = Some(x);
+                }
+
                 if let Some(x) = rule.open_focused {
                     resolved.open_focused = Some(x);
                 }
@@ -379,7 +386,12 @@ impl ResolvedWindowRules {
         let (min_size, max_size) = self.apply_min_max_size(min_size, max_size);
 
         // We open fixed-height windows as floating.
-        min_size.h > 0 && min_size.h == max_size.h
+        if min_size.h > 0 && min_size.h == max_size.h {
+            return true;
+        }
+
+        // arbor: everything else opens floating on the Desktop too, unless a rule docks it.
+        !self.open_docked.unwrap_or(false)
     }
 }
 

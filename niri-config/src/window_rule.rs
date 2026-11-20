@@ -32,6 +32,9 @@ pub struct WindowRule {
     pub open_fullscreen: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub open_floating: Option<bool>,
+    /// arbor: dock the window into the dock tree instead of opening it on the floating Desktop.
+    #[knuffel(child, unwrap(argument))]
+    pub open_docked: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub open_focused: Option<bool>,
 
