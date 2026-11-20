@@ -310,14 +310,8 @@ fn insert_position_sides() {
     assert_eq!(at(320., 100.), docked(leaf1, DockSide::Top));
     assert_eq!(at(320., 650.), docked(leaf1, DockSide::Bottom));
     assert_eq!(at(700., 360.), docked(leaf2, DockSide::Left));
-    // Middle of a leaf: join its tab group.
-    assert_eq!(
-        at(950., 300.),
-        InsertPosition::Dock(DockInsert {
-            target: DockTarget::Tab(leaf2),
-            side: DockSide::Right,
-        })
-    );
+    // Middle of a leaf: nearest side until the pointer rests there.
+    assert_eq!(at(950., 300.), docked(leaf2, DockSide::Top));
 
     // Near the working area edge: dock beside everything.
     let root = |side| {
@@ -962,6 +956,23 @@ fn tab_center_zone_and_hint() {
     let r2 = s.window_rect(&2).unwrap();
 
     let center = rect_center_of(r2);
+    // Not right away: the pointer has to rest in the middle first.
+    assert!(matches!(
+        s.insert_position(center),
+        InsertPosition::Dock(DockInsert {
+            target: DockTarget::Leaf(_),
+            ..
+        })
+    ));
+    advance_clock(&s, 200);
+    assert!(matches!(
+        s.insert_position(center),
+        InsertPosition::Dock(DockInsert {
+            target: DockTarget::Leaf(_),
+            ..
+        })
+    ));
+    advance_clock(&s, 250);
     let pos = s.insert_position(center);
     assert_eq!(
         pos,
@@ -982,6 +993,12 @@ fn tab_center_zone_and_hint() {
             side: DockSide::Top,
         })
     ));
+}
+
+fn advance_clock(space: &DockSpace<TestWindow>, ms: u64) {
+    let mut clock = space.clock().clone();
+    let now = clock.now_unadjusted();
+    clock.set_unadjusted(now + Duration::from_millis(ms));
 }
 
 fn rect_center_of(r: Rectangle<f64, Logical>) -> Point<f64, Logical> {
@@ -1012,7 +1029,7 @@ fn drag_to_center_creates_tab_group_and_tear_off() {
             px: 900.,
             py: 360.,
         },
-        // Drag into the middle of window 1.
+        // Drag into the middle of window 1 and rest there.
         Op::InteractiveMoveUpdate {
             window: 2,
             dx: -260.,
@@ -1021,10 +1038,15 @@ fn drag_to_center_creates_tab_group_and_tear_off() {
             px: 640.,
             py: 360.,
         },
-        Op::InteractiveMoveEnd { window: 2 },
     ];
 
     let mut layout = check_ops(ops);
+    // Frames keep coming (and update the insert hint) while the pointer rests.
+    for _ in 0..5 {
+        layout.update_render_elements(None);
+        check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 100 }]);
+    }
+    check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 2 }]);
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
 
@@ -1142,4 +1164,38 @@ fn title_bars_off_and_rule() {
         Rc::new(Options::default()),
     );
     assert_eq!(tile.title_bar_height(), 0.);
+}
+
+#[test]
+fn floating_drag_rests_into_tab_group() {
+    let mut p2 = TestWindowParams::new(2);
+    p2.is_floating = true;
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow { params: p2 },
+    ]);
+
+    // Passing over the middle without resting keeps the window floating.
+    check_ops_on_layout(&mut layout, floating_drag(2, (900., 500.), (640., 360.)));
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.is_floating(&2));
+
+    // Resting there joins the tab group.
+    let [begin, update0, update1, end] = floating_drag(2, (900., 500.), (640., 360.));
+    check_ops_on_layout(
+        &mut layout,
+        [
+            begin,
+            update0,
+            update1.clone(),
+            Op::AdvanceAnimations { msec_delta: 450 },
+            update1,
+            end,
+        ],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
 }

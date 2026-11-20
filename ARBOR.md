@@ -22,10 +22,9 @@ arbor changes in new files where possible so rebases stay small.
     axes match);
   - the edge band of the screen: it docks beside everything (new root
     split);
-  - the middle of a docked window (center 50%): tab group. For now only
-    docked windows join tab groups this way (a floating drag over the middle
-    of a docked window still floats; toggle the dragged window to tiling
-    during the move, or dock it first).
+  - the middle of a docked window (center 50%), resting there ~400 ms:
+    tab group (for floating and docked drags alike; the insert hint switches
+    to the whole target when it arms).
   - empty Desktop area: floats.
   An insert hint shows the target rectangle while dragging.
 - **Dividers:** dragging the gap between two siblings resizes just those two.
@@ -83,7 +82,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
      Fullscreen/maximize belong to the shown tab and drop on tab switch.
      Minimizing any tab minimizes the whole group.
    - [ ] saved views
-   - [ ] timed hover (~400ms) before a floating drag can join a tab group
+   - [x] resting ~400 ms over the middle of a docked window arms the tab
+     drop (floating and docked drags)
 4. KDE appmenu protocol for hearth's global menu bar.
 5. NixOS session + hearth backend for niri IPC.
 

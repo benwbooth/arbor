@@ -8,6 +8,7 @@
 //! call on `ScrollingSpace`, so that `workspace.rs` changes stay minimal. Column-specific
 //! operations are no-ops or the closest sensible equivalent.
 
+use std::cell::Cell;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::iter::zip;
@@ -50,6 +51,13 @@ const ROOT_EDGE_BAND: f64 = 40.;
 /// Where the middle zone of a docked window starts, relative to its size. Dropping a docked
 /// window there joins the tab group.
 const TAB_ZONE_START: f64 = 0.25;
+
+/// How long a drag must rest over the middle of a docked window before dropping joins its tab
+/// group.
+const TAB_HOVER_DELAY: Duration = Duration::from_millis(400);
+
+/// A pause in drag updates longer than this restarts the tab hover (e.g. a new drag).
+const TAB_HOVER_GAP: Duration = Duration::from_millis(1000);
 
 /// Smallest thickness of the band around a divider that grabs it (matters when gaps are small).
 const DIVIDER_HIT: f64 = 8.;
@@ -225,6 +233,10 @@ pub struct DockSpace<W: LayoutElement> {
 
     /// Windows in the closing animation.
     closing_windows: Vec<ClosingWindow>,
+
+    /// A drag resting over the middle of a docked window: the leaf, since when, and when the
+    /// drag was last seen there.
+    tab_hover: Cell<Option<(LeafId, Duration, Duration)>>,
 
     view_size: Size<f64, Logical>,
 
@@ -862,6 +874,7 @@ impl<W: LayoutElement> DockSpace<W> {
             active: None,
             interactive_resize: None,
             closing_windows: Vec::new(),
+            tab_hover: Cell::new(None),
             view_size,
             working_area,
             parent_area,
@@ -925,6 +938,7 @@ impl<W: LayoutElement> DockSpace<W> {
             leaf.tiles.iter().any(Tile::are_animations_ongoing)
                 || leaf.tab_indicator.are_animations_ongoing()
         }) || !self.closing_windows.is_empty()
+            || self.is_tab_hover_pending()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
@@ -1706,21 +1720,12 @@ impl<W: LayoutElement> DockSpace<W> {
             });
         }
 
-        // The middle of a docked window: join its tab group.
-        for leaf in self.visible_leaves() {
-            let rect = leaf.rect;
-            if !rect.contains(pos) {
-                continue;
-            }
-            let rel_x = (pos.x - rect.loc.x) / rect.size.w;
-            let rel_y = (pos.y - rect.loc.y) / rect.size.h;
-            let center = |rel: f64| (TAB_ZONE_START..=1. - TAB_ZONE_START).contains(&rel);
-            if center(rel_x) && center(rel_y) {
-                return InsertPosition::Dock(DockInsert {
-                    target: DockTarget::Tab(leaf.id),
-                    side: DockSide::Right,
-                });
-            }
+        // Resting over the middle of a docked window: join its tab group.
+        if let Some(id) = self.tab_zone_target(pos) {
+            return InsertPosition::Dock(DockInsert {
+                target: DockTarget::Tab(id),
+                side: DockSide::Right,
+            });
         }
 
         // Otherwise dock beside the leaf under (or nearest to) the pointer, on the nearest side.
@@ -1738,6 +1743,49 @@ impl<W: LayoutElement> DockSpace<W> {
         InsertPosition::Dock(DockInsert {
             target: DockTarget::Leaf(leaf.id),
             side: nearest_side(leaf.rect, pos),
+        })
+    }
+
+    /// The leaf whose middle zone a drag at `pos` has rested over for long enough to join its
+    /// tab group. Tracks the rest time across calls.
+    fn tab_zone_target(&self, pos: Point<f64, Logical>) -> Option<LeafId> {
+        let now = self.clock.now_unadjusted();
+        let under = self.visible_leaves().into_iter().find(|leaf| {
+            let rect = leaf.rect;
+            if !rect.contains(pos) {
+                return false;
+            }
+            let rel_x = (pos.x - rect.loc.x) / rect.size.w;
+            let rel_y = (pos.y - rect.loc.y) / rect.size.h;
+            let center = |rel: f64| (TAB_ZONE_START..=1. - TAB_ZONE_START).contains(&rel);
+            center(rel_x) && center(rel_y)
+        });
+        let Some(id) = under.map(|leaf| leaf.id) else {
+            self.tab_hover.set(None);
+            return None;
+        };
+
+        let since = match self.tab_hover.get() {
+            Some((prev, since, last))
+                if prev == id
+                    && last <= now
+                    && since <= now
+                    && now.saturating_sub(last) <= TAB_HOVER_GAP =>
+            {
+                since
+            }
+            _ => now,
+        };
+        self.tab_hover.set(Some((id, since, now)));
+        (now.saturating_sub(since) >= TAB_HOVER_DELAY).then_some(id)
+    }
+
+    /// Whether a drag is resting over the middle of a docked window, still waiting to become a
+    /// tab target (frames must keep coming so that the hint updates).
+    fn is_tab_hover_pending(&self) -> bool {
+        let now = self.clock.now_unadjusted();
+        self.tab_hover.get().is_some_and(|(_, since, last)| {
+            now.saturating_sub(last) <= TAB_HOVER_GAP && now.saturating_sub(since) < TAB_HOVER_DELAY
         })
     }
 
@@ -1783,6 +1831,14 @@ impl<W: LayoutElement> DockSpace<W> {
                     side,
                 });
             }
+        }
+
+        // Resting over the middle of a docked window: join its tab group.
+        if let Some(id) = self.tab_zone_target(pos) {
+            return InsertPosition::Dock(DockInsert {
+                target: DockTarget::Tab(id),
+                side: DockSide::Right,
+            });
         }
 
         // Over the edge band of a docked window: dock beside it.
