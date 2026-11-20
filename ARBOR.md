@@ -107,8 +107,9 @@ layout {
      theme: kdeglobals theme, breeze-dark, breeze, hicolor; SVG via resvg or
      PNG, loaded off-thread, redraw when ready; the app's letter otherwise);
      a subtree below threshold is one tile showing its
-     leaf outlines. Clicking anywhere in a slot activates; double-click
-     frames.
+     leaf outlines. Clicking anywhere in a slot activates; double-click, or
+     Enter on the focused tile, frames the whole tile (the collapsed
+     subtree).
 3. Tab groups (reuse niri's tabbed column display), saved views.
    - [x] tab groups: a leaf holds several tiles with one shown and niri's
      tab indicator; dropping a docked window on the middle of another joins

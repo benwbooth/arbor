@@ -1386,6 +1386,30 @@ impl<W: LayoutElement> DockSpace<W> {
         self.set_camera_mode(mode);
     }
 
+    /// If the window (or the focused one) is drawn as part of an icon tile, focuses it and
+    /// frames the whole tile (the collapsed subtree). Returns whether it did.
+    pub fn camera_frame_icon_tile(&mut self, window: Option<&W::Id>) -> bool {
+        let leaf_id = match window {
+            Some(window) => self.leaf_by_window(window).map(|leaf| leaf.id),
+            None => self.active_leaf().map(|leaf| leaf.id),
+        };
+        let Some(leaf_id) = leaf_id else {
+            return false;
+        };
+        let zoom = self.camera_view().zoom;
+        let Some(depth) = self
+            .collapsed_nodes(zoom)
+            .into_iter()
+            .find(|node| node.leaves.contains(&leaf_id))
+            .map(|node| node.depth)
+        else {
+            return false;
+        };
+        self.activate_leaf(leaf_id);
+        self.set_camera_mode(CameraMode::Framed { depth });
+        true
+    }
+
     pub fn camera_show_all(&mut self) {
         self.set_camera_mode(CameraMode::ShowAll);
     }
@@ -2171,7 +2195,7 @@ impl<W: LayoutElement> DockSpace<W> {
             return out;
         }
         if let Some(root) = &self.root {
-            collect_collapsed(root, zoom, threshold, self.active, &mut out);
+            collect_collapsed(root, 0, zoom, threshold, self.active, &mut out);
         }
         out
     }
@@ -3663,6 +3687,8 @@ struct CollapsedNode {
     content: TileContent,
     /// Leaves inside (not drawn themselves).
     leaves: Vec<LeafId>,
+    /// Depth of the node in the tree.
+    depth: usize,
 }
 
 fn leaf_app_id<W: LayoutElement>(leaf: &DockLeaf<W>) -> String {
@@ -3671,6 +3697,7 @@ fn leaf_app_id<W: LayoutElement>(leaf: &DockLeaf<W>) -> String {
 
 fn collect_collapsed<W: LayoutElement>(
     node: &Node<W>,
+    depth: usize,
     zoom: f64,
     threshold: f64,
     active: Option<LeafId>,
@@ -3692,6 +3719,7 @@ fn collect_collapsed<W: LayoutElement>(
                         has_icon: false,
                     },
                     leaves: vec![leaf.id],
+                    depth,
                 });
             }
         }
@@ -3722,12 +3750,13 @@ fn collect_collapsed<W: LayoutElement>(
                             app_id: shown.map(leaf_app_id).unwrap_or_default(),
                         },
                         leaves: leaves.iter().map(|leaf| leaf.id).collect(),
+                        depth,
                     });
                     return;
                 }
             }
             for child in &split.children {
-                collect_collapsed(child, zoom, threshold, active, out);
+                collect_collapsed(child, depth + 1, zoom, threshold, active, out);
             }
         }
     }

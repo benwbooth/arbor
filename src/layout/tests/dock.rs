@@ -1462,3 +1462,49 @@ fn icon_tiles_below_threshold() {
     assert_eq!(*win.id(), 4);
     assert!(matches!(hit, HitType::Activate { .. }));
 }
+
+#[test]
+fn framing_an_icon_tile_frames_its_subtree() {
+    let mut options = Options::default();
+    options.layout.camera.icon_threshold = 400.;
+    let mut s = space_with(options);
+    let mut clock = s.clock().clone();
+    clock.set_complete_instantly(true);
+
+    add(&mut s, 1);
+    add(&mut s, 2);
+    dock(&mut s, 3, 2, DockSide::Bottom);
+    for id in 4..=6 {
+        add(&mut s, id);
+    }
+    s.activate_window(&3);
+    s.camera_show_all();
+    s.advance_animations();
+    assert!(s.is_zoomed());
+
+    // Not drawn as a tile at actual size: nothing to frame.
+    let counts = s.icon_tile_leaf_counts();
+    assert!(!counts.is_empty(), "{counts:?}");
+
+    // Frame the tile holding window 3: the stack V[2,3] if it collapsed, else 3 alone.
+    assert!(s.camera_frame_icon_tile(Some(&3)));
+    s.advance_animations();
+    assert_eq!(active(&s), 3);
+    let cam = s.camera_view();
+    let r2 = cam.rect_to_view(s.window_rect(&2).unwrap());
+    let r3 = cam.rect_to_view(s.window_rect(&3).unwrap());
+    // Both windows of the stack are in view.
+    for r in [r2, r3] {
+        assert!(r.loc.x >= -0.01 && r.loc.x + r.size.w <= 1280.01, "{r:?}");
+        assert!(r.loc.y >= -0.01 && r.loc.y + r.size.h <= 720.01, "{r:?}");
+    }
+
+    // At actual size there are no icon tiles.
+    s.camera_zoom_in();
+    s.camera_zoom_in();
+    s.camera_zoom_in();
+    s.advance_animations();
+    if !s.is_zoomed() {
+        assert!(!s.camera_frame_icon_tile(None));
+    }
+}

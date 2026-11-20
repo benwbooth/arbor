@@ -99,12 +99,31 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    /// Frames `window` with its workspace's camera and focuses it.
+    /// Frames `window` with its workspace's camera and focuses it. A window drawn as part of
+    /// an icon tile frames the whole tile.
     pub fn camera_frame_window(&mut self, window: &W::Id) {
         self.activate_window(window);
         if let Some(ws) = self.workspaces_mut().find(|ws| ws.has_window(window)) {
-            ws.dock_mut().camera_frame_window(Some(window));
+            let dock = ws.dock_mut();
+            if !dock.camera_frame_icon_tile(Some(window)) {
+                dock.camera_frame_window(Some(window));
+            }
         }
+    }
+
+    /// Frames the icon tile of the focused docked window, if it is drawn as one. Returns
+    /// whether it did.
+    pub fn frame_focused_icon_tile(&mut self) -> bool {
+        let Some(ws) = self.active_workspace_mut() else {
+            return false;
+        };
+        if ws
+            .active_window()
+            .is_none_or(|win| ws.is_floating(win.id()))
+        {
+            return false;
+        }
+        ws.dock_mut().camera_frame_icon_tile(None)
     }
 
     /// Zooms the camera of the workspace under the pointer by `factor` around the pointer.
