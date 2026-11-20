@@ -764,6 +764,13 @@ mod tests {
                 modeline 173.00  1920 2048 2248 2576  1080 1083 1088 1120 "-hsync" "+vsync"
             }
 
+            output "eDP-4" {
+                hdr {
+                    sdr-brightness 560
+                    max-luminance 800
+                }
+            }
+
             layout {
                 focus-ring {
                     width 5
@@ -1198,6 +1205,7 @@ mod tests {
                         ),
                         layout: None,
                         color_profile: Edid,
+                        hdr: None,
                     },
                     Output {
                         off: false,
@@ -1225,6 +1233,7 @@ mod tests {
                         hot_corners: None,
                         layout: None,
                         color_profile: Srgb,
+                        hdr: None,
                     },
                     Output {
                         off: false,
@@ -1255,6 +1264,38 @@ mod tests {
                         hot_corners: None,
                         layout: None,
                         color_profile: Srgb,
+                        hdr: None,
+                    },
+                    Output {
+                        off: false,
+                        name: "eDP-4",
+                        scale: None,
+                        transform: Normal,
+                        position: None,
+                        mode: None,
+                        modeline: None,
+                        variable_refresh_rate: None,
+                        focus_at_startup: false,
+                        background_color: None,
+                        backdrop_color: None,
+                        hot_corners: None,
+                        layout: None,
+                        color_profile: Srgb,
+                        hdr: Some(
+                            Hdr {
+                                off: false,
+                                sdr_brightness: Some(
+                                    FloatOrInt(
+                                        560.0,
+                                    ),
+                                ),
+                                max_luminance: Some(
+                                    FloatOrInt(
+                                        800.0,
+                                    ),
+                                ),
+                            },
+                        ),
                     },
                 ],
             ),

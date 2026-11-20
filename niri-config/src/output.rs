@@ -79,6 +79,9 @@ pub struct Output {
     /// arbor: how sRGB content is mapped to the panel's colour gamut.
     #[knuffel(child, unwrap(argument, str), default)]
     pub color_profile: ColorProfile,
+    /// arbor: drive the output in HDR (PQ, BT.2020) with SDR content at a set brightness.
+    #[knuffel(child)]
+    pub hdr: Option<Hdr>,
 }
 
 impl Output {
@@ -112,7 +115,41 @@ impl Default for Output {
             hot_corners: None,
             layout: None,
             color_profile: ColorProfile::default(),
+            hdr: None,
         }
+    }
+}
+
+/// arbor: HDR output settings.
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct Hdr {
+    #[knuffel(child)]
+    pub off: bool,
+    /// Luminance of SDR white (sRGB 1.0) in nits. Default 203 (ITU-R BT.2408).
+    #[knuffel(child, unwrap(argument))]
+    pub sdr_brightness: Option<FloatOrInt<1, 10000>>,
+    /// Peak luminance sent in the HDR metadata, in nits. Defaults to `sdr-brightness`.
+    #[knuffel(child, unwrap(argument))]
+    pub max_luminance: Option<FloatOrInt<1, 10000>>,
+}
+
+impl Hdr {
+    pub const DEFAULT_SDR_BRIGHTNESS: f64 = 203.;
+
+    pub fn sdr_brightness(&self) -> f64 {
+        self.sdr_brightness
+            .map_or(Self::DEFAULT_SDR_BRIGHTNESS, |x| x.0)
+    }
+
+    pub fn max_luminance(&self) -> f64 {
+        self.max_luminance.map_or(self.sdr_brightness(), |x| x.0)
+    }
+}
+
+impl Output {
+    /// arbor: the HDR settings if HDR is enabled.
+    pub fn hdr(&self) -> Option<Hdr> {
+        self.hdr.filter(|hdr| !hdr.off)
     }
 }
 
