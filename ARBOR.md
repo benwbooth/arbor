@@ -54,6 +54,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
      `toggle-window-floating` / `move-window-to-tiling` dock right of the
      last focused docked window; dragging a floating window onto a dock
      zone (screen edge band, edge band of a docked window) docks it
+   - [x] inserting splits the target's share only; removing gives the share
+     back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
 3. Tab groups (reuse niri's tabbed column display), saved views.
 4. KDE appmenu protocol for hearth's global menu bar.

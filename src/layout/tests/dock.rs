@@ -79,13 +79,14 @@ fn add_docks_right_of_active_and_joins_parent_split() {
     assert_eq!(r1.size.w, 616.);
     assert_eq!(r2.loc.x, 16. + 616. + 16.);
 
-    // The active leaf's parent is already horizontal: join as a sibling, equal fractions.
+    // The active leaf's parent is already horizontal: join as a sibling, splitting the target's
+    // share and leaving the other siblings alone.
     add(&mut s, 3);
     assert_eq!(s.tree_string(), "H[1,2,3]");
     let w: Vec<f64> = (1..=3)
         .map(|id| s.window_rect(&id).unwrap().size.w)
         .collect();
-    assert!(w.iter().all(|x| (x - w[0]).abs() <= 1.), "{w:?}");
+    assert_eq!(w, [608., 304., 304.]);
 
     // Focus the first leaf and add: goes right after it.
     s.focus_column_first();
@@ -248,12 +249,13 @@ fn interactive_resize_moves_one_divider() {
     add(&mut s, 3);
     let w3 = s.window_rect(&3).unwrap().size.w;
     let w2 = s.window_rect(&2).unwrap().size.w;
+    let w1_0 = s.window_rect(&1).unwrap().size.w;
 
     assert!(s.interactive_resize_begin(1, ResizeEdge::RIGHT));
     assert!(s.interactive_resize_update(&1, Point::from((100., 0.))));
     s.verify_invariants();
     let w1 = s.window_rect(&1).unwrap().size.w;
-    assert!((w1 - (w2 + 100.)).abs() <= 1., "{w1}");
+    assert!((w1 - (w1_0 + 100.)).abs() <= 1., "{w1}");
     assert!((s.window_rect(&2).unwrap().size.w - (w2 - 100.)).abs() <= 1.);
     // Only the two siblings around the divider change.
     assert_eq!(s.window_rect(&3).unwrap().size.w, w3);
@@ -261,7 +263,7 @@ fn interactive_resize_moves_one_divider() {
     // Updates are relative to the start of the resize.
     assert!(s.interactive_resize_update(&1, Point::from((50., 0.))));
     let w1 = s.window_rect(&1).unwrap().size.w;
-    assert!((w1 - (w2 + 50.)).abs() <= 1., "{w1}");
+    assert!((w1 - (w1_0 + 50.)).abs() <= 1., "{w1}");
 
     s.interactive_resize_end(Some(&1));
     s.verify_invariants();
@@ -329,10 +331,10 @@ fn insert_position_sides() {
     assert_eq!(hint.size.w, r1.size.w);
     assert!((hint.size.h - (r1.size.h - 16.) / 2.).abs() <= 1.);
 
-    // Left of leaf 1: joins the horizontal root split as the first of three columns.
+    // Left of leaf 1: joins the horizontal root split, taking half of leaf 1's share.
     let hint = s.insert_hint_area(at(100., 360.)).unwrap();
     assert_eq!(hint.loc, r1.loc);
-    assert!((hint.size.w - (1248. - 32.) / 3.).abs() <= 1.);
+    assert!((hint.size.w - (1248. - 32.) / 4.).abs() <= 1.);
 
     // Root bottom: two rows over the full width.
     let hint = s.insert_hint_area(root(DockSide::Bottom)).unwrap();
@@ -602,4 +604,54 @@ fn floating_drag_docks_only_on_dock_zones() {
     check_ops_on_layout(&mut layout, floating_drag(3, (640., 360.), to));
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.scrolling().tree_string(), "H[2,V[1,3]]");
+}
+
+#[test]
+fn insert_and_remove_preserve_fractions() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    // Make 1 wider: [0.5, 0.25, 0.25] -> widen 1 by 100px.
+    s.set_window_width(Some(&1), SizeChange::AdjustFixed(100));
+    s.verify_invariants();
+    let w = |s: &DockSpace<TestWindow>, id: usize| s.window_rect(&id).unwrap().size.w;
+    let (w1, w2, w3) = (w(&s, 1), w(&s, 2), w(&s, 3));
+
+    // Docking right of 3 splits only 3's share. (Everyone shrinks a little for the new gap.)
+    dock(&mut s, 4, 3, DockSide::Right);
+    assert_eq!(s.tree_string(), "H[1,2,3,4]");
+    let shrink = (1216. - 16.) / 1216.;
+    assert!((w(&s, 1) - w1 * shrink).abs() <= 1.);
+    assert!((w(&s, 2) - w2 * shrink).abs() <= 1.);
+    assert!((w(&s, 3) - w(&s, 4)).abs() <= 1.);
+    assert!((w(&s, 3) + w(&s, 4) - w3 * shrink).abs() <= 1.);
+
+    // Removing 4 gives its space back to its only neighbor, 3.
+    remove(&mut s, 4);
+    assert_eq!(w(&s, 1), w1);
+    assert_eq!(w(&s, 2), w2);
+    assert!((w(&s, 3) - w3).abs() <= 1.);
+
+    // Removing a middle child splits its space between both neighbors proportionally.
+    remove(&mut s, 2);
+    let total = w1 + w3;
+    let freed = w2 + 16.;
+    assert!((w(&s, 1) - (w1 + freed * w1 / total)).abs() <= 1.5);
+    assert!((w(&s, 3) - (w3 + freed * w3 / total)).abs() <= 1.5);
+
+    // Docking at the root edge takes an equal share proportionally from everyone.
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    let leaf = DockInsert {
+        target: DockTarget::Root,
+        side: DockSide::Left,
+    };
+    let t = tile(&s, 3);
+    s.add_tile_docked(t, leaf, true);
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[3,1,2]");
+    let ws: Vec<f64> = (1..=3).map(|id| w(&s, id)).collect();
+    assert!(ws.iter().all(|x| (x - ws[0]).abs() <= 1.), "{ws:?}");
 }

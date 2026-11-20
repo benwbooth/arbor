@@ -492,6 +492,55 @@ fn equal_rect(rect: Rect, axis: Axis, n: usize, idx: usize, gaps: f64, scale: f6
     split_rects(rect, axis, &fractions, gaps, scale)[idx]
 }
 
+/// Fractions after inserting a child at `at`, which takes half of the share of the child that is
+/// currently at `take_from` (indices before the insertion). The other children keep their share.
+fn fractions_after_insert(fractions: &[f64], at: usize, take_from: usize) -> Vec<f64> {
+    let mut rv = fractions.to_vec();
+    let half = rv[take_from] / 2.;
+    rv[take_from] = half;
+    rv.insert(at, half);
+    rv
+}
+
+/// Fractions after inserting a child at the edge (`at` is 0 or `len`) of a split, taking an equal
+/// share proportionally from all children.
+fn fractions_after_edge_insert(fractions: &[f64], at: usize) -> Vec<f64> {
+    let n = fractions.len() + 1;
+    let new = 1. / n as f64;
+    let mut rv: Vec<f64> = fractions.iter().map(|f| f * (1. - new)).collect();
+    rv.insert(at, new);
+    rv
+}
+
+/// Removes child `idx`'s fraction, giving its share to the adjacent sibling(s) proportionally to
+/// their current shares.
+fn remove_fraction(fractions: &mut Vec<f64>, idx: usize) {
+    let freed = fractions.remove(idx);
+    let n = fractions.len();
+    if n == 0 {
+        return;
+    }
+
+    let before = idx.checked_sub(1);
+    let after = (idx < n).then_some(idx);
+    match (before, after) {
+        (Some(b), Some(a)) => {
+            let sum = fractions[b] + fractions[a];
+            if sum > 0. {
+                let fb = fractions[b] / sum;
+                fractions[b] += freed * fb;
+                fractions[a] += freed * (1. - fb);
+            } else {
+                fractions[b] += freed / 2.;
+                fractions[a] += freed / 2.;
+            }
+        }
+        (Some(i), None) | (None, Some(i)) => fractions[i] += freed,
+        (None, None) => unreachable!(),
+    }
+    renormalize(fractions, n);
+}
+
 fn axis_len(size: Size<f64, Logical>, axis: Axis) -> f64 {
     match axis {
         Axis::Horizontal => size.w,
@@ -913,8 +962,7 @@ impl<W: LayoutElement> DockSpace<W> {
                     Node::Split(split) if split.axis == axis => {
                         let idx = if before { 0 } else { split.children.len() };
                         split.children.insert(idx, new);
-                        let n = split.children.len();
-                        split.fractions = vec![1. / n as f64; n];
+                        split.fractions = fractions_after_edge_insert(&split.fractions, idx);
                     }
                     _ => wrap_in_split(root, new, axis, before),
                 }
@@ -923,10 +971,10 @@ impl<W: LayoutElement> DockSpace<W> {
                 if let Some((&idx, parent_path)) = path.split_last() {
                     let parent = self.node_mut(parent_path).as_split_mut().unwrap();
                     if parent.axis == axis {
-                        let idx = if before { idx } else { idx + 1 };
-                        parent.children.insert(idx, new);
-                        let n = parent.children.len();
-                        parent.fractions = vec![1. / n as f64; n];
+                        // Split the target's share; the other siblings keep theirs.
+                        let at = if before { idx } else { idx + 1 };
+                        parent.children.insert(at, new);
+                        parent.fractions = fractions_after_insert(&parent.fractions, at, idx);
                         return;
                     }
                 }
@@ -959,7 +1007,7 @@ impl<W: LayoutElement> DockSpace<W> {
             Some((&idx, parent_path)) => {
                 let parent = self.node_mut(parent_path).as_split_mut().unwrap();
                 let node = parent.children.remove(idx);
-                parent.fractions.remove(idx);
+                remove_fraction(&mut parent.fractions, idx);
                 match node {
                     Node::Leaf(leaf) => *leaf,
                     Node::Split(_) => unreachable!("dock path must point at a leaf"),
@@ -1252,9 +1300,9 @@ impl<W: LayoutElement> DockSpace<W> {
         match dock.target {
             DockTarget::Root => match root {
                 Node::Split(split) if split.axis == axis => {
-                    let n = split.children.len() + 1;
-                    let idx = if before { 0 } else { n - 1 };
-                    equal_rect(root_rect, axis, n, idx, gaps, scale)
+                    let idx = if before { 0 } else { split.children.len() };
+                    let fractions = fractions_after_edge_insert(&split.fractions, idx);
+                    split_rects(root_rect, axis, &fractions, gaps, scale)[idx]
                 }
                 _ => equal_rect(root_rect, axis, 2, usize::from(!before), gaps, scale),
             },
@@ -1265,9 +1313,9 @@ impl<W: LayoutElement> DockSpace<W> {
                 if let Some((&idx, parent_path)) = path.split_last() {
                     let parent = self.node(parent_path).as_split().unwrap();
                     if parent.axis == axis {
-                        let n = parent.children.len() + 1;
-                        let idx = if before { idx } else { idx + 1 };
-                        return equal_rect(parent.rect, axis, n, idx, gaps, scale);
+                        let at = if before { idx } else { idx + 1 };
+                        let fractions = fractions_after_insert(&parent.fractions, at, idx);
+                        return split_rects(parent.rect, axis, &fractions, gaps, scale)[at];
                     }
                 }
                 let rect = self.leaf_at(&path).rect;
@@ -1993,7 +2041,7 @@ impl<W: LayoutElement> DockSpace<W> {
         let (&idx, stack_path) = path.split_last().unwrap();
         let stack = self.node_mut(stack_path).as_split_mut().unwrap();
         let node = stack.children.remove(idx);
-        stack.fractions.remove(idx);
+        remove_fraction(&mut stack.fractions, idx);
 
         match stack_path.split_last() {
             None => {
@@ -2005,8 +2053,7 @@ impl<W: LayoutElement> DockSpace<W> {
                 let row = self.node_mut(row_path).as_split_mut().unwrap();
                 let at = if before { stack_idx } else { stack_idx + 1 };
                 row.children.insert(at, node);
-                let n = row.children.len();
-                row.fractions = vec![1. / n as f64; n];
+                row.fractions = fractions_after_insert(&row.fractions, at, stack_idx);
             }
         }
 
