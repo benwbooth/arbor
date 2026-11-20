@@ -17,6 +17,9 @@ use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
+#[path = "workspace_arbor.rs"]
+mod arbor;
+
 use super::dock::{DockInsert, DockSpace, DockSpaceRenderElement};
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{Column, ColumnWidth, ScrollDirection};

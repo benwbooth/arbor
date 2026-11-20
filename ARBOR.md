@@ -57,6 +57,11 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
    - [x] divider drag: left-dragging the gap between two docked siblings
      (or a band around the shared edge when gaps are small) resizes exactly
      those two; col-resize / row-resize cursor on hover
+   - [x] minimize keeps the slot: `minimize-window` / `restore-window`
+     actions (IPC too), xdg_toplevel set_minimized; the leaf stays in the
+     tree with zero size, siblings take its space; focusing the window
+     (foreign-toplevel activate, `focus-window`) restores it in place.
+     IPC Window has `is_minimized`. Floating windows can't minimize yet.
    - [x] inserting splits the target's share only; removing gives the share
      back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
@@ -68,6 +73,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 
 - `src/layout/dock.rs`: DockSpace (tree, layout, render positions, hit
   testing, interactive move/resize targets).
+- `src/layout/arbor.rs`, `src/layout/workspace_arbor.rs`: arbor methods
+  on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: holds `DockSpace` where niri held
   `ScrollingSpace`.

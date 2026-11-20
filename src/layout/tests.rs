@@ -626,6 +626,14 @@ enum Op {
     FocusFloating,
     FocusTiling,
     SwitchFocusFloatingTiling,
+    MinimizeWindow {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
+    RestoreWindow {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
     MoveFloatingWindow {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
@@ -1355,6 +1363,14 @@ impl Op {
             Op::SetWindowFloating { id, floating } => {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.set_window_floating(id.as_ref(), floating);
+            }
+            Op::MinimizeWindow { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.minimize_window(id.as_ref());
+            }
+            Op::RestoreWindow { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.restore_window(id.as_ref());
             }
             Op::FocusFloating => {
                 layout.focus_floating();

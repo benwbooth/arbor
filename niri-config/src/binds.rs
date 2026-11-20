@@ -390,6 +390,12 @@ pub enum Action {
     MruSetScope(MruScope),
     #[knuffel(skip)]
     MruCycleScope,
+    MinimizeWindow,
+    #[knuffel(skip)]
+    MinimizeWindowById(u64),
+    RestoreWindow,
+    #[knuffel(skip)]
+    RestoreWindowById(u64),
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -701,6 +707,10 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
+            niri_ipc::Action::MinimizeWindow { id: None } => Self::MinimizeWindow,
+            niri_ipc::Action::MinimizeWindow { id: Some(id) } => Self::MinimizeWindowById(id),
+            niri_ipc::Action::RestoreWindow { id: None } => Self::RestoreWindow,
+            niri_ipc::Action::RestoreWindow { id: Some(id) } => Self::RestoreWindowById(id),
         }
     }
 }

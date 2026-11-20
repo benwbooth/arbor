@@ -55,6 +55,9 @@ const LEAF_EDGE_BAND: f64 = 80.;
 
 static LEAF_ID_COUNTER: IdCounter = IdCounter::new();
 
+/// Orders minimizations, so that restoring without a target restores the most recent one.
+static MINIMIZE_COUNTER: IdCounter = IdCounter::new();
+
 /// Stable identity of a leaf in the dock tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LeafId(u64);
@@ -132,6 +135,9 @@ pub struct DockLeaf<W: LayoutElement> {
     /// Compositor-side maximized state; can be true together with fullscreen, meaning that
     /// unfullscreening goes back to maximized.
     is_pending_maximized: bool,
+    /// Set while the leaf is minimized: the window is hidden and its siblings take its space,
+    /// but the leaf keeps its slot in the tree. The value orders minimizations.
+    minimized: Option<u64>,
     /// Layout rectangle from the last relayout.
     rect: Rect,
 }
@@ -229,8 +235,13 @@ impl<W: LayoutElement> DockLeaf<W> {
             tile,
             is_pending_fullscreen: mode.is_fullscreen(),
             is_pending_maximized: mode.is_maximized(),
+            minimized: None,
             rect: Rect::default(),
         }
+    }
+
+    pub fn is_minimized(&self) -> bool {
+        self.minimized.is_some()
     }
 
     pub fn contains(&self, window: &W::Id) -> bool {
@@ -380,13 +391,33 @@ impl<W: LayoutElement> Node<W> {
         }
     }
 
+    /// Whether anything in this subtree is shown (not minimized).
+    fn is_visible(&self) -> bool {
+        match self {
+            Node::Leaf(leaf) => leaf.minimized.is_none(),
+            Node::Split(split) => split.children.iter().any(Node::is_visible),
+        }
+    }
+
     fn layout(&mut self, rect: Rect, gaps: f64, scale: f64) {
         match self {
             Node::Leaf(leaf) => leaf.rect = rect,
             Node::Split(split) => {
                 split.rect = rect;
-                let rects = split_rects(rect, split.axis, &split.fractions, gaps, scale);
-                for (child, rect) in zip(&mut split.children, rects) {
+
+                // Hidden (minimized) children take no space; the visible ones share it.
+                let visible: Vec<bool> = split.children.iter().map(Node::is_visible).collect();
+                let fractions: Vec<f64> = zip(&split.fractions, &visible)
+                    .filter(|(_, v)| **v)
+                    .map(|(f, _)| *f)
+                    .collect();
+                let mut rects = split_rects(rect, split.axis, &fractions, gaps, scale).into_iter();
+                for (child, visible) in zip(&mut split.children, visible) {
+                    let rect = if visible {
+                        rects.next().unwrap()
+                    } else {
+                        Rect::new(rect.loc, Size::default())
+                    };
                     child.layout(rect, gaps, scale);
                 }
             }
@@ -461,10 +492,12 @@ fn split_rects(rect: Rect, axis: Axis, fractions: &[f64], gaps: f64, scale: f64)
         Axis::Vertical => (rect.loc.y, rect.size.h),
     };
     let avail = f64::max(0., len - gaps * n.saturating_sub(1) as f64);
+    let sum: f64 = fractions.iter().sum();
+    let norm = if sum > 0. { sum } else { 1. };
 
     let mut rv = Vec::with_capacity(n);
     let mut cum = 0.;
-    for (i, frac) in fractions.iter().enumerate() {
+    for (i, frac) in fractions.iter().map(|f| f / norm).enumerate() {
         let i_gaps = gaps * i as f64;
         let start = round_phys(origin + cum * avail + i_gaps, scale);
         cum += frac;
@@ -551,12 +584,22 @@ fn axis_len(size: Size<f64, Logical>, axis: Axis) -> f64 {
     }
 }
 
-fn split_avail(split: &Split<impl LayoutElement>, gaps: f64) -> f64 {
-    let n = split.children.len();
-    f64::max(
+/// Length available to the visible children of a split (excluding gaps), the number of visible
+/// children, and the sum of their fractions.
+fn split_avail(split: &Split<impl LayoutElement>, gaps: f64) -> (f64, usize, f64) {
+    let mut n: usize = 0;
+    let mut sum = 0.;
+    for (child, frac) in zip(&split.children, &split.fractions) {
+        if child.is_visible() {
+            n += 1;
+            sum += frac;
+        }
+    }
+    let avail = f64::max(
         0.,
         axis_len(split.rect.size, split.axis) - gaps * n.saturating_sub(1) as f64,
-    )
+    );
+    (avail, n, sum)
 }
 
 fn min_frac(avail: f64, n: usize) -> f64 {
@@ -848,13 +891,40 @@ impl<W: LayoutElement> DockSpace<W> {
             .find(|leaf| leaf.contains(window))
     }
 
+    /// The active leaf, unless it is minimized (which happens only when every leaf is).
     fn active_leaf(&self) -> Option<&DockLeaf<W>> {
         self.leaf_by_id(self.active?)
+            .filter(|leaf| leaf.minimized.is_none())
     }
 
     fn active_leaf_mut(&mut self) -> Option<&mut DockLeaf<W>> {
         let active = self.active?;
-        self.leaves_mut().into_iter().find(|leaf| leaf.id == active)
+        self.leaves_mut()
+            .into_iter()
+            .find(|leaf| leaf.id == active)
+            .filter(|leaf| leaf.minimized.is_none())
+    }
+
+    fn visible_leaves(&self) -> Vec<&DockLeaf<W>> {
+        let mut leaves = self.leaves();
+        leaves.retain(|leaf| leaf.minimized.is_none());
+        leaves
+    }
+
+    /// Picks the visible leaf nearest to `rect` as the active leaf, e.g. after the active leaf
+    /// went away. Falls back to any leaf so that `active` stays set for a non-empty tree.
+    fn activate_nearest(&mut self, rect: Rect) {
+        let center = rect_center(rect);
+        let nearest = self
+            .visible_leaves()
+            .into_iter()
+            .min_by(|a, b| {
+                let da = rect_center(a.rect) - center;
+                let db = rect_center(b.rect) - center;
+                f64::total_cmp(&da.x.hypot(da.y), &db.x.hypot(db.y))
+            })
+            .map(|leaf| leaf.id);
+        self.active = nearest.or_else(|| self.leaves().first().map(|leaf| leaf.id));
     }
 
     /// Path to the target window's leaf, or the active leaf if `window` is `None`.
@@ -900,6 +970,11 @@ impl<W: LayoutElement> DockSpace<W> {
         }
 
         for leaf in self.leaves_mut() {
+            // Minimized windows keep their size for when they come back.
+            if leaf.minimized.is_some() {
+                continue;
+            }
+
             leaf.request_size(parent_area, animate_resize, transaction.clone());
 
             if animate_moves {
@@ -1023,16 +1098,7 @@ impl<W: LayoutElement> DockSpace<W> {
         if self.active == Some(leaf.id) {
             // Activate the remaining leaf nearest to the removed one; usually the one that takes
             // over its space.
-            let center = rect_center(leaf.rect);
-            self.active = self
-                .leaves()
-                .into_iter()
-                .min_by(|a, b| {
-                    let da = rect_center(a.rect) - center;
-                    let db = rect_center(b.rect) - center;
-                    f64::total_cmp(&da.x.hypot(da.y), &db.x.hypot(db.y))
-                })
-                .map(|leaf| leaf.id);
+            self.activate_nearest(leaf.rect);
         }
 
         leaf
@@ -1061,7 +1127,7 @@ impl<W: LayoutElement> DockSpace<W> {
     fn neighbor_in_direction(&self, from: LeafId, dir: DockSide) -> Option<LeafId> {
         let from_rect = self.leaf_by_id(from)?.rect;
         let slack = self.options.layout.gaps + 1.;
-        self.leaves()
+        self.visible_leaves()
             .into_iter()
             .filter(|leaf| leaf.id != from)
             .filter_map(|leaf| {
@@ -1134,19 +1200,35 @@ impl<W: LayoutElement> DockSpace<W> {
 
         let gaps = self.options.layout.gaps;
         let split = self.node(&path[..k]).as_split().unwrap();
-        let avail = split_avail(split, gaps);
-        if avail <= 0. {
+        let (avail, n_visible, vis_sum) = split_avail(split, gaps);
+        if avail <= 0. || vis_sum <= 0. {
             return;
         }
-        let current = split.fractions[idx] * avail;
+        let current = split.fractions[idx] / vis_sum * avail;
         let tile = &self.leaf_at(path).tile;
         let Some(target) = target_len(current, avail, tile) else {
             return;
         };
 
+        // Work on the visible children only, so that minimized slots keep their share.
         let split = self.node_mut(&path[..k]).as_split_mut().unwrap();
-        let min = min_frac(avail, split.children.len());
-        set_fraction(&mut split.fractions, idx, target / avail, min);
+        let visible: Vec<usize> = (0..split.children.len())
+            .filter(|&i| split.children[i].is_visible())
+            .collect();
+        let Some(vis_idx) = visible.iter().position(|&i| i == idx) else {
+            return;
+        };
+        let mut fracs: Vec<f64> = visible
+            .iter()
+            .map(|&i| split.fractions[i] / vis_sum)
+            .collect();
+        let min = min_frac(avail, n_visible);
+        set_fraction(&mut fracs, vis_idx, target / avail, min);
+        for (&i, f) in zip(&visible, fracs) {
+            split.fractions[i] = f * vis_sum;
+        }
+        let n = split.children.len();
+        renormalize(&mut split.fractions, n);
 
         self.relayout(animate, animate, None);
     }
@@ -1234,9 +1316,9 @@ impl<W: LayoutElement> DockSpace<W> {
             }
             let idx = path[k];
             let neighbor = if before {
-                idx.checked_sub(1)?
+                (0..idx).rev().find(|&i| split.children[i].is_visible())?
             } else {
-                (idx + 1 < split.children.len()).then_some(idx + 1)?
+                (idx + 1..split.children.len()).find(|&i| split.children[i].is_visible())?
             };
             Some(DividerDrag {
                 split_path: path[..k].to_vec(),
@@ -1272,18 +1354,18 @@ impl<W: LayoutElement> DockSpace<W> {
             return;
         }
 
-        let avail = split_avail(split, gaps);
-        if avail <= 0. {
+        let (avail, n_visible, vis_sum) = split_avail(split, gaps);
+        if avail <= 0. || vis_sum <= 0. {
             return;
         }
 
         let total = drag.orig_frac + drag.orig_neighbor_frac;
-        let min = min_frac(avail, n);
+        let min = min_frac(avail, n_visible) * vis_sum;
         if total < min * 2. {
             return;
         }
 
-        let frac = (drag.orig_frac + delta / avail).clamp(min, total - min);
+        let frac = (drag.orig_frac + delta / avail * vis_sum).clamp(min, total - min);
         split.fractions[drag.idx] = frac;
         split.fractions[drag.neighbor] = total - frac;
         renormalize(&mut split.fractions, n);
@@ -1337,7 +1419,7 @@ impl<W: LayoutElement> DockSpace<W> {
 
     fn leaves_in_render_order(&self) -> Vec<&DockLeaf<W>> {
         let active = self.active;
-        let mut leaves = self.leaves();
+        let mut leaves = self.visible_leaves();
         leaves.sort_by_key(|leaf| render_rank(leaf, active));
         leaves
     }
@@ -1358,8 +1440,9 @@ impl<W: LayoutElement> DockSpace<W> {
         self.leaves().into_iter()
     }
 
+    /// Whether no docked window is shown. Minimized windows can still be in the tree.
     pub fn is_empty(&self) -> bool {
-        self.root.is_none()
+        !self.root.as_ref().is_some_and(Node::is_visible)
     }
 
     pub fn active_window(&self) -> Option<&W> {
@@ -1407,12 +1490,12 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub(super) fn insert_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
-        let Some(_) = &self.root else {
+        if self.is_empty() {
             return InsertPosition::Dock(DockInsert {
                 target: DockTarget::Root,
                 side: DockSide::Right,
             });
-        };
+        }
 
         // Near the working area edge: dock beside everything.
         let wa = self.working_area;
@@ -1437,7 +1520,7 @@ impl<W: LayoutElement> DockSpace<W> {
         //
         // FIXME: the center of a leaf will become a tab group target.
         let leaf = self
-            .leaves()
+            .visible_leaves()
             .into_iter()
             .min_by(|a, b| {
                 f64::total_cmp(
@@ -1498,7 +1581,7 @@ impl<W: LayoutElement> DockSpace<W> {
         }
 
         // Over the edge band of a docked window: dock beside it.
-        for leaf in self.leaves() {
+        for leaf in self.visible_leaves() {
             let rect = leaf.rect;
             if !rect.contains(pos) {
                 continue;
@@ -1544,12 +1627,16 @@ impl<W: LayoutElement> DockSpace<W> {
     ) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>, bool)> {
         let scale = self.scale;
         let parent_area = self.parent_area;
-        self.leaves_in_render_order().into_iter().map(move |leaf| {
-            let pos = leaf.origin(parent_area) + leaf.tile.render_offset();
-            // Round to physical pixels.
-            let pos = pos.to_physical_precise_round(scale).to_logical(scale);
-            (&leaf.tile, pos, true)
-        })
+        let minimized = self.leaves().into_iter().filter(|leaf| leaf.is_minimized());
+        self.leaves_in_render_order()
+            .into_iter()
+            .chain(minimized)
+            .map(move |leaf| {
+                let pos = leaf.origin(parent_area) + leaf.tile.render_offset();
+                // Round to physical pixels.
+                let pos = pos.to_physical_precise_round(scale).to_logical(scale);
+                (&leaf.tile, pos, !leaf.is_minimized())
+            })
     }
 
     pub fn tiles_with_render_positions_mut(
@@ -1608,6 +1695,7 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
         // This matches self.tiles_with_render_positions().
         self.tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
             .find_map(|(tile, tile_pos, _)| HitType::hit_tile(tile, tile_pos, pos))
     }
 
@@ -1750,8 +1838,12 @@ impl<W: LayoutElement> DockSpace<W> {
         let path = self
             .path_of_window(window)
             .expect("window must be in the dock tree");
-        let leaf = self.take_leaf(&path);
+        let mut leaf = self.take_leaf(&path);
         self.relayout(true, true, Some(transaction));
+
+        if leaf.minimized.is_some() {
+            leaf.tile.window_mut().set_minimized(false);
+        }
 
         RemovedTile {
             tile: leaf.tile,
@@ -1801,12 +1893,79 @@ impl<W: LayoutElement> DockSpace<W> {
         }
     }
 
+    /// Activates the window, restoring it first if it is minimized.
     pub fn activate_window(&mut self, window: &W::Id) -> bool {
         let Some(id) = self.leaf_by_window(window).map(|leaf| leaf.id) else {
             return false;
         };
+        self.restore_window(window);
         self.activate_leaf(id);
         true
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Minimize.
+
+    pub fn is_minimized(&self, window: &W::Id) -> bool {
+        self.leaf_by_window(window)
+            .is_some_and(|leaf| leaf.is_minimized())
+    }
+
+    /// Hides the window; its siblings take its space, and its slot stays in the tree.
+    pub fn minimize_window(&mut self, window: &W::Id) -> bool {
+        let Some(leaf) = self.leaf_by_window(window) else {
+            return false;
+        };
+        if leaf.is_minimized() {
+            return false;
+        }
+        let (id, rect) = (leaf.id, leaf.rect);
+
+        if self
+            .interactive_resize
+            .as_ref()
+            .is_some_and(|resize| &resize.window == window)
+        {
+            self.cancel_interactive_resize();
+        }
+
+        let leaf = self.leaf_by_window_mut(window).unwrap();
+        leaf.minimized = Some(MINIMIZE_COUNTER.next());
+
+        if self.active == Some(id) {
+            self.activate_nearest(rect);
+        }
+
+        self.relayout(true, true, None);
+        true
+    }
+
+    /// Puts a minimized window back into its slot. Does not activate it.
+    pub fn restore_window(&mut self, window: &W::Id) -> bool {
+        let Some(leaf) = self.leaf_by_window_mut(window) else {
+            return false;
+        };
+        if leaf.minimized.take().is_none() {
+            return false;
+        }
+        let id = leaf.id;
+
+        // With every other leaf minimized, the active leaf was a minimized one; take over.
+        if self.active_leaf().is_none() {
+            self.active = Some(id);
+        }
+
+        self.relayout(true, true, None);
+        true
+    }
+
+    /// The most recently minimized window.
+    pub fn last_minimized_window(&self) -> Option<&W::Id> {
+        self.leaves()
+            .into_iter()
+            .filter_map(|leaf| leaf.minimized.map(|seq| (seq, leaf)))
+            .max_by_key(|(seq, _)| *seq)
+            .map(|(_, leaf)| leaf.tile.window().id())
     }
 
     pub fn start_close_animation_for_window(
@@ -1892,20 +2051,20 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn focus_column_first(&mut self) {
-        if let Some(id) = self.leaves().first().map(|leaf| leaf.id) {
+        if let Some(id) = self.visible_leaves().first().map(|leaf| leaf.id) {
             self.activate_leaf(id);
         }
     }
 
     pub fn focus_column_last(&mut self) {
-        if let Some(id) = self.leaves().last().map(|leaf| leaf.id) {
+        if let Some(id) = self.visible_leaves().last().map(|leaf| leaf.id) {
             self.activate_leaf(id);
         }
     }
 
     /// Focuses the leaf with this 1-based index in tree order.
     pub fn focus_column(&mut self, index: usize) {
-        let leaves = self.leaves();
+        let leaves = self.visible_leaves();
         if leaves.is_empty() {
             return;
         }
@@ -2241,7 +2400,8 @@ impl<W: LayoutElement> DockSpace<W> {
         let Some(path) = self.path_of_window(&window) else {
             return false;
         };
-        if !self.leaf_at(&path).pending_sizing_mode().is_normal() {
+        let leaf = self.leaf_at(&path);
+        if !leaf.pending_sizing_mode().is_normal() || leaf.is_minimized() {
             return false;
         }
 
@@ -2326,16 +2486,18 @@ impl<W: LayoutElement> DockSpace<W> {
 
         for leaf in self.leaves_mut() {
             let leaf_id = leaf.id;
+            let is_minimized = leaf.minimized.is_some();
             let win = leaf.tile.window_mut();
 
             win.set_active_in_column(true);
             win.set_floating(false);
 
-            let mut is_active = is_active && Some(leaf_id) == active;
+            let mut is_active = is_active && Some(leaf_id) == active && !is_minimized;
             if options.deactivate_unfocused_windows {
                 is_active &= is_focused;
             }
             win.set_activated(is_active);
+            win.set_minimized(is_minimized);
 
             let resize_data = resize
                 .as_ref()
@@ -2471,10 +2633,14 @@ impl<W: LayoutElement> DockSpace<W> {
             "active leaf must be set if and only if the tree is non-empty"
         );
         if let Some(active) = self.active {
-            assert!(
-                self.leaf_by_id(active).is_some(),
-                "active leaf must be in the tree"
-            );
+            let leaf = self.leaf_by_id(active);
+            assert!(leaf.is_some(), "active leaf must be in the tree");
+            if leaf.unwrap().is_minimized() {
+                assert!(
+                    self.visible_leaves().is_empty(),
+                    "active leaf can be minimized only if every leaf is"
+                );
+            }
         }
 
         if let Some(root) = &self.root {
@@ -2531,6 +2697,7 @@ fn node_rect<W: LayoutElement>(node: &Node<W>) -> Rect {
 fn far_edge_leaf<W: LayoutElement>(node: &Node<W>, axis: Axis) -> &DockLeaf<W> {
     let mut leaves = Vec::new();
     node.leaves(&mut leaves);
+    leaves.retain(|leaf| leaf.minimized.is_none());
     let far = |leaf: &&DockLeaf<W>| match axis {
         Axis::Horizontal => leaf.rect.loc.x + leaf.rect.size.w,
         Axis::Vertical => leaf.rect.loc.y + leaf.rect.size.h,
@@ -2557,7 +2724,9 @@ fn divider_under<W: LayoutElement>(
     };
 
     if perp_lo <= perp && perp < perp_hi {
-        for (a, b) in zip(&split.children, &split.children[1..]) {
+        let visible: Vec<&Node<W>> = split.children.iter().filter(|c| c.is_visible()).collect();
+        for pair in visible.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
             let (ra, rb) = (node_rect(a), node_rect(b));
             let (end, start) = match split.axis {
                 Axis::Horizontal => (ra.loc.x + ra.size.w, rb.loc.x),

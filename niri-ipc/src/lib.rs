@@ -943,6 +943,24 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
+    /// Minimize a docked window (arbor): hide it, letting its siblings take its space.
+    ///
+    /// The window keeps its slot; restoring or focusing it puts it back there.
+    MinimizeWindow {
+        /// Id of the window to minimize.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Restore a minimized window into its slot and focus it (arbor).
+    RestoreWindow {
+        /// Id of the window to restore.
+        ///
+        /// If `None`, restores the most recently minimized window on the focused workspace.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
 }
 
 /// Change in window or column size.
@@ -1322,6 +1340,9 @@ pub struct Window {
     ///
     /// If the window isn't floating then it is in the tiling layout.
     pub is_floating: bool,
+    /// Whether this window is minimized (arbor): hidden, keeping its slot in the dock tree.
+    #[serde(default)]
+    pub is_minimized: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
     /// Position- and size-related properties of the window.

@@ -2299,6 +2299,32 @@ impl State {
                     watcher.load_config(path);
                 }
             }
+            Action::MinimizeWindow => {
+                self.niri.layout.minimize_window(None);
+                self.niri.queue_redraw_all();
+            }
+            Action::MinimizeWindowById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.niri.layout.minimize_window(Some(&window));
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::RestoreWindow => {
+                self.niri.layout.restore_window(None);
+                self.maybe_warp_cursor_to_focus();
+                self.niri.queue_redraw_all();
+            }
+            Action::RestoreWindowById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.niri.layout.restore_window(Some(&window));
+                    self.maybe_warp_cursor_to_focus();
+                    self.niri.queue_redraw_all();
+                }
+            }
             Action::MruConfirm => {
                 self.confirm_mru();
             }

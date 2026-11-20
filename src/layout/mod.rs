@@ -75,6 +75,7 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
+mod arbor;
 pub mod closing_window;
 pub mod dock;
 pub mod floating;
@@ -242,6 +243,8 @@ pub trait LayoutElement {
     fn set_activated(&mut self, active: bool);
     fn set_active_in_column(&mut self, active: bool);
     fn set_floating(&mut self, floating: bool);
+    /// arbor: whether the window is minimized (hidden, keeping its dock slot).
+    fn set_minimized(&mut self, _minimized: bool) {}
     fn set_bounds(&self, bounds: Size<i32, Logical>);
     fn is_ignoring_opacity_window_rule(&self) -> bool;
 

@@ -488,6 +488,19 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn minimize_request(&mut self, toplevel: ToplevelSurface) {
+        // arbor: docked windows minimize into a placeholder slot.
+        if let Some((mapped, _)) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        {
+            let window = mapped.window.clone();
+            self.niri.layout.minimize_window(Some(&window));
+            self.niri.queue_redraw_all();
+        }
+    }
+
     fn unmaximize_request(&mut self, toplevel: ToplevelSurface) {
         if let Some((mapped, _)) = self
             .niri

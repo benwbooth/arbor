@@ -755,3 +755,107 @@ fn divider_band_with_zero_gaps() {
     );
     assert_eq!(s.divider_under(Point::from((630., 300.))), None);
 }
+
+#[test]
+fn minimize_keeps_slot() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    s.set_window_width(Some(&1), SizeChange::AdjustFixed(100));
+    let rects: Vec<_> = (1..=3).map(|id| s.window_rect(&id).unwrap()).collect();
+    s.activate_window(&2);
+
+    assert!(s.minimize_window(&2));
+    s.verify_invariants();
+    assert!(s.is_minimized(&2));
+    assert_eq!(s.tree_string(), "H[1,2,3]");
+    // The active window moved to a visible neighbor.
+    assert!(matches!(active(&s), 1 | 3));
+    // Siblings take the space: 1 and 3 now fill the whole width.
+    let r1 = s.window_rect(&1).unwrap();
+    let r3 = s.window_rect(&3).unwrap();
+    assert_eq!(r1.loc.x, 16.);
+    assert_eq!(r3.loc.x + r3.size.w, 1264.);
+    assert_eq!(r3.loc.x, r1.loc.x + r1.size.w + 16.);
+    // The minimized window is hidden.
+    assert!(s
+        .tiles_with_render_positions()
+        .any(|(tile, _, visible)| *tile.window().id() == 2 && !visible));
+    for x in (20..1260).step_by(40) {
+        if let Some((win, _)) = s.window_under(Point::from((f64::from(x), 360.))) {
+            assert_ne!(*win.id(), 2);
+        }
+    }
+
+    // Docking next to 1 while 2 is minimized works and keeps 2's slot.
+    dock(&mut s, 4, 1, DockSide::Bottom);
+    assert_eq!(s.tree_string(), "H[V[1,4],2,3]");
+    remove(&mut s, 4);
+
+    // Activating restores it into the same slot, same size.
+    assert!(s.activate_window(&2));
+    s.verify_invariants();
+    assert!(!s.is_minimized(&2));
+    assert_eq!(active(&s), 2);
+    for (id, rect) in (1..=3).zip(&rects) {
+        assert_eq!(s.window_rect(&id).unwrap(), *rect, "window {id}");
+    }
+}
+
+#[test]
+fn minimize_everything() {
+    let mut s = space();
+    add(&mut s, 1);
+    dock(&mut s, 2, 1, DockSide::Bottom);
+    assert!(s.minimize_window(&1));
+    assert!(s.minimize_window(&2));
+    s.verify_invariants();
+    assert!(s.is_empty());
+    assert!(s.active_window().is_none());
+    assert_eq!(s.last_minimized_window(), Some(&2));
+
+    // A new window docks with the minimized ones still in the tree.
+    add(&mut s, 3);
+    assert_eq!(active(&s), 3);
+    assert!(!s.is_empty());
+
+    assert!(s.restore_window(&2));
+    s.verify_invariants();
+    assert_eq!(s.last_minimized_window(), Some(&1));
+}
+
+#[test]
+fn minimize_and_restore_through_layout() {
+    let mut floating = TestWindowParams::new(3);
+    floating.is_floating = true;
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow { params: floating },
+        Op::FocusWindow(1),
+        Op::MinimizeWindow { id: None },
+    ]);
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.is_minimized(&1));
+    // Nothing docked is shown: the Desktop gets focus.
+    assert_eq!(ws.active_window().map(|w| *w.id()), Some(3));
+
+    // Floating windows can't be minimized yet.
+    check_ops_on_layout(&mut layout, [Op::MinimizeWindow { id: Some(3) }]);
+    assert!(!layout.is_minimized(&3));
+
+    check_ops_on_layout(&mut layout, [Op::RestoreWindow { id: None }]);
+    let ws = layout.active_workspace().unwrap();
+    assert!(!ws.is_minimized(&1));
+    assert_eq!(ws.active_window().map(|w| *w.id()), Some(1));
+
+    // Focusing a minimized window restores it.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MinimizeWindow { id: Some(1) }, Op::FocusWindow(1)],
+    );
+    assert!(!layout.is_minimized(&1));
+}
