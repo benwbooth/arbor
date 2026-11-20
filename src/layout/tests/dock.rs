@@ -655,3 +655,103 @@ fn insert_and_remove_preserve_fractions() {
     let ws: Vec<f64> = (1..=3).map(|id| w(&s, id)).collect();
     assert!(ws.iter().all(|x| (x - ws[0]).abs() <= 1.), "{ws:?}");
 }
+
+#[test]
+fn divider_under_and_drag() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    dock(&mut s, 3, 2, DockSide::Bottom);
+    assert_eq!(s.tree_string(), "H[1,V[2,3]]");
+
+    // Inside windows: no divider.
+    assert_eq!(s.divider_under(Point::from((300., 300.))), None);
+
+    // The vertical gap between 1 and the stack.
+    let r1 = s.window_rect(&1).unwrap();
+    let gap_x = r1.loc.x + r1.size.w + 8.;
+    assert_eq!(
+        s.divider_under(Point::from((gap_x, 300.))),
+        Some((1, ResizeEdge::RIGHT))
+    );
+
+    // The horizontal gap between 2 and 3.
+    let r2 = s.window_rect(&2).unwrap();
+    let gap_y = r2.loc.y + r2.size.h + 8.;
+    assert_eq!(
+        s.divider_under(Point::from((r2.loc.x + 10., gap_y))),
+        Some((2, ResizeEdge::BOTTOM))
+    );
+    // The same y left of the stack is inside window 1.
+    assert_eq!(s.divider_under(Point::from((300., gap_y))), None);
+
+    // Dragging the vertical divider resizes 1 and the stack only.
+    let (win, edge) = s.divider_under(Point::from((gap_x, 300.))).unwrap();
+    let w1 = r1.size.w;
+    let w2 = r2.size.w;
+    assert!(s.interactive_resize_begin(win, edge));
+    assert!(s.interactive_resize_update(&1, Point::from((-100., 0.))));
+    s.interactive_resize_end(None);
+    s.verify_invariants();
+    assert_eq!(s.window_rect(&1).unwrap().size.w, w1 - 100.);
+    assert_eq!(s.window_rect(&2).unwrap().size.w, w2 + 100.);
+    assert_eq!(s.window_rect(&3).unwrap().size.w, w2 + 100.);
+    // Heights in the stack are unchanged.
+    assert_eq!(s.window_rect(&2).unwrap().size.h, r2.size.h);
+}
+
+#[test]
+fn divider_of_nested_branch_resizes_that_branch() {
+    let mut s = space();
+    add(&mut s, 1);
+    dock(&mut s, 2, 1, DockSide::Left);
+    dock(&mut s, 3, 2, DockSide::Bottom);
+    dock(&mut s, 4, 2, DockSide::Right);
+    assert_eq!(s.tree_string(), "H[V[H[2,4],3],1]");
+
+    let r1 = s.window_rect(&1).unwrap();
+    let r2 = s.window_rect(&2).unwrap();
+    let r4 = s.window_rect(&4).unwrap();
+    let r3 = s.window_rect(&3).unwrap();
+    let pos = Point::from((r1.loc.x - 8., r1.loc.y + 10.));
+    let (win, edge) = s.divider_under(pos).unwrap();
+    assert_eq!(edge, ResizeEdge::RIGHT);
+    assert!(win == 3 || win == 4, "{win}");
+
+    assert!(s.interactive_resize_begin(win, edge));
+    assert!(s.interactive_resize_update(&win, Point::from((50., 0.))));
+    s.interactive_resize_end(None);
+    s.verify_invariants();
+    assert_eq!(s.window_rect(&1).unwrap().size.w, r1.size.w - 50.);
+    // The whole left branch grows.
+    assert_eq!(s.window_rect(&3).unwrap().size.w, r3.size.w + 50.);
+    let w24 = s.window_rect(&2).unwrap().size.w + s.window_rect(&4).unwrap().size.w;
+    assert!((w24 - (r2.size.w + r4.size.w + 50.)).abs() <= 1.);
+}
+
+#[test]
+fn divider_band_with_zero_gaps() {
+    let view_size = Size::from((1280., 720.));
+    let mut options = Options::default();
+    options.layout.gaps = 0.;
+    let mut s = DockSpace::new(
+        view_size,
+        Rectangle::from_size(view_size),
+        1.,
+        Clock::with_time(Duration::ZERO),
+        Rc::new(options),
+    );
+    add(&mut s, 1);
+    add(&mut s, 2);
+    assert_eq!(s.window_rect(&1).unwrap().size.w, 640.);
+
+    assert_eq!(
+        s.divider_under(Point::from((638., 300.))),
+        Some((1, ResizeEdge::RIGHT))
+    );
+    assert_eq!(
+        s.divider_under(Point::from((642., 300.))),
+        Some((1, ResizeEdge::RIGHT))
+    );
+    assert_eq!(s.divider_under(Point::from((630., 300.))), None);
+}

@@ -1618,6 +1618,19 @@ impl<W: LayoutElement> Monitor<W> {
         ws.resize_edges_under(pos_within_output - geo.loc)
     }
 
+    /// arbor: the dock divider under the pointer, see [`Workspace::dock_divider_under`].
+    pub fn dock_divider_under(
+        &self,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<(W::Id, ResizeEdge)> {
+        if self.overview_progress.is_some() {
+            return None;
+        }
+
+        let (ws, geo) = self.workspace_under(pos_within_output)?;
+        ws.dock_divider_under(pos_within_output - geo.loc)
+    }
+
     pub(super) fn insert_position(
         &self,
         pos_within_output: Point<f64, Logical>,

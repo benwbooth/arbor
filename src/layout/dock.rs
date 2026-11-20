@@ -46,6 +46,9 @@ const MIN_CHILD_LEN: f64 = 50.;
 /// Distance from the working area edge within which a drag docks beside everything.
 const ROOT_EDGE_BAND: f64 = 40.;
 
+/// Smallest thickness of the band around a divider that grabs it (matters when gaps are small).
+const DIVIDER_HIT: f64 = 8.;
+
 /// Largest depth of the edge band of a docked window where a window dragged from the Desktop
 /// docks beside it.
 const LEAF_EDGE_BAND: f64 = 80.;
@@ -1450,6 +1453,26 @@ impl<W: LayoutElement> DockSpace<W> {
         })
     }
 
+    /// Finds the divider between two docked siblings under `pos`.
+    ///
+    /// Returns a window adjacent to the divider and the edge of that window to resize, such that
+    /// `interactive_resize_begin(window, edges)` drags exactly that divider.
+    pub fn divider_under(&self, pos: Point<f64, Logical>) -> Option<(W::Id, ResizeEdge)> {
+        let root = self.root.as_ref()?;
+        // Fullscreen and maximized windows cover the dividers.
+        if self
+            .leaves()
+            .iter()
+            .any(|leaf| !leaf.pending_sizing_mode().is_normal())
+        {
+            return None;
+        }
+
+        let gaps = self.options.layout.gaps;
+        let pad = f64::max(0., (DIVIDER_HIT - gaps) / 2.);
+        divider_under(root, pos, pad).map(|(leaf, edge)| (leaf.tile.window().id().clone(), edge))
+    }
+
     /// Where a window dragged from the floating Desktop lands: docked if the pointer is over the
     /// working area edge band or the edge band of a docked window, otherwise back on the Desktop.
     pub(super) fn floating_drop_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
@@ -2495,6 +2518,65 @@ fn render_rank<W: LayoutElement>(leaf: &DockLeaf<W>, active: Option<LeafId>) -> 
     } else {
         2
     }
+}
+
+fn node_rect<W: LayoutElement>(node: &Node<W>) -> Rect {
+    match node {
+        Node::Leaf(leaf) => leaf.rect,
+        Node::Split(split) => split.rect,
+    }
+}
+
+/// Leaf of `node` whose far edge (right or bottom along `axis`) is furthest along `axis`.
+fn far_edge_leaf<W: LayoutElement>(node: &Node<W>, axis: Axis) -> &DockLeaf<W> {
+    let mut leaves = Vec::new();
+    node.leaves(&mut leaves);
+    let far = |leaf: &&DockLeaf<W>| match axis {
+        Axis::Horizontal => leaf.rect.loc.x + leaf.rect.size.w,
+        Axis::Vertical => leaf.rect.loc.y + leaf.rect.size.h,
+    };
+    leaves
+        .into_iter()
+        .max_by(|a, b| f64::total_cmp(&far(a), &far(b)))
+        .unwrap()
+}
+
+fn divider_under<W: LayoutElement>(
+    node: &Node<W>,
+    pos: Point<f64, Logical>,
+    pad: f64,
+) -> Option<(&DockLeaf<W>, ResizeEdge)> {
+    let Node::Split(split) = node else {
+        return None;
+    };
+
+    let rect = split.rect;
+    let (p, perp, perp_lo, perp_hi) = match split.axis {
+        Axis::Horizontal => (pos.x, pos.y, rect.loc.y, rect.loc.y + rect.size.h),
+        Axis::Vertical => (pos.y, pos.x, rect.loc.x, rect.loc.x + rect.size.w),
+    };
+
+    if perp_lo <= perp && perp < perp_hi {
+        for (a, b) in zip(&split.children, &split.children[1..]) {
+            let (ra, rb) = (node_rect(a), node_rect(b));
+            let (end, start) = match split.axis {
+                Axis::Horizontal => (ra.loc.x + ra.size.w, rb.loc.x),
+                Axis::Vertical => (ra.loc.y + ra.size.h, rb.loc.y),
+            };
+            if end - pad <= p && p < start + pad {
+                let edge = match split.axis {
+                    Axis::Horizontal => ResizeEdge::RIGHT,
+                    Axis::Vertical => ResizeEdge::BOTTOM,
+                };
+                return Some((far_edge_leaf(a, split.axis), edge));
+            }
+        }
+    }
+
+    split
+        .children
+        .iter()
+        .find_map(|child| divider_under(child, pos, pad))
 }
 
 /// Replaces `node` with a split of `axis` containing the old node and `new`.

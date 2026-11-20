@@ -1870,6 +1870,20 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_position(pos)
     }
 
+    /// arbor: the dock divider under `pos`, as a window and the edge to resize to drag it.
+    pub fn dock_divider_under(&self, pos: Point<f64, Logical>) -> Option<(W::Id, ResizeEdge)> {
+        // Floating windows are above the dividers.
+        if self.is_floating_visible()
+            && self
+                .floating
+                .tiles_with_render_positions()
+                .any(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos).is_some())
+        {
+            return None;
+        }
+        self.scrolling.divider_under(pos)
+    }
+
     /// arbor: where an interactively moved window lands. Floating windows dock only when dropped
     /// on a dock zone, and stay on the Desktop otherwise.
     pub(super) fn drop_position(

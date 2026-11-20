@@ -56,6 +56,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
+mod dock_divider;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -2619,6 +2620,8 @@ impl State {
         // Activate a new confinement if necessary.
         self.niri.maybe_activate_pointer_constraint();
 
+        self.update_dock_divider_cursor();
+
         // Inform the layout of an ongoing DnD operation.
         let is_dnd_grab = pointer
             .with_grab(|_, grab| Self::is_dnd_grab(grab.as_any()))
@@ -2710,6 +2713,8 @@ impl State {
         }
 
         self.niri.maybe_activate_pointer_constraint();
+
+        self.update_dock_divider_cursor();
 
         // We moved the pointer, show it.
         self.niri.pointer_visibility = PointerVisibility::Visible;
@@ -2873,7 +2878,10 @@ impl State {
                 }
             }
 
-            if let Some(mapped) = self.niri.window_under_cursor() {
+            if self.try_start_dock_divider_resize(button, button_code, serial) {
+                // arbor: dragging a dock divider.
+                self.niri.queue_redraw_all();
+            } else if let Some(mapped) = self.niri.window_under_cursor() {
                 let window = mapped.window.clone();
 
                 // Check if we need to start an interactive move.

@@ -54,6 +54,9 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
      `toggle-window-floating` / `move-window-to-tiling` dock right of the
      last focused docked window; dragging a floating window onto a dock
      zone (screen edge band, edge band of a docked window) docks it
+   - [x] divider drag: left-dragging the gap between two docked siblings
+     (or a band around the shared edge when gaps are small) resizes exactly
+     those two; col-resize / row-resize cursor on hover
    - [x] inserting splits the target's share only; removing gives the share
      back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
@@ -65,5 +68,6 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
 
 - `src/layout/dock.rs`: DockSpace (tree, layout, render positions, hit
   testing, interactive move/resize targets).
+- `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: holds `DockSpace` where niri held
   `ScrollingSpace`.

@@ -2342,6 +2342,19 @@ impl<W: LayoutElement> Layout<W> {
         mon.resize_edges_under(pos_within_output)
     }
 
+    /// arbor: the dock divider under the pointer, as a window and the edge to resize to drag it.
+    pub fn dock_divider_under(
+        &self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<(W::Id, ResizeEdge)> {
+        if self.interactive_move.is_some() {
+            return None;
+        }
+        let mon = self.monitor_for_output(output)?;
+        mon.dock_divider_under(pos_within_output)
+    }
+
     pub fn workspace_under(
         &self,
         extended_bounds: bool,
