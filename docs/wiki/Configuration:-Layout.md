@@ -581,7 +581,8 @@ layout {
 
 Camera actions: `camera-zoom-out`, `camera-zoom-in`, `camera-show-all`, `camera-frame-window`,
 `camera-pan-left`, `camera-pan-right`, `camera-pan-up`, `camera-pan-down`, `camera-back`,
-`camera-forward`. Mod+pinch on a touchpad zooms around the pointer.
+`camera-forward`. Pinching on a touchpad zooms around the pointer: with Mod anywhere, without Mod
+over empty space or the zoomed-out dock tree.
 
 ### arbor: `title-bars`
 

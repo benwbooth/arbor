@@ -63,6 +63,9 @@ const TAB_HOVER_DELAY: Duration = Duration::from_millis(400);
 /// A pause in drag updates longer than this restarts the tab hover (e.g. a new drag).
 const TAB_HOVER_GAP: Duration = Duration::from_millis(1000);
 
+/// A pinch released at this zoom or closer to actual size snaps back to actual size.
+const PINCH_SNAP_ZOOM: f64 = 0.85;
+
 /// Smallest thickness of the band around a divider that grabs it (matters when gaps are small).
 const DIVIDER_HIT: f64 = 8.;
 
@@ -1489,6 +1492,15 @@ impl<W: LayoutElement> DockSpace<W> {
         let area = self.working_area;
         self.camera.move_to(view, area, None);
         if zoom == 1. {
+            self.update_camera(true);
+        }
+    }
+
+    /// Settles the camera after a pinch: close to actual size snaps back to following the
+    /// focused window, animated.
+    pub fn camera_pinch_end(&mut self) {
+        if self.camera.mode == CameraMode::Free && self.camera.target.zoom >= PINCH_SNAP_ZOOM {
+            self.camera.mode = CameraMode::Follow;
             self.update_camera(true);
         }
     }

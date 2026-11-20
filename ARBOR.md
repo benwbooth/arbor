@@ -60,7 +60,10 @@ Desktop does not move.
   `camera-pan-left/right/up/down` (focus the neighbour, camera follows),
   `camera-back` / `camera-forward` (history, restores focus too). Moves
   use the `horizontal-view-movement` animation.
-- Mod+touchpad pinch zooms around the pointer.
+- Touchpad pinch zooms around the pointer, following the fingers: with Mod
+  anywhere; without Mod over empty space or over the zoomed-out dock tree
+  (pinches over windows at actual size go to the window). Released close
+  to actual size (zoom >= 0.85) it settles back to following, animated.
 - While zoomed, docked windows take no input: a click activates and starts
   a move (drag still docks), a double-click frames the window. Dividers
   still drag.

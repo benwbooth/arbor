@@ -98,6 +98,11 @@ impl<W: LayoutElement> Workspace<W> {
         changed
     }
 
+    /// The dock tree.
+    pub fn dock(&self) -> &crate::layout::dock::DockSpace<W> {
+        &self.scrolling
+    }
+
     /// The dock tree (for camera actions).
     pub fn dock_mut(&mut self) -> &mut crate::layout::dock::DockSpace<W> {
         &mut self.scrolling

@@ -1,4 +1,4 @@
-//! arbor: camera input — Mod+pinch zoom, clicks on a zoomed-out dock tree.
+//! arbor: camera input — pinch zoom, clicks on a zoomed-out dock tree.
 
 use smithay::backend::input::MouseButton;
 use smithay::input::pointer::{CursorIcon, Focus, GrabStartData as PointerGrabStartData};
@@ -10,11 +10,23 @@ use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
 impl State {
-    /// Starts a camera pinch when Mod is held. Returns whether the gesture is ours.
+    /// Starts a camera pinch when Mod is held, or when the pointer is over empty dock space or
+    /// a zoomed-out dock tree (elsewhere pinches go to the window under the pointer). Returns
+    /// whether the gesture is ours.
     pub(super) fn camera_pinch_begin(&mut self) -> bool {
         let mods = self.niri.seat.get_keyboard().unwrap().modifier_state();
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
-        if !modifiers_from_state(mods).contains(mod_key.to_modifiers()) {
+        let mod_down = modifiers_from_state(mods).contains(mod_key.to_modifiers());
+
+        let ours = mod_down || {
+            let pointer = self.niri.seat.get_pointer().unwrap();
+            self.niri.pointer_contents.layer.is_none()
+                && self
+                    .niri
+                    .output_under(pointer.current_location())
+                    .is_some_and(|(output, pos)| self.niri.layout.camera_pinch_allowed(output, pos))
+        };
+        if !ours {
             return false;
         }
         self.niri.camera_pinch = Some(1.);
@@ -41,7 +53,17 @@ impl State {
     }
 
     pub(super) fn camera_pinch_end(&mut self) -> bool {
-        self.niri.camera_pinch.take().is_some()
+        if self.niri.camera_pinch.take().is_none() {
+            return false;
+        }
+        // Settle: close to actual size snaps back to it, animated.
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        if let Some((output, pos)) = self.niri.output_under(pointer.current_location()) {
+            let output = output.clone();
+            self.niri.layout.camera_pinch_end(&output, pos);
+            self.niri.queue_redraw_all();
+        }
+        true
     }
 
     /// Left clicks on docked windows while the camera is zoomed: a double-click frames the

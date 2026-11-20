@@ -1508,3 +1508,32 @@ fn framing_an_icon_tile_frames_its_subtree() {
         assert!(!s.camera_frame_icon_tile(None));
     }
 }
+
+#[test]
+fn pinch_settles() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    s.advance_animations();
+    let follow = s.camera_view();
+
+    // A small pinch snaps back to following at actual size.
+    s.camera_zoom_by(0.9, Point::from((640., 360.)));
+    assert!(s.is_zoomed());
+    s.camera_pinch_end();
+    s.advance_animations();
+    assert_eq!(s.camera_view(), follow);
+
+    // A big one stays where the fingers left it.
+    s.camera_zoom_by(0.5, Point::from((640., 360.)));
+    s.camera_pinch_end();
+    s.advance_animations();
+    assert_eq!(s.camera_view().zoom, 0.5);
+
+    // Pinching back out past actual size ends at actual size.
+    s.camera_zoom_by(3., Point::from((640., 360.)));
+    s.camera_pinch_end();
+    s.advance_animations();
+    assert_eq!(s.camera_view().zoom, 1.);
+}

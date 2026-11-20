@@ -148,6 +148,44 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Whether a plain pinch at the pointer zooms the camera: over a zoomed-out dock tree, or
+    /// over empty space.
+    pub fn camera_pinch_allowed(
+        &self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+    ) -> bool {
+        if self.interactive_move.is_some() || self.is_overview_open() {
+            return false;
+        }
+        let Some(mon) = self.monitor_for_output(output) else {
+            return false;
+        };
+        let Some((ws, geo)) = mon.workspace_under(pos_within_output) else {
+            return false;
+        };
+        let pos = pos_within_output - geo.loc;
+        match ws.window_under(pos) {
+            None => true,
+            // Zoomed-out docked windows take no input themselves; floating ones keep theirs.
+            Some((win, _)) => ws.dock().is_zoomed() && !ws.is_floating(win.id()),
+        }
+    }
+
+    /// Ends a pinch on the workspace under the pointer.
+    pub fn camera_pinch_end(&mut self, output: &Output, pos_within_output: Point<f64, Logical>) {
+        let Some(mon) = self.monitor_for_output(output) else {
+            return;
+        };
+        let Some((ws, _)) = mon.workspace_under(pos_within_output) else {
+            return;
+        };
+        let id = ws.id();
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.id() == id) {
+            ws.dock_mut().camera_pinch_end();
+        }
+    }
+
     /// The docked window under the pointer while its camera is zoomed.
     pub fn zoomed_dock_window_under(
         &self,
