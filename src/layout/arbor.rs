@@ -40,6 +40,13 @@ impl<W: LayoutElement> Layout<W> {
         self.activate_window(&window);
     }
 
+    /// Shows the next (or previous) tab of the focused tab group.
+    pub fn focus_tab(&mut self, forwards: bool) {
+        if let Some(ws) = self.active_workspace_mut() {
+            ws.focus_tab(forwards);
+        }
+    }
+
     pub fn is_minimized(&self, window: &W::Id) -> bool {
         self.workspaces()
             .any(|(_, _, ws)| ws.has_window(window) && ws.is_minimized(window))

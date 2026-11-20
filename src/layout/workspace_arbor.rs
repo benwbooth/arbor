@@ -35,6 +35,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.last_minimized_window()
     }
 
+    /// Shows the next (or previous) tab of the focused tab group.
+    pub fn focus_tab(&mut self, forwards: bool) -> bool {
+        if self.floating_is_active.get() {
+            return false;
+        }
+        self.scrolling.focus_tab(forwards)
+    }
+
     pub fn is_minimized(&self, id: &W::Id) -> bool {
         self.scrolling.is_minimized(id)
     }

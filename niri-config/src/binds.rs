@@ -396,6 +396,8 @@ pub enum Action {
     RestoreWindow,
     #[knuffel(skip)]
     RestoreWindowById(u64),
+    FocusTabNext,
+    FocusTabPrev,
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -711,6 +713,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::MinimizeWindow { id: Some(id) } => Self::MinimizeWindowById(id),
             niri_ipc::Action::RestoreWindow { id: None } => Self::RestoreWindow,
             niri_ipc::Action::RestoreWindow { id: Some(id) } => Self::RestoreWindowById(id),
+            niri_ipc::Action::FocusTabNext {} => Self::FocusTabNext,
+            niri_ipc::Action::FocusTabPrev {} => Self::FocusTabPrev,
         }
     }
 }

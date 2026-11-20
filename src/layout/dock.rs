@@ -25,6 +25,7 @@ use super::monitor::InsertPosition;
 use super::scrolling::{
     compute_toplevel_bounds, compute_working_area, Column, ColumnWidth, ScrollDirection,
 };
+use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
@@ -45,6 +46,10 @@ const MIN_CHILD_LEN: f64 = 50.;
 
 /// Distance from the working area edge within which a drag docks beside everything.
 const ROOT_EDGE_BAND: f64 = 40.;
+
+/// Where the middle zone of a docked window starts, relative to its size. Dropping a docked
+/// window there joins the tab group.
+const TAB_ZONE_START: f64 = 0.25;
 
 /// Smallest thickness of the band around a divider that grabs it (matters when gaps are small).
 const DIVIDER_HIT: f64 = 8.;
@@ -107,6 +112,8 @@ pub enum DockTarget {
     Root,
     /// Beside a particular leaf.
     Leaf(LeafId),
+    /// Into the tab group of a particular leaf, as the shown tab (the side is ignored).
+    Tab(LeafId),
 }
 
 /// Where to dock a tile in the tree.
@@ -120,20 +127,26 @@ niri_render_elements! {
     DockSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
+        TabIndicator = TabIndicatorRenderElement,
     }
 }
 
-/// A leaf of the dock tree, holding one tile.
+/// A leaf of the dock tree, holding one tile, or several as a tab group.
 ///
 /// Also acts as a stand-in for a scrolling `Column` where `Workspace` iterates columns.
 #[derive(Debug)]
 pub struct DockLeaf<W: LayoutElement> {
     id: LeafId,
-    tile: Tile<W>,
-    /// Compositor-side fullscreen state (changes immediately on request).
+    /// Tiles of the tab group; never empty. A single tile is a plain leaf.
+    tiles: Vec<Tile<W>>,
+    /// Index of the shown tab.
+    active_tab: usize,
+    /// Tab indicator, shown for tab groups.
+    tab_indicator: TabIndicator,
+    /// Compositor-side fullscreen state of the active tab (changes immediately on request).
     is_pending_fullscreen: bool,
-    /// Compositor-side maximized state; can be true together with fullscreen, meaning that
-    /// unfullscreening goes back to maximized.
+    /// Compositor-side maximized state of the active tab; can be true together with fullscreen,
+    /// meaning that unfullscreening goes back to maximized.
     is_pending_maximized: bool,
     /// Set while the leaf is minimized: the window is hidden and its siblings take its space,
     /// but the leaf keeps its slot in the tree. The value orders minimizations.
@@ -228,11 +241,14 @@ impl<W: LayoutElement> DockLeaf<W> {
         scale: f64,
         options: Rc<Options>,
     ) -> Self {
+        let tab_indicator = TabIndicator::new(options.layout.tab_indicator);
         tile.update_config(view_size, scale, options);
         let mode = tile.window().pending_sizing_mode();
         Self {
             id: LeafId::next(),
-            tile,
+            tiles: vec![tile],
+            active_tab: 0,
+            tab_indicator,
             is_pending_fullscreen: mode.is_fullscreen(),
             is_pending_maximized: mode.is_maximized(),
             minimized: None,
@@ -244,8 +260,33 @@ impl<W: LayoutElement> DockLeaf<W> {
         self.minimized.is_some()
     }
 
+    pub fn is_tabbed(&self) -> bool {
+        self.tiles.len() > 1
+    }
+
+    /// The shown tile (the active tab).
+    fn tile(&self) -> &Tile<W> {
+        &self.tiles[self.active_tab]
+    }
+
+    fn tile_mut(&mut self) -> &mut Tile<W> {
+        &mut self.tiles[self.active_tab]
+    }
+
+    fn tab_of(&self, window: &W::Id) -> Option<usize> {
+        self.tiles
+            .iter()
+            .position(|tile| tile.window().id() == window)
+    }
+
+    fn tile_for_mut(&mut self, window: &W::Id) -> Option<&mut Tile<W>> {
+        self.tiles
+            .iter_mut()
+            .find(|tile| tile.window().id() == window)
+    }
+
     pub fn contains(&self, window: &W::Id) -> bool {
-        self.tile.window().id() == window
+        self.tab_of(window).is_some()
     }
 
     pub fn is_pending_fullscreen(&self) -> bool {
@@ -257,7 +298,46 @@ impl<W: LayoutElement> DockLeaf<W> {
     }
 
     pub fn tiles(&self) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>)> + '_ {
-        std::iter::once((&self.tile, self.rect.loc))
+        let loc = self.tiles_rect().loc;
+        self.tiles.iter().map(move |tile| (tile, loc))
+    }
+
+    /// Whether the tab indicator is shown.
+    fn shows_tab_indicator(&self) -> bool {
+        self.is_tabbed() && self.minimized.is_none() && self.tile().sizing_mode().is_normal()
+    }
+
+    /// Rectangle for the tiles: the leaf rectangle minus room for the tab indicator.
+    fn tiles_rect(&self) -> Rect {
+        let mut rect = self.rect;
+        if self.is_tabbed() {
+            let scale = self.tile().scale();
+            let extra = self.tab_indicator.extra_size(self.tiles.len(), scale);
+            rect.loc += self.tab_indicator.content_offset(self.tiles.len(), scale);
+            rect.size.w = f64::max(0., rect.size.w - extra.w);
+            rect.size.h = f64::max(0., rect.size.h - extra.h);
+        }
+        rect
+    }
+
+    /// Area of the tab indicator, relative to the tile origin.
+    fn tab_indicator_area(&self) -> Rect {
+        Rect::from_size(self.tile().animated_tile_size())
+    }
+
+    /// Switches to the tab of `window`. Fullscreen and maximize belong to the shown tab, so
+    /// switching drops them.
+    fn switch_tab(&mut self, window: &W::Id) -> bool {
+        let Some(idx) = self.tab_of(window) else {
+            return false;
+        };
+        if idx == self.active_tab {
+            return false;
+        }
+        self.active_tab = idx;
+        self.is_pending_fullscreen = false;
+        self.is_pending_maximized = false;
+        true
     }
 
     fn pending_sizing_mode(&self) -> SizingMode {
@@ -270,35 +350,54 @@ impl<W: LayoutElement> DockLeaf<W> {
         }
     }
 
-    /// Position of the tile, not including the render offset.
+    /// Position of tab `idx`, not including the render offset.
+    fn tab_origin(&self, idx: usize, parent_area: Rect) -> Point<f64, Logical> {
+        if idx == self.active_tab {
+            self.origin(parent_area)
+        } else {
+            self.tiles_rect().loc
+        }
+    }
+
+    /// Position of the shown tile, not including the render offset.
     ///
     /// Follows the tile's *current* sizing mode so that a tile stays in place until it actually
     /// becomes fullscreen or maximized.
     fn origin(&self, parent_area: Rect) -> Point<f64, Logical> {
-        match self.tile.sizing_mode() {
-            SizingMode::Normal => self.rect.loc,
+        match self.tile().sizing_mode() {
+            SizingMode::Normal => self.tiles_rect().loc,
             SizingMode::Maximized => parent_area.loc,
             SizingMode::Fullscreen => Point::from((0., 0.)),
         }
     }
 
     fn request_size(&mut self, parent_area: Rect, animate: bool, transaction: Option<Transaction>) {
-        match self.pending_sizing_mode() {
-            SizingMode::Fullscreen => self.tile.request_fullscreen(animate, transaction),
-            SizingMode::Maximized => {
-                self.tile
-                    .request_maximized(parent_area.size, animate, transaction)
-            }
-            SizingMode::Normal => {
-                let mut size = self.rect.size;
-                let max_size = self.tile.max_size_nonfullscreen();
-                if max_size.w > 0. {
-                    size.w = f64::min(size.w, max_size.w);
+        let mode = self.pending_sizing_mode();
+        let rect_size = self.tiles_rect().size;
+        let active_tab = self.active_tab;
+        for (idx, tile) in self.tiles.iter_mut().enumerate() {
+            // Hidden tabs stay at the normal size so that switching tabs is instant.
+            let mode = if idx == active_tab {
+                mode
+            } else {
+                SizingMode::Normal
+            };
+            match mode {
+                SizingMode::Fullscreen => tile.request_fullscreen(animate, transaction.clone()),
+                SizingMode::Maximized => {
+                    tile.request_maximized(parent_area.size, animate, transaction.clone())
                 }
-                if max_size.h > 0. {
-                    size.h = f64::min(size.h, max_size.h);
+                SizingMode::Normal => {
+                    let mut size = rect_size;
+                    let max_size = tile.max_size_nonfullscreen();
+                    if max_size.w > 0. {
+                        size.w = f64::min(size.w, max_size.w);
+                    }
+                    if max_size.h > 0. {
+                        size.h = f64::min(size.h, max_size.h);
+                    }
+                    tile.request_tile_size(size, animate, transaction.clone());
                 }
-                self.tile.request_tile_size(size, animate, transaction);
             }
         }
     }
@@ -777,7 +876,11 @@ impl<W: LayoutElement> DockSpace<W> {
         let working_area = compute_working_area(parent_area, scale, options.layout.struts);
 
         for leaf in self.leaves_mut() {
-            leaf.tile.update_config(view_size, scale, options.clone());
+            for tile in &mut leaf.tiles {
+                tile.update_config(view_size, scale, options.clone());
+            }
+            leaf.tab_indicator
+                .update_config(options.layout.tab_indicator);
         }
 
         self.view_size = view_size;
@@ -791,13 +894,19 @@ impl<W: LayoutElement> DockSpace<W> {
 
     pub fn update_shaders(&mut self) {
         for leaf in self.leaves_mut() {
-            leaf.tile.update_shaders();
+            for tile in &mut leaf.tiles {
+                tile.update_shaders();
+            }
+            leaf.tab_indicator.update_shaders();
         }
     }
 
     pub fn advance_animations(&mut self) {
         for leaf in self.leaves_mut() {
-            leaf.tile.advance_animations();
+            for tile in &mut leaf.tiles {
+                tile.advance_animations();
+            }
+            leaf.tab_indicator.advance_animations();
         }
 
         self.closing_windows.retain_mut(|closing| {
@@ -807,16 +916,16 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.leaves()
-            .iter()
-            .any(|leaf| leaf.tile.are_animations_ongoing())
-            || !self.closing_windows.is_empty()
+        self.leaves().iter().any(|leaf| {
+            leaf.tiles.iter().any(Tile::are_animations_ongoing)
+                || leaf.tab_indicator.are_animations_ongoing()
+        }) || !self.closing_windows.is_empty()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
         self.leaves()
             .iter()
-            .any(|leaf| leaf.tile.are_transitions_ongoing())
+            .any(|leaf| leaf.tiles.iter().any(Tile::are_transitions_ongoing))
             || !self.closing_windows.is_empty()
     }
 
@@ -826,9 +935,39 @@ impl<W: LayoutElement> DockSpace<W> {
         let view_size = self.view_size;
         for leaf in self.leaves_mut() {
             let is_active = is_active && Some(leaf.id) == active;
-            let pos = leaf.origin(parent_area) + leaf.tile.render_offset();
+            let pos = leaf.origin(parent_area) + leaf.tile().render_offset();
             let view_rect = Rect::new(pos.upscale(-1.), view_size);
-            leaf.tile.update_render_elements(is_active, view_rect);
+            let active_tab = leaf.active_tab;
+            for (idx, tile) in leaf.tiles.iter_mut().enumerate() {
+                tile.update_render_elements(is_active && idx == active_tab, view_rect);
+            }
+
+            // The tab indicator, in coordinates relative to the shown tile.
+            let enabled = leaf.shows_tab_indicator();
+            let area = leaf.tab_indicator_area();
+            let config = leaf.tab_indicator.config();
+            let scale = leaf.tile().scale();
+            let tabs = leaf.tiles.iter().enumerate().map(|(idx, tile)| {
+                let is_urgent = tile.window().is_urgent();
+                TabInfo::from_tile(
+                    tile,
+                    Point::default(),
+                    idx == active_tab,
+                    is_urgent,
+                    &config,
+                )
+            });
+            let tabs: Vec<_> = tabs.collect();
+            let count = tabs.len();
+            leaf.tab_indicator.update_render_elements(
+                enabled,
+                area,
+                view_rect,
+                count,
+                tabs.into_iter(),
+                is_active,
+                scale,
+            );
         }
     }
 
@@ -981,7 +1120,9 @@ impl<W: LayoutElement> DockSpace<W> {
                 if let Some(prev) = old.get(&leaf.id) {
                     let delta = *prev - leaf.origin(parent_area);
                     if delta != Point::from((0., 0.)) {
-                        leaf.tile.animate_move_from(delta);
+                        for tile in &mut leaf.tiles {
+                            tile.animate_move_from(delta);
+                        }
                     }
                 }
             }
@@ -991,7 +1132,9 @@ impl<W: LayoutElement> DockSpace<W> {
     fn cancel_interactive_resize(&mut self) {
         if let Some(resize) = self.interactive_resize.take() {
             if let Some(leaf) = self.leaf_by_window_mut(&resize.window) {
-                leaf.tile.window_mut().cancel_interactive_resize();
+                if let Some(tile) = leaf.tile_for_mut(&resize.window) {
+                    tile.window_mut().cancel_interactive_resize();
+                }
             }
         }
     }
@@ -1010,21 +1153,55 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     /// Inserts a leaf into the tree. Does not relayout.
-    fn insert_leaf(&mut self, leaf: DockLeaf<W>, dock: DockInsert) {
+    ///
+    /// Returns the id of the leaf that now holds the tiles (which differs from the inserted
+    /// leaf when joining a tab group).
+    fn insert_leaf(&mut self, leaf: DockLeaf<W>, mut dock: DockInsert) -> LeafId {
         self.cancel_interactive_resize();
 
         let Some(root) = self.root.take() else {
+            let id = leaf.id;
             self.root = Some(Node::Leaf(Box::new(leaf)));
-            return;
+            return id;
         };
         self.root = Some(root);
 
+        if let DockTarget::Tab(target) = dock.target {
+            if let Some(path) = self.path_of_leaf(target) {
+                let clock = self.clock.clone();
+                let anim = self.options.animations.window_open.anim;
+                let group = self.node_mut(&path).as_leaf_mut().unwrap();
+                // The incoming tab becomes the shown one, with its sizing mode.
+                let at = group.active_tab + 1;
+                for (i, tile) in leaf.tiles.into_iter().enumerate() {
+                    group.tiles.insert(at + i, tile);
+                }
+                group.active_tab = at + leaf.active_tab;
+                group.is_pending_fullscreen = leaf.is_pending_fullscreen;
+                group.is_pending_maximized = leaf.is_pending_maximized;
+                group.minimized = None;
+                if group.tiles.len() == 2 {
+                    group.tab_indicator.start_open_animation(clock, anim);
+                }
+                return target;
+            }
+
+            // Stale target: fall back to the default position.
+            dock = self.default_insert();
+        }
+
+        let id = leaf.id;
+        self.insert_leaf_beside(leaf, dock);
+        id
+    }
+
+    fn insert_leaf_beside(&mut self, leaf: DockLeaf<W>, dock: DockInsert) {
         let axis = dock.side.axis();
         let before = dock.side.is_before();
 
         let target_path = match dock.target {
             DockTarget::Root => None,
-            DockTarget::Leaf(id) => match self.path_of_leaf(id) {
+            DockTarget::Leaf(id) | DockTarget::Tab(id) => match self.path_of_leaf(id) {
                 Some(path) => Some(path),
                 // Stale target: fall back to the default position.
                 None => self.active.and_then(|id| self.path_of_leaf(id)),
@@ -1173,7 +1350,7 @@ impl<W: LayoutElement> DockSpace<W> {
     fn activate_leaf(&mut self, id: LeafId) {
         self.active = Some(id);
         if let Some(leaf) = self.active_leaf_mut() {
-            leaf.tile.ensure_alpha_animates_to_1();
+            leaf.tile_mut().ensure_alpha_animates_to_1();
         }
     }
 
@@ -1205,7 +1382,7 @@ impl<W: LayoutElement> DockSpace<W> {
             return;
         }
         let current = split.fractions[idx] / vis_sum * avail;
-        let tile = &self.leaf_at(path).tile;
+        let tile = self.leaf_at(path).tile();
         let Some(target) = target_len(current, avail, tile) else {
             return;
         };
@@ -1383,6 +1560,11 @@ impl<W: LayoutElement> DockSpace<W> {
         let before = dock.side.is_before();
 
         match dock.target {
+            // Joining a tab group takes the whole target.
+            DockTarget::Tab(id) => match self.leaf_by_id(id) {
+                Some(leaf) => leaf.rect,
+                None => root_rect,
+            },
             DockTarget::Root => match root {
                 Node::Split(split) if split.axis == axis => {
                     let idx = if before { 0 } else { split.children.len() };
@@ -1428,11 +1610,13 @@ impl<W: LayoutElement> DockSpace<W> {
     // Queries.
 
     pub fn tiles(&self) -> impl Iterator<Item = &Tile<W>> + '_ {
-        self.leaves().into_iter().map(|leaf| &leaf.tile)
+        self.leaves().into_iter().flat_map(|leaf| leaf.tiles.iter())
     }
 
     pub fn tiles_mut(&mut self) -> impl Iterator<Item = &mut Tile<W>> + '_ {
-        self.leaves_mut().into_iter().map(|leaf| &mut leaf.tile)
+        self.leaves_mut()
+            .into_iter()
+            .flat_map(|leaf| leaf.tiles.iter_mut())
     }
 
     /// Leaves of the tree in tree order, standing in for scrolling columns.
@@ -1446,15 +1630,16 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn active_window(&self) -> Option<&W> {
-        self.active_leaf().map(|leaf| leaf.tile.window())
+        self.active_leaf().map(|leaf| leaf.tile().window())
     }
 
     pub fn active_window_mut(&mut self) -> Option<&mut W> {
-        self.active_leaf_mut().map(|leaf| leaf.tile.window_mut())
+        self.active_leaf_mut()
+            .map(|leaf| leaf.tile_mut().window_mut())
     }
 
     pub fn active_tile_mut(&mut self) -> Option<&mut Tile<W>> {
-        self.active_leaf_mut().map(|leaf| &mut leaf.tile)
+        self.active_leaf_mut().map(|leaf| leaf.tile_mut())
     }
 
     pub fn is_active_pending_fullscreen(&self) -> bool {
@@ -1516,9 +1701,24 @@ impl<W: LayoutElement> DockSpace<W> {
             });
         }
 
+        // The middle of a docked window: join its tab group.
+        for leaf in self.visible_leaves() {
+            let rect = leaf.rect;
+            if !rect.contains(pos) {
+                continue;
+            }
+            let rel_x = (pos.x - rect.loc.x) / rect.size.w;
+            let rel_y = (pos.y - rect.loc.y) / rect.size.h;
+            let center = |rel: f64| (TAB_ZONE_START..=1. - TAB_ZONE_START).contains(&rel);
+            if center(rel_x) && center(rel_y) {
+                return InsertPosition::Dock(DockInsert {
+                    target: DockTarget::Tab(leaf.id),
+                    side: DockSide::Right,
+                });
+            }
+        }
+
         // Otherwise dock beside the leaf under (or nearest to) the pointer, on the nearest side.
-        //
-        // FIXME: the center of a leaf will become a tab group target.
         let leaf = self
             .visible_leaves()
             .into_iter()
@@ -1553,7 +1753,7 @@ impl<W: LayoutElement> DockSpace<W> {
 
         let gaps = self.options.layout.gaps;
         let pad = f64::max(0., (DIVIDER_HIT - gaps) / 2.);
-        divider_under(root, pos, pad).map(|(leaf, edge)| (leaf.tile.window().id().clone(), edge))
+        divider_under(root, pos, pad).map(|(leaf, edge)| (leaf.tile().window().id().clone(), edge))
     }
 
     /// Where a window dragged from the floating Desktop lands: docked if the pointer is over the
@@ -1631,11 +1831,18 @@ impl<W: LayoutElement> DockSpace<W> {
         self.leaves_in_render_order()
             .into_iter()
             .chain(minimized)
-            .map(move |leaf| {
-                let pos = leaf.origin(parent_area) + leaf.tile.render_offset();
-                // Round to physical pixels.
-                let pos = pos.to_physical_precise_round(scale).to_logical(scale);
-                (&leaf.tile, pos, !leaf.is_minimized())
+            .flat_map(move |leaf| {
+                // The shown tab first.
+                let order = std::iter::once(leaf.active_tab)
+                    .chain((0..leaf.tiles.len()).filter(move |idx| *idx != leaf.active_tab));
+                order.map(move |idx| {
+                    let tile = &leaf.tiles[idx];
+                    let pos = leaf.tab_origin(idx, parent_area) + tile.render_offset();
+                    // Round to physical pixels.
+                    let pos = pos.to_physical_precise_round(scale).to_logical(scale);
+                    let visible = !leaf.is_minimized() && idx == leaf.active_tab;
+                    (tile, pos, visible)
+                })
             })
     }
 
@@ -1648,51 +1855,82 @@ impl<W: LayoutElement> DockSpace<W> {
         let active = self.active;
         let mut leaves = self.leaves_mut();
         leaves.sort_by_key(|leaf| render_rank(leaf, active));
-        leaves.into_iter().map(move |leaf| {
-            let mut pos = leaf.origin(parent_area) + leaf.tile.render_offset();
-            if round {
-                pos = pos.to_physical_precise_round(scale).to_logical(scale);
-            }
-            (&mut leaf.tile, pos)
+        leaves.into_iter().flat_map(move |leaf| {
+            let active_tab = leaf.active_tab;
+            let origin = leaf.origin(parent_area);
+            let tabs_loc = leaf.tiles_rect().loc;
+            leaf.tiles.iter_mut().enumerate().map(move |(idx, tile)| {
+                let loc = if idx == active_tab { origin } else { tabs_loc };
+                let mut pos = loc + tile.render_offset();
+                if round {
+                    pos = pos.to_physical_precise_round(scale).to_logical(scale);
+                }
+                (tile, pos)
+            })
         })
     }
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scale = self.scale;
         let parent_area = self.parent_area;
-        self.leaves().into_iter().map(move |leaf| {
-            let pos = leaf.origin(parent_area);
-            let pos = pos.to_physical_precise_round(scale).to_logical(scale);
-            let layout = WindowLayout {
-                pos_in_scrolling_layout: None,
-                tile_pos_in_workspace_view: Some(pos.into()),
-                ..leaf.tile.ipc_layout_template()
-            };
-            (&leaf.tile, layout)
+        self.leaves().into_iter().flat_map(move |leaf| {
+            leaf.tiles.iter().enumerate().map(move |(idx, tile)| {
+                let pos = leaf.tab_origin(idx, parent_area);
+                let pos = pos.to_physical_precise_round(scale).to_logical(scale);
+                let layout = WindowLayout {
+                    pos_in_scrolling_layout: None,
+                    tile_pos_in_workspace_view: Some(pos.into()),
+                    ..tile.ipc_layout_template()
+                };
+                (tile, layout)
+            })
         })
     }
 
     /// Returns the geometry of the active tile relative to and clamped to the view.
     pub fn active_tile_visual_rectangle(&self) -> Option<Rect> {
         let leaf = self.active_leaf()?;
-        let rect = Rect::new(leaf.origin(self.parent_area), leaf.tile.tile_size());
+        let rect = Rect::new(leaf.origin(self.parent_area), leaf.tile().tile_size());
         Rect::from_size(self.view_size).intersection(rect)
     }
 
     pub fn popup_target_rect(&self, id: &W::Id) -> Option<Rect> {
         let leaf = self.leaf_by_window(id)?;
+        let idx = leaf.tab_of(id)?;
         let mut target = self.parent_area;
-        target.loc -= leaf.origin(self.parent_area);
-        target.loc -= leaf.tile.window_loc();
+        target.loc -= leaf.tab_origin(idx, self.parent_area);
+        target.loc -= leaf.tiles[idx].window_loc();
         Some(target)
     }
 
     pub fn render_above_top_layer(&self) -> bool {
         self.active_leaf()
-            .is_some_and(|leaf| leaf.tile.sizing_mode().is_fullscreen())
+            .is_some_and(|leaf| leaf.tile().sizing_mode().is_fullscreen())
     }
 
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        // The tab indicators of tab groups.
+        for leaf in self.leaves_in_render_order() {
+            if !leaf.shows_tab_indicator() {
+                continue;
+            }
+            let tile_pos = leaf.origin(self.parent_area) + leaf.tile().render_offset();
+            let tile_pos = tile_pos
+                .to_physical_precise_round(self.scale)
+                .to_logical(self.scale);
+            if let Some(idx) = leaf.tab_indicator.hit(
+                leaf.tab_indicator_area(),
+                leaf.tiles.len(),
+                self.scale,
+                pos - tile_pos,
+            ) {
+                let hit = HitType::Activate {
+                    is_tab_indicator: true,
+                };
+                return Some((leaf.tiles[idx].window(), hit));
+            }
+        }
+
         // This matches self.tiles_with_render_positions().
         self.tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
@@ -1722,14 +1960,18 @@ impl<W: LayoutElement> DockSpace<W> {
         let active = self.active;
         let parent_area = self.parent_area;
         for leaf in self.leaves_in_render_order() {
-            let tile_pos = leaf.origin(parent_area) + leaf.tile.render_offset();
+            let tile_pos = leaf.origin(parent_area) + leaf.tile().render_offset();
             let tile_pos = tile_pos
                 .to_physical_precise_round(self.scale)
                 .to_logical(self.scale);
 
+            // The tab indicator goes on top of the tile.
+            leaf.tab_indicator
+                .render(ctx.renderer, tile_pos, &mut |elem| push(elem.into()));
+
             let focus_ring = focus_ring && Some(leaf.id) == active;
             let xray_pos = xray_pos.offset(tile_pos);
-            leaf.tile
+            leaf.tile()
                 .render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
                     push(elem.into())
                 });
@@ -1742,8 +1984,7 @@ impl<W: LayoutElement> DockSpace<W> {
     /// Docks a tile at the given position in the tree.
     pub fn add_tile_docked(&mut self, tile: Tile<W>, dock: DockInsert, activate: bool) {
         let leaf = DockLeaf::new(tile, self.view_size, self.scale, self.options.clone());
-        let id = leaf.id;
-        self.insert_leaf(leaf, dock);
+        let id = self.insert_leaf(leaf, dock);
         if activate || self.active.is_none() {
             self.activate_leaf(id);
         }
@@ -1819,8 +2060,7 @@ impl<W: LayoutElement> DockSpace<W> {
             };
             let mut leaf = DockLeaf::new(tile, self.view_size, self.scale, self.options.clone());
             leaf.is_pending_maximized |= is_pending_maximized;
-            let id = leaf.id;
-            self.insert_leaf(leaf, dock);
+            let id = self.insert_leaf(leaf, dock);
             if (activate && prev.is_none()) || self.active.is_none() {
                 self.activate_leaf(id);
             }
@@ -1830,7 +2070,7 @@ impl<W: LayoutElement> DockSpace<W> {
     }
 
     pub fn remove_active_tile(&mut self, transaction: Transaction) -> Option<RemovedTile<W>> {
-        let id = self.active_leaf()?.tile.window().id().clone();
+        let id = self.active_leaf()?.tile().window().id().clone();
         Some(self.remove_tile(&id, transaction))
     }
 
@@ -1838,15 +2078,38 @@ impl<W: LayoutElement> DockSpace<W> {
         let path = self
             .path_of_window(window)
             .expect("window must be in the dock tree");
-        let mut leaf = self.take_leaf(&path);
+
+        let mut tile = if self.leaf_at(&path).is_tabbed() {
+            // Take the tab out of its group; the leaf stays.
+            if self
+                .interactive_resize
+                .as_ref()
+                .is_some_and(|resize| self.leaf_at(&path).contains(&resize.window))
+            {
+                self.cancel_interactive_resize();
+            }
+
+            let leaf = self.node_mut(&path).as_leaf_mut().unwrap();
+            let idx = leaf.tab_of(window).unwrap();
+            let tile = leaf.tiles.remove(idx);
+            if idx == leaf.active_tab {
+                // Fullscreen and maximize belonged to the removed tab.
+                leaf.is_pending_fullscreen = false;
+                leaf.is_pending_maximized = false;
+                leaf.active_tab = idx.min(leaf.tiles.len() - 1);
+            } else if idx < leaf.active_tab {
+                leaf.active_tab -= 1;
+            }
+            tile
+        } else {
+            self.take_leaf(&path).tiles.pop().unwrap()
+        };
         self.relayout(true, true, Some(transaction));
 
-        if leaf.minimized.is_some() {
-            leaf.tile.window_mut().set_minimized(false);
-        }
+        tile.window_mut().set_minimized(false);
 
         RemovedTile {
-            tile: leaf.tile,
+            tile,
             width: self.default_width(),
             is_full_width: false,
             is_floating: false,
@@ -1876,20 +2139,21 @@ impl<W: LayoutElement> DockSpace<W> {
         let Some(leaf) = self.leaf_by_window_mut(window) else {
             return;
         };
+        let idx = leaf.tab_of(window).unwrap();
 
-        let prev_origin = leaf.origin(parent_area);
+        let prev_origin = leaf.tab_origin(idx, parent_area);
 
         // Do this before calling update_window() so it can get up-to-date info.
         if let Some(serial) = serial {
-            leaf.tile.window_mut().on_commit(serial);
+            leaf.tiles[idx].window_mut().on_commit(serial);
         }
 
-        leaf.tile.update_window();
+        leaf.tiles[idx].update_window();
 
         // Going in and out of fullscreen/maximized moves the tile; animate that.
-        let delta = prev_origin - leaf.origin(parent_area);
+        let delta = prev_origin - leaf.tab_origin(idx, parent_area);
         if delta != Point::from((0., 0.)) {
-            leaf.tile.animate_move_from(delta);
+            leaf.tiles[idx].animate_move_from(delta);
         }
     }
 
@@ -1899,8 +2163,51 @@ impl<W: LayoutElement> DockSpace<W> {
             return false;
         };
         self.restore_window(window);
+        self.switch_tab(window);
         self.activate_leaf(id);
         true
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Tab groups.
+
+    /// Shows the tab of `window` in its tab group. Does not activate the leaf.
+    fn switch_tab(&mut self, window: &W::Id) -> bool {
+        let resizing_group = self.interactive_resize.as_ref().is_some_and(|resize| {
+            self.leaf_by_window(window)
+                .is_some_and(|leaf| leaf.contains(&resize.window))
+        });
+
+        let Some(leaf) = self.leaf_by_window_mut(window) else {
+            return false;
+        };
+        if !leaf.switch_tab(window) {
+            return false;
+        }
+
+        if resizing_group {
+            self.cancel_interactive_resize();
+        }
+        self.relayout(false, false, None);
+        true
+    }
+
+    /// Shows the next (or previous) tab of the active tab group, wrapping around.
+    pub fn focus_tab(&mut self, forwards: bool) -> bool {
+        let Some(leaf) = self.active_leaf() else {
+            return false;
+        };
+        let n = leaf.tiles.len();
+        if n < 2 {
+            return false;
+        }
+        let idx = if forwards {
+            (leaf.active_tab + 1) % n
+        } else {
+            (leaf.active_tab + n - 1) % n
+        };
+        let window = leaf.tiles[idx].window().id().clone();
+        self.switch_tab(&window)
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1965,7 +2272,7 @@ impl<W: LayoutElement> DockSpace<W> {
             .into_iter()
             .filter_map(|leaf| leaf.minimized.map(|seq| (seq, leaf)))
             .max_by_key(|(seq, _)| *seq)
-            .map(|(_, leaf)| leaf.tile.window().id())
+            .map(|(_, leaf)| leaf.tile().window().id())
     }
 
     pub fn start_close_animation_for_window(
@@ -2024,7 +2331,7 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn start_open_animation(&mut self, id: &W::Id) -> bool {
         match self.leaf_by_window_mut(id) {
             Some(leaf) => {
-                leaf.tile.start_open_animation();
+                leaf.tile_for_mut(id).unwrap().start_open_animation();
                 true
             }
             None => false,
@@ -2322,6 +2629,14 @@ impl<W: LayoutElement> DockSpace<W> {
         let Some(leaf) = self.leaf_by_window(window) else {
             return false;
         };
+        // A hidden tab is never fullscreen or maximized; going there shows it first.
+        if leaf.tile().window().id() != window {
+            if !is_fullscreen {
+                return false;
+            }
+            self.switch_tab(window);
+        }
+        let leaf = self.leaf_by_window(window).unwrap();
         if leaf.is_pending_fullscreen == is_fullscreen {
             return false;
         }
@@ -2344,6 +2659,14 @@ impl<W: LayoutElement> DockSpace<W> {
         let Some(leaf) = self.leaf_by_window(window) else {
             return false;
         };
+        // A hidden tab is never fullscreen or maximized; going there shows it first.
+        if leaf.tile().window().id() != window {
+            if !maximize {
+                return false;
+            }
+            self.switch_tab(window);
+        }
+        let leaf = self.leaf_by_window(window).unwrap();
         if leaf.is_pending_maximized == maximize {
             return false;
         }
@@ -2487,47 +2810,52 @@ impl<W: LayoutElement> DockSpace<W> {
         for leaf in self.leaves_mut() {
             let leaf_id = leaf.id;
             let is_minimized = leaf.minimized.is_some();
-            let win = leaf.tile.window_mut();
+            let active_tab = leaf.active_tab;
+            for (idx, tile) in leaf.tiles.iter_mut().enumerate() {
+                let is_shown_tab = idx == active_tab;
+                let win = tile.window_mut();
 
-            win.set_active_in_column(true);
-            win.set_floating(false);
+                win.set_active_in_column(is_shown_tab);
+                win.set_floating(false);
 
-            let mut is_active = is_active && Some(leaf_id) == active && !is_minimized;
-            if options.deactivate_unfocused_windows {
-                is_active &= is_focused;
+                let mut is_active =
+                    is_active && Some(leaf_id) == active && !is_minimized && is_shown_tab;
+                if options.deactivate_unfocused_windows {
+                    is_active &= is_focused;
+                }
+                win.set_activated(is_active);
+                win.set_minimized(is_minimized);
+
+                let resize_data = resize
+                    .as_ref()
+                    .filter(|(id, _)| id == win.id())
+                    .map(|(_, data)| *data);
+                win.set_interactive_resize(resize_data);
+
+                let border_config = options.layout.border.merged_with(&win.rules().border);
+                let bounds = compute_toplevel_bounds(
+                    border_config,
+                    working_area.size,
+                    Size::from((0., 0.)),
+                    options.layout.gaps,
+                );
+                win.set_bounds(bounds);
+
+                let intent = if options.disable_resize_throttling {
+                    ConfigureIntent::CanSend
+                } else {
+                    win.configure_intent()
+                };
+
+                if matches!(
+                    intent,
+                    ConfigureIntent::CanSend | ConfigureIntent::ShouldSend
+                ) {
+                    win.send_pending_configure();
+                }
+
+                win.refresh();
             }
-            win.set_activated(is_active);
-            win.set_minimized(is_minimized);
-
-            let resize_data = resize
-                .as_ref()
-                .filter(|(id, _)| id == win.id())
-                .map(|(_, data)| *data);
-            win.set_interactive_resize(resize_data);
-
-            let border_config = options.layout.border.merged_with(&win.rules().border);
-            let bounds = compute_toplevel_bounds(
-                border_config,
-                working_area.size,
-                Size::from((0., 0.)),
-                options.layout.gaps,
-            );
-            win.set_bounds(bounds);
-
-            let intent = if options.disable_resize_throttling {
-                ConfigureIntent::CanSend
-            } else {
-                win.configure_intent()
-            };
-
-            if matches!(
-                intent,
-                ConfigureIntent::CanSend | ConfigureIntent::ShouldSend
-            ) {
-                win.send_pending_configure();
-            }
-
-            win.refresh();
         }
     }
 
@@ -2579,7 +2907,20 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn tree_string(&self) -> String {
         fn fmt<W: LayoutElement>(node: &Node<W>, out: &mut String) {
             match node {
-                Node::Leaf(leaf) => out.push_str(&format!("{:?}", leaf.tile.window().id())),
+                Node::Leaf(leaf) if leaf.is_tabbed() => {
+                    out.push_str("T[");
+                    for (idx, tile) in leaf.tiles.iter().enumerate() {
+                        if idx > 0 {
+                            out.push(',');
+                        }
+                        if idx == leaf.active_tab {
+                            out.push('*');
+                        }
+                        out.push_str(&format!("{:?}", tile.window().id()));
+                    }
+                    out.push(']');
+                }
+                Node::Leaf(leaf) => out.push_str(&format!("{:?}", leaf.tile().window().id())),
                 Node::Split(split) => {
                     out.push(match split.axis {
                         Axis::Horizontal => 'H',
@@ -2654,17 +2995,26 @@ impl<W: LayoutElement> DockSpace<W> {
         assert_eq!(ids.len(), leaves.len(), "leaf ids must be unique");
 
         for leaf in leaves {
-            let tile = &leaf.tile;
-            assert!(Rc::ptr_eq(&self.options, &tile.options));
-            assert_eq!(self.clock, tile.clock);
-            assert_eq!(self.scale, tile.scale());
-            assert_eq!(self.view_size, tile.view_size());
-            assert_eq!(
-                leaf.pending_sizing_mode(),
-                tile.window().pending_sizing_mode(),
-                "leaf pending sizing mode must match the window"
-            );
-            tile.verify_invariants();
+            assert!(!leaf.tiles.is_empty(), "leaves must hold at least one tile");
+            assert!(leaf.active_tab < leaf.tiles.len());
+            for (idx, tile) in leaf.tiles.iter().enumerate() {
+                assert!(Rc::ptr_eq(&self.options, &tile.options));
+                assert_eq!(self.clock, tile.clock);
+                assert_eq!(self.scale, tile.scale());
+                assert_eq!(self.view_size, tile.view_size());
+                let expected = if idx == leaf.active_tab {
+                    leaf.pending_sizing_mode()
+                } else {
+                    SizingMode::Normal
+                };
+                assert_eq!(
+                    expected,
+                    tile.window().pending_sizing_mode(),
+                    "the shown tab's pending sizing mode must match the leaf; \
+                     hidden tabs must be normal"
+                );
+                tile.verify_invariants();
+            }
         }
 
         if let Some(resize) = &self.interactive_resize {
@@ -2679,7 +3029,7 @@ impl<W: LayoutElement> DockSpace<W> {
 fn render_rank<W: LayoutElement>(leaf: &DockLeaf<W>, active: Option<LeafId>) -> u8 {
     if Some(leaf.id) == active {
         0
-    } else if !leaf.tile.sizing_mode().is_normal() {
+    } else if !leaf.tile().sizing_mode().is_normal() {
         1
     } else {
         2

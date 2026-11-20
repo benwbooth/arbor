@@ -310,8 +310,14 @@ fn insert_position_sides() {
     assert_eq!(at(320., 100.), docked(leaf1, DockSide::Top));
     assert_eq!(at(320., 650.), docked(leaf1, DockSide::Bottom));
     assert_eq!(at(700., 360.), docked(leaf2, DockSide::Left));
-    // Center of a leaf: nearest side for now.
-    assert_eq!(at(950., 300.), docked(leaf2, DockSide::Top));
+    // Middle of a leaf: join its tab group.
+    assert_eq!(
+        at(950., 300.),
+        InsertPosition::Dock(DockInsert {
+            target: DockTarget::Tab(leaf2),
+            side: DockSide::Right,
+        })
+    );
 
     // Near the working area edge: dock beside everything.
     let root = |side| {
@@ -858,4 +864,182 @@ fn minimize_and_restore_through_layout() {
         [Op::MinimizeWindow { id: Some(1) }, Op::FocusWindow(1)],
     );
     assert!(!layout.is_minimized(&1));
+}
+
+fn tab(space: &mut DockSpace<TestWindow>, id: usize, target: usize) {
+    let leaf = space.leaf_id_of(&target).unwrap();
+    let tile = tile(space, id);
+    let insert = DockInsert {
+        target: DockTarget::Tab(leaf),
+        side: DockSide::Right,
+    };
+    space.add_tile_docked(tile, insert, true);
+    space.verify_invariants();
+}
+
+#[test]
+fn tab_groups() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    let r2 = s.window_rect(&2).unwrap();
+
+    tab(&mut s, 3, 2);
+    assert_eq!(s.tree_string(), "H[1,T[2,*3]]");
+    assert_eq!(active(&s), 3);
+    // The group keeps the slot; both tabs get its size.
+    assert_eq!(s.window_rect(&3).unwrap(), r2);
+    let win = |s: &DockSpace<TestWindow>, id: usize| {
+        s.tiles()
+            .find(|t| *t.window().id() == id)
+            .unwrap()
+            .window()
+            .requested_size()
+    };
+    assert_eq!(win(&s, 2), win(&s, 3));
+
+    // Only the shown tab is visible.
+    let visible: Vec<usize> = s
+        .tiles_with_render_positions()
+        .filter(|(_, _, v)| *v)
+        .map(|(t, _, _)| *t.window().id())
+        .collect();
+    assert!(visible.contains(&3) && !visible.contains(&2), "{visible:?}");
+
+    // Cycling tabs.
+    assert!(s.focus_tab(true));
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[1,T[*2,3]]");
+    assert_eq!(active(&s), 2);
+    assert!(s.focus_tab(false));
+    assert_eq!(s.tree_string(), "H[1,T[2,*3]]");
+
+    // Activating a hidden tab shows it.
+    s.activate_window(&1);
+    s.activate_window(&2);
+    assert_eq!(s.tree_string(), "H[1,T[*2,3]]");
+    s.verify_invariants();
+
+    // Fullscreen applies to the shown tab; going fullscreen from a hidden tab shows it.
+    assert!(s.set_fullscreen(&3, true));
+    s.verify_invariants();
+    assert_eq!(s.tree_string(), "H[1,T[2,*3]]");
+    assert!(!s.set_fullscreen(&2, false));
+    // Switching tabs drops fullscreen.
+    s.activate_window(&2);
+    s.verify_invariants();
+
+    // Removing a tab (e.g. tearing it off) keeps the leaf.
+    remove(&mut s, 2);
+    assert_eq!(s.tree_string(), "H[1,3]");
+    assert_eq!(active(&s), 3);
+    assert_eq!(s.window_rect(&3).unwrap(), r2);
+}
+
+#[test]
+fn tab_center_zone_and_hint() {
+    let mut s = space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    let leaf2 = s.leaf_id_of(&2).unwrap();
+    let r2 = s.window_rect(&2).unwrap();
+
+    let center = rect_center_of(r2);
+    let pos = s.insert_position(center);
+    assert_eq!(
+        pos,
+        InsertPosition::Dock(DockInsert {
+            target: DockTarget::Tab(leaf2),
+            side: DockSide::Right,
+        })
+    );
+    // The hint shows the whole target.
+    assert_eq!(s.insert_hint_area(pos), Some(r2));
+
+    // Outside the middle: dock beside.
+    let near_top = Point::from((center.x, r2.loc.y + 60.));
+    assert!(matches!(
+        s.insert_position(near_top),
+        InsertPosition::Dock(DockInsert {
+            target: DockTarget::Leaf(_),
+            side: DockSide::Top,
+        })
+    ));
+}
+
+fn rect_center_of(r: Rectangle<f64, Logical>) -> Point<f64, Logical> {
+    Point::from((r.loc.x + r.size.w / 2., r.loc.y + r.size.h / 2.))
+}
+
+#[test]
+fn drag_to_center_creates_tab_group_and_tear_off() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::InteractiveMoveBegin {
+            window: 2,
+            output_idx: 1,
+            px: 900.,
+            py: 360.,
+        },
+        Op::InteractiveMoveUpdate {
+            window: 2,
+            dx: 0.,
+            dy: 0.,
+            output_idx: 1,
+            px: 900.,
+            py: 360.,
+        },
+        // Drag into the middle of window 1.
+        Op::InteractiveMoveUpdate {
+            window: 2,
+            dx: -260.,
+            dy: 0.,
+            output_idx: 1,
+            px: 640.,
+            py: 360.,
+        },
+        Op::InteractiveMoveEnd { window: 2 },
+    ];
+
+    let mut layout = check_ops(ops);
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
+
+    // Tear tab 1 off to the right side of the screen.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveMoveBegin {
+                window: 1,
+                output_idx: 1,
+                px: 640.,
+                py: 360.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 1,
+                dx: 0.,
+                dy: 0.,
+                output_idx: 1,
+                px: 640.,
+                py: 360.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 1,
+                dx: 630.,
+                dy: 0.,
+                output_idx: 1,
+                px: 1270.,
+                py: 360.,
+            },
+            Op::InteractiveMoveEnd { window: 1 },
+        ],
+    );
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.scrolling().tree_string(), "H[2,1]");
 }

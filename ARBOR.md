@@ -22,7 +22,10 @@ arbor changes in new files where possible so rebases stay small.
     axes match);
   - the edge band of the screen: it docks beside everything (new root
     split);
-  - the middle of a docked window, after a short pause: tab group (later).
+  - the middle of a docked window (center 50%): tab group. For now only
+    docked windows join tab groups this way (a floating drag over the middle
+    of a docked window still floats; toggle the dragged window to tiling
+    during the move, or dock it first).
   - empty Desktop area: floats.
   An insert hint shows the target rectangle while dragging.
 - **Dividers:** dragging the gap between two siblings resizes just those two.
@@ -66,8 +69,30 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
      back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
 3. Tab groups (reuse niri's tabbed column display), saved views.
+   - [x] tab groups: a leaf holds several tiles with one shown and niri's
+     tab indicator; dropping a docked window on the middle of another joins
+     its group (insert hint = whole target); `focus-tab-next/prev` cycle;
+     clicking the indicator or activating a hidden tab shows it; dragging a
+     tab's window (client move request or Mod+drag) tears it off.
+     Fullscreen/maximize belong to the shown tab and drop on tab switch.
+     Minimizing any tab minimizes the whole group.
+   - [ ] saved views
+   - [ ] timed hover (~400ms) before a floating drag can join a tab group
 4. KDE appmenu protocol for hearth's global menu bar.
 5. NixOS session + hearth backend for niri IPC.
+
+## Next steps
+
+- **Server-side title bars.** niri draws no title bars, so apps that don't
+  draw their own (KDE/Qt apps asking for server-side xdg-decoration, or
+  apps that never bind xdg-decoration and aren't CSD) have none. Plan: a
+  `TitleBar` element in `Tile` (beside border/focus ring), drawn only when
+  the decoration mode is server-side: app title (pango, like the hotkey
+  overlay), macOS-style close/minimize/zoom buttons on the left;
+  `Tile::hit` returns a new hit kind for the bar so that pressing on it
+  starts an interactive move (and with it drag-to-dock), double-click
+  toggles maximize, and the buttons map to close / `minimize-window` /
+  maximize. Tile sizes must account for the bar height like borders do.
 
 ## Code map
 

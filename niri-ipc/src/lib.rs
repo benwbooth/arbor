@@ -961,6 +961,10 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Show the next tab of the focused tab group (arbor).
+    FocusTabNext {},
+    /// Show the previous tab of the focused tab group (arbor).
+    FocusTabPrev {},
 }
 
 /// Change in window or column size.

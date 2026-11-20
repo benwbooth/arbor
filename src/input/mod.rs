@@ -2316,6 +2316,14 @@ impl State {
                 self.maybe_warp_cursor_to_focus();
                 self.niri.queue_redraw_all();
             }
+            Action::FocusTabNext => {
+                self.niri.layout.focus_tab(true);
+                self.niri.queue_redraw_all();
+            }
+            Action::FocusTabPrev => {
+                self.niri.layout.focus_tab(false);
+                self.niri.queue_redraw_all();
+            }
             Action::RestoreWindowById(id) => {
                 let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
