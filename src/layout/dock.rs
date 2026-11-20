@@ -249,6 +249,10 @@ pub struct DockSpace<W: LayoutElement> {
     /// Windows in the closing animation.
     closing_windows: Vec<ClosingWindow>,
 
+    /// Camera zoom each closing window was seen at (parallel to `closing_windows`); they
+    /// render scaled by it around the view origin.
+    closing_zooms: Vec<f64>,
+
     /// The camera over the canvas (arbor milestone 2).
     camera: Camera,
 
@@ -983,6 +987,7 @@ impl<W: LayoutElement> DockSpace<W> {
             active: None,
             interactive_resize: None,
             closing_windows: Vec::new(),
+            closing_zooms: Vec::new(),
             tab_hover: Cell::new(None),
             camera: Camera::default(),
             icon_tiles: IconTiles::default(),
@@ -1039,9 +1044,15 @@ impl<W: LayoutElement> DockSpace<W> {
             leaf.tab_indicator.advance_animations();
         }
 
+        let mut zooms = std::mem::take(&mut self.closing_zooms).into_iter();
         self.closing_windows.retain_mut(|closing| {
             closing.advance_animations();
-            closing.are_animations_ongoing()
+            let keep = closing.are_animations_ongoing();
+            let zoom = zooms.next().unwrap_or(1.);
+            if keep {
+                self.closing_zooms.push(zoom);
+            }
+            keep
         });
     }
 
@@ -1307,7 +1318,8 @@ impl<W: LayoutElement> DockSpace<W> {
                     }
                     None => bounds,
                 };
-                CameraView::framing(expand(rect), area)
+                // Don't show past the canvas edge where the canvas is larger than the view.
+                clamp_to_bounds(CameraView::framing(expand(rect), area), area, bounds)
             }
             CameraMode::ShowAll => CameraView::framing(bounds, area),
             CameraMode::Free => self.camera.target,
@@ -2496,9 +2508,15 @@ impl<W: LayoutElement> DockSpace<W> {
 
         // Draw the closing windows on top of the other windows.
         let view_rect = Rect::from_size(self.view_size);
-        for closing in self.closing_windows.iter().rev() {
-            let elem = closing.render(ctx.as_gles(), view_rect, scale);
-            push(DockSpaceRenderElement::Inner(elem.into()));
+        for (closing, zoom) in zip(&self.closing_windows, &self.closing_zooms).rev() {
+            let elem =
+                DockInnerRenderElement::from(closing.render(ctx.as_gles(), view_rect, scale));
+            if *zoom != 1. {
+                let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), *zoom);
+                push(DockSpaceRenderElement::Camera(elem));
+            } else {
+                push(DockSpaceRenderElement::Inner(elem));
+            }
         }
 
         let cam = self.camera_view();
@@ -2885,7 +2903,18 @@ impl<W: LayoutElement> DockSpace<W> {
         };
 
         let tile_size = tile.tile_size();
+        // Tiles on the canvas close where the camera shows them, at its zoom.
+        let zoom = if tile.sizing_mode().is_normal() {
+            self.camera_view().zoom
+        } else {
+            1.
+        };
+        let tile_pos = tile_pos.downscale(zoom);
+        let count = self.closing_windows.len();
         self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
+        if self.closing_windows.len() > count {
+            self.closing_zooms.push(zoom);
+        }
     }
 
     fn start_close_animation_for_tile(

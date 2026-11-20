@@ -92,6 +92,23 @@ impl<W: LayoutElement> Layout<W> {
         changed
     }
 
+    /// Scale of the interactively moved window: the overview zoom, times the camera zoom of the
+    /// workspace under it for docked windows.
+    pub(super) fn interactive_move_zoom(&self) -> f64 {
+        let zoom = self.overview_zoom();
+        let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
+            return zoom;
+        };
+        if move_.is_floating {
+            return zoom;
+        }
+        let camera_zoom = self
+            .monitor_for_output(&move_.output)
+            .and_then(|mon| mon.workspace_under(move_.pointer_pos_within_output))
+            .map_or(1., |(ws, _)| ws.dock().camera_view().zoom);
+        zoom * camera_zoom
+    }
+
     /// Runs a camera action on the active workspace's dock tree.
     pub fn camera_action(&mut self, f: impl FnOnce(&mut super::dock::DockSpace<W>)) {
         if let Some(ws) = self.active_workspace_mut() {

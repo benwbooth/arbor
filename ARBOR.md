@@ -67,6 +67,9 @@ Desktop does not move.
 - While zoomed, docked windows take no input: a click activates and starts
   a move (drag still docks), a double-click frames the window. Dividers
   still drag.
+- While zoomed, a docked window being dragged and closing windows are
+  drawn at the camera's zoom; framing never shows past the canvas edge
+  (where the canvas is larger than the view).
 - Leaves rendered below a size threshold become an app-icon tile; a whole
   subtree below threshold becomes one tile showing its split lines.
 

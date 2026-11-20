@@ -1281,13 +1281,14 @@ fn camera_show_all_frame_and_history() {
     assert_eq!(*win.id(), 1);
     assert!(matches!(hit, HitType::Activate { .. }));
 
-    // Framing a window shows it at actual size (it fits), centered in the working area.
+    // Framing a window shows it at actual size (it fits), centered in the working area as far
+    // as the canvas allows: window 1 is at the left edge.
     s.camera_frame_window(Some(&1));
     s.advance_animations();
     assert_eq!(s.camera_view().zoom, 1.);
     assert_eq!(active(&s), 1);
     let r1 = view_rect_of(&s, 1);
-    assert!((r1.loc.x + r1.size.w / 2. - 640.).abs() <= 1., "{r1:?}");
+    assert_eq!(r1.loc.x, 16.);
 
     // Back goes to show-all, back again to following, forward returns.
     s.camera_back();
@@ -1536,4 +1537,20 @@ fn pinch_settles() {
     s.camera_pinch_end();
     s.advance_animations();
     assert_eq!(s.camera_view().zoom, 1.);
+}
+
+#[test]
+fn framing_stays_within_the_canvas() {
+    let mut s = camera_space();
+    add(&mut s, 1);
+    add(&mut s, 2);
+    add(&mut s, 3);
+    // The canvas is 1472 + 2 * 16 wide; window 3 is at its right edge.
+    s.camera_frame_window(Some(&3));
+    s.advance_animations();
+    let cam = s.camera_view();
+    assert_eq!(cam.zoom, 1.);
+    let r3 = s.window_rect(&3).unwrap();
+    // Not centered past the edge: the canvas edge (plus the outer gap) is at the screen edge.
+    assert_eq!(cam.to_view(r3.loc).x + r3.size.w + 16., 1280.);
 }

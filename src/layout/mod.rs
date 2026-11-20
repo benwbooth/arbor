@@ -2316,8 +2316,9 @@ impl<W: LayoutElement> Layout<W> {
     ) -> Option<(&W, HitType)> {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.output == *output {
-                if self.overview_progress.is_some() {
-                    let zoom = self.overview_zoom();
+                // arbor: also scaled when dragged over a zoomed camera.
+                let zoom = self.interactive_move_zoom();
+                if self.overview_progress.is_some() || zoom != 1. {
                     let tile_pos = move_.tile_render_location(zoom);
                     let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
                     // During the overview animation, we cannot do input hits because we cannot
@@ -4849,7 +4850,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.overview_zoom();
+        // arbor: docked windows dragged over a zoomed camera are drawn at its zoom.
+        let zoom = self.interactive_move_zoom();
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
 
