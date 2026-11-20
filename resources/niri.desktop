@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Niri
-Comment=A scrollable-tiling Wayland compositor
+Name=arbor
+Comment=niri with a docking layout (arbor)
 Exec=niri-session
 Type=Application
 DesktopNames=niri
