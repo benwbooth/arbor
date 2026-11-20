@@ -753,6 +753,7 @@ mod tests {
                     bottom-left
                     bottom-right
                 }
+                color-profile "edid"
             }
 
             output "eDP-2" {
@@ -1196,6 +1197,7 @@ mod tests {
                             },
                         ),
                         layout: None,
+                        color_profile: Edid,
                     },
                     Output {
                         off: false,
@@ -1222,6 +1224,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        color_profile: Srgb,
                     },
                     Output {
                         off: false,
@@ -1251,6 +1254,7 @@ mod tests {
                         backdrop_color: None,
                         hot_corners: None,
                         layout: None,
+                        color_profile: Srgb,
                     },
                 ],
             ),

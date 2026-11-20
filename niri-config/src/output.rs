@@ -76,6 +76,9 @@ pub struct Output {
     pub hot_corners: Option<HotCorners>,
     #[knuffel(child)]
     pub layout: Option<LayoutPart>,
+    /// arbor: how sRGB content is mapped to the panel's colour gamut.
+    #[knuffel(child, unwrap(argument, str), default)]
+    pub color_profile: ColorProfile,
 }
 
 impl Output {
@@ -108,6 +111,32 @@ impl Default for Output {
             backdrop_color: None,
             hot_corners: None,
             layout: None,
+            color_profile: ColorProfile::default(),
+        }
+    }
+}
+
+/// arbor: colour profile used to map composited sRGB content to the panel.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ColorProfile {
+    /// No gamut mapping: sRGB values are sent to the panel as-is (niri's behaviour).
+    #[default]
+    Srgb,
+    /// Map sRGB to the panel's native primaries read from its EDID, using the KMS colour
+    /// pipeline (DEGAMMA_LUT, CTM, GAMMA_LUT).
+    Edid,
+}
+
+impl FromStr for ColorProfile {
+    type Err = miette::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "srgb" => Ok(Self::Srgb),
+            "edid" => Ok(Self::Edid),
+            _ => Err(miette::miette!(
+                r#"invalid color profile, can be "srgb" or "edid""#
+            )),
         }
     }
 }
