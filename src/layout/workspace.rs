@@ -644,7 +644,9 @@ impl<W: LayoutElement> Workspace<W> {
                 }
             }
             WorkspaceAddWindowTarget::NextTo(next_to) => {
-                let activate = activate.map_smart(|| self.active_window().unwrap().id() == next_to);
+                // arbor: with everything minimized there is no active window.
+                let activate = activate
+                    .map_smart(|| self.active_window().is_some_and(|win| win.id() == next_to));
 
                 let floating_has_window = self.floating.has_window(next_to);
 
@@ -1601,7 +1603,11 @@ impl<W: LayoutElement> Workspace<W> {
 
         let floating = self.floating.tiles_with_render_positions();
         let visible = self.is_floating_visible();
-        let floating = floating.map(move |(tile, pos)| (tile, pos, visible));
+        // arbor: minimized floating windows are hidden.
+        let floating = floating.map(move |(tile, pos)| {
+            let visible = visible && !self.floating.is_minimized(tile.window().id());
+            (tile, pos, visible)
+        });
 
         floating.chain(scrolling)
     }
@@ -1771,6 +1777,7 @@ impl<W: LayoutElement> Workspace<W> {
             if let Some(rv) = self
                 .floating
                 .tiles_with_render_positions()
+                .filter(|(tile, _)| !self.floating.is_minimized(tile.window().id()))
                 .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
             {
                 return Some(rv);
@@ -1880,6 +1887,7 @@ impl<W: LayoutElement> Workspace<W> {
             && self
                 .floating
                 .tiles_with_render_positions()
+                .filter(|(tile, _)| !self.floating.is_minimized(tile.window().id()))
                 .any(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos).is_some())
         {
             return None;

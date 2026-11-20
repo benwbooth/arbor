@@ -819,7 +819,7 @@ fn minimize_everything() {
     s.verify_invariants();
     assert!(s.is_empty());
     assert!(s.active_window().is_none());
-    assert_eq!(s.last_minimized_window(), Some(&2));
+    assert_eq!(s.last_minimized_window().map(|(_, id)| *id), Some(2));
 
     // A new window docks with the minimized ones still in the tree.
     add(&mut s, 3);
@@ -828,7 +828,7 @@ fn minimize_everything() {
 
     assert!(s.restore_window(&2));
     s.verify_invariants();
-    assert_eq!(s.last_minimized_window(), Some(&1));
+    assert_eq!(s.last_minimized_window().map(|(_, id)| *id), Some(1));
 }
 
 #[test]
@@ -849,9 +849,26 @@ fn minimize_and_restore_through_layout() {
     // Nothing docked is shown: the Desktop gets focus.
     assert_eq!(ws.active_window().map(|w| *w.id()), Some(3));
 
-    // Floating windows can't be minimized yet.
+    // Floating windows minimize too, keeping their position.
+    let pos = |layout: &Layout<TestWindow>| {
+        let ws = layout.active_workspace().unwrap();
+        ws.tiles_with_render_positions()
+            .find(|(t, _, _)| *t.window().id() == 3)
+            .map(|(_, pos, visible)| (pos, visible))
+            .unwrap()
+    };
+    let (pos3, _) = pos(&layout);
     check_ops_on_layout(&mut layout, [Op::MinimizeWindow { id: Some(3) }]);
+    assert!(layout.is_minimized(&3));
+    assert!(!pos(&layout).1);
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.active_window().is_none());
+    // The floating window was minimized last, so it is restored first.
+    check_ops_on_layout(&mut layout, [Op::RestoreWindow { id: None }]);
     assert!(!layout.is_minimized(&3));
+    assert_eq!(pos(&layout), (pos3, true));
+    let ws = layout.active_workspace().unwrap();
+    assert_eq!(ws.active_window().map(|w| *w.id()), Some(3));
 
     check_ops_on_layout(&mut layout, [Op::RestoreWindow { id: None }]);
     let ws = layout.active_workspace().unwrap();

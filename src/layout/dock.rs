@@ -63,6 +63,11 @@ static LEAF_ID_COUNTER: IdCounter = IdCounter::new();
 /// Orders minimizations, so that restoring without a target restores the most recent one.
 static MINIMIZE_COUNTER: IdCounter = IdCounter::new();
 
+/// Next minimize order number, shared with minimized floating windows.
+pub(super) fn next_minimize_seq() -> u64 {
+    MINIMIZE_COUNTER.next()
+}
+
 /// Stable identity of a leaf in the dock tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LeafId(u64);
@@ -1985,7 +1990,7 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn add_tile_docked(&mut self, tile: Tile<W>, dock: DockInsert, activate: bool) {
         let leaf = DockLeaf::new(tile, self.view_size, self.scale, self.options.clone());
         let id = self.insert_leaf(leaf, dock);
-        if activate || self.active.is_none() {
+        if activate || self.active_leaf().is_none() {
             self.activate_leaf(id);
         }
         self.relayout(true, true, None);
@@ -2061,7 +2066,7 @@ impl<W: LayoutElement> DockSpace<W> {
             let mut leaf = DockLeaf::new(tile, self.view_size, self.scale, self.options.clone());
             leaf.is_pending_maximized |= is_pending_maximized;
             let id = self.insert_leaf(leaf, dock);
-            if (activate && prev.is_none()) || self.active.is_none() {
+            if (activate && prev.is_none()) || self.active_leaf().is_none() {
                 self.activate_leaf(id);
             }
             prev = Some(id);
@@ -2266,13 +2271,13 @@ impl<W: LayoutElement> DockSpace<W> {
         true
     }
 
-    /// The most recently minimized window.
-    pub fn last_minimized_window(&self) -> Option<&W::Id> {
+    /// The most recently minimized window and its minimize order.
+    pub fn last_minimized_window(&self) -> Option<(u64, &W::Id)> {
         self.leaves()
             .into_iter()
             .filter_map(|leaf| leaf.minimized.map(|seq| (seq, leaf)))
             .max_by_key(|(seq, _)| *seq)
-            .map(|(_, leaf)| leaf.tile().window().id())
+            .map(|(seq, leaf)| (seq, leaf.tile().window().id()))
     }
 
     pub fn start_close_animation_for_window(

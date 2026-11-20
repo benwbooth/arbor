@@ -69,7 +69,8 @@ zoom) maps canvas to screen, reusing the overview's scaled rendering path.
      actions (IPC too), xdg_toplevel set_minimized; the leaf stays in the
      tree with zero size, siblings take its space; focusing the window
      (foreign-toplevel activate, `focus-window`) restores it in place.
-     IPC Window has `is_minimized`. Floating windows can't minimize yet.
+     IPC Window has `is_minimized`. Floating windows minimize too: hidden,
+     restored at the same position and size.
    - [x] inserting splits the target's share only; removing gives the share
      back to the adjacent sibling(s) proportionally
 2. Camera: canvas larger than screen, zoom/pan/frame, icon tiles, history.
