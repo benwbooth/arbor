@@ -314,7 +314,8 @@ bottom, top and overlay layers (not the background layer).
 - `params` (all optional) override the `glass {}` defaults: `variant`
   (`Regular`/`Clear`), `strength` (0..1, scales everything), `refraction`
   (0..1), `bezel` (px), `dispersion` (0..1), `blur_radius` (px), `saturation`,
-  `rim` (0..1), `tint` (straight RGBA 0..1).
+  `rim` (0..1), `tint` (straight RGBA 0..1), `opacity` (0..1, for fading the
+  glass with the client's content).
 - At most 64 shapes per list; replies `{"Ok":"Handled"}`. A compositor
   without glass replies an error (unknown variant), which shells can use to
   detect the feature.
