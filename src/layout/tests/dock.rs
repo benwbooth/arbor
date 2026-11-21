@@ -1566,3 +1566,29 @@ fn toggle_floating_of_minimized_window_without_outputs() {
     ];
     check_ops(ops);
 }
+
+#[test]
+fn fullscreen_of_minimized_window_restores_it() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow { id: None },
+        Op::FullscreenWindow(3),
+    ];
+    check_ops(ops);
+}
+
+#[test]
+fn maximize_of_minimized_window_restores_it() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow { id: None },
+        Op::MaximizeWindowToEdges { id: Some(3) },
+    ];
+    check_ops(ops);
+}

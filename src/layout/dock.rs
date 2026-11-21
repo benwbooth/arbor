@@ -3208,6 +3208,10 @@ impl<W: LayoutElement> DockSpace<W> {
             }
             self.switch_tab(window);
         }
+        // Going fullscreen or maximized shows a minimized window first.
+        if is_fullscreen {
+            self.restore_window(window);
+        }
         let leaf = self.leaf_by_window(window).unwrap();
         if leaf.is_pending_fullscreen == is_fullscreen {
             return false;
@@ -3237,6 +3241,10 @@ impl<W: LayoutElement> DockSpace<W> {
                 return false;
             }
             self.switch_tab(window);
+        }
+        // Going fullscreen or maximized shows a minimized window first.
+        if maximize {
+            self.restore_window(window);
         }
         let leaf = self.leaf_by_window(window).unwrap();
         if leaf.is_pending_maximized == maximize {
