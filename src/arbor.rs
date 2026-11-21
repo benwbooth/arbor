@@ -152,6 +152,7 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
 use crate::protocols::toplevel_export::ToplevelExportManagerState;
+use crate::clipboard_persist::{ClipboardPersist, SelectionData};
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
@@ -285,6 +286,7 @@ pub struct Arbor {
     pub ext_workspace_state: ExtWorkspaceManagerState,
     pub screencopy_state: ScreencopyManagerState,
     pub toplevel_export_state: ToplevelExportManagerState,
+    pub clipboard_persist: ClipboardPersist,
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
@@ -830,6 +832,7 @@ impl State {
         self.refresh_pointer_contents();
         foreign_toplevel::refresh(self);
         ext_workspace::refresh(self);
+        self.clipboard_persist_check_owners();
 
         #[cfg(feature = "xdp-gnome-screencast")]
         self.arbor.refresh_mapped_cast_outputs();
@@ -2559,6 +2562,7 @@ impl Arbor {
             output_management_state,
             screencopy_state,
             toplevel_export_state,
+            clipboard_persist: ClipboardPersist::default(),
             viewporter_state,
             background_effect_state,
             xdg_foreign_state,
@@ -5813,7 +5817,7 @@ impl Arbor {
                         &state.arbor.display_handle,
                         &state.arbor.seat,
                         vec![String::from("image/png")],
-                        buf.clone(),
+                        SelectionData::single("image/png", buf.clone()),
                     );
                 }
                 calloop::channel::Event::Closed => (),

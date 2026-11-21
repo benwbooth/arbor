@@ -4,11 +4,7 @@ mod layer_shell;
 mod toplevel_export;
 mod xdg_shell;
 
-use std::fs::File;
-use std::io::Write;
 use std::os::fd::OwnedFd;
-use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
@@ -19,7 +15,6 @@ use smithay::input::dnd::{self, DnDGrab, DndGrabHandler, DndTarget};
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, Focus, PointerHandle};
 use smithay::input::{keyboard, Seat, SeatHandler, SeatState};
 use smithay::output::Output;
-use smithay::reexports::rustix::fs::{fcntl_setfl, OFlags};
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -54,7 +49,7 @@ use smithay::wayland::selection::primary_selection::{
 use smithay::wayland::selection::wlr_data_control::{
     DataControlHandler as WlrDataControlHandler, DataControlState as WlrDataControlState,
 };
-use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
@@ -74,6 +69,7 @@ use smithay::{
 };
 
 use crate::arbor::{DndIcon, NewClient, State};
+use crate::clipboard_persist::{write_selection, SelectionData};
 pub use crate::handlers::xdg_shell::KdeDecorationsModeState;
 use crate::layout::workspace::WorkspaceId;
 use crate::layout::ActivateWindow;
@@ -285,28 +281,30 @@ delegate_keyboard_shortcuts_inhibit!(State);
 delegate_virtual_keyboard_manager!(State);
 
 impl SelectionHandler for State {
-    type SelectionUserData = Arc<[u8]>;
+    type SelectionUserData = SelectionData;
+
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        self.clipboard_persist_on_new_selection(ty, source.map(|source| source.mime_types()));
+    }
 
     fn send_selection(
         &mut self,
         _ty: SelectionTarget,
-        _mime_type: String,
+        mime_type: String,
         fd: OwnedFd,
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
         let _span = tracy_client::span!("send_selection");
 
-        let buf = user_data.clone();
-        thread::spawn(move || {
-            // Clear O_NONBLOCK, otherwise File::write_all() will stop halfway.
-            if let Err(err) = fcntl_setfl(&fd, OFlags::empty()) {
-                warn!("error clearing flags on selection target fd: {err:?}");
-            }
-            if let Err(err) = File::from(fd).write_all(&buf) {
-                warn!("error writing selection: {err:?}");
-            }
-        });
+        if let Some(data) = user_data.get(&mime_type) {
+            write_selection(fd, data);
+        }
     }
 }
 

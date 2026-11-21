@@ -1,5 +1,5 @@
 use crate::appearance::{Color, WorkspaceShadow, WorkspaceShadowPart, DEFAULT_BACKDROP_COLOR};
-use crate::utils::{Flag, MergeWith};
+use crate::utils::{Flag, FloatOrInt, MergeWith};
 
 #[derive(knuffel::Decode, Debug, Clone, PartialEq, Eq)]
 pub struct SpawnAtStartup {
@@ -100,20 +100,123 @@ impl MergeWith<ConfigNotificationPart> for ConfigNotification {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Clipboard {
     pub disable_primary: bool,
+    /// Keep the clipboard (and primary selection) after the app that copied it exits.
+    pub persist: bool,
+    /// Cap on the data kept for `persist`, all formats of one selection together.
+    pub max_size_mb: u32,
+}
+
+impl Default for Clipboard {
+    fn default() -> Self {
+        Self {
+            disable_primary: false,
+            persist: true,
+            max_size_mb: 32,
+        }
+    }
 }
 
 #[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ClipboardPart {
     #[knuffel(child)]
     pub disable_primary: Option<Flag>,
+    #[knuffel(child)]
+    pub persist: Option<Flag>,
+    #[knuffel(child, unwrap(argument))]
+    pub max_size_mb: Option<u32>,
 }
 
 impl MergeWith<ClipboardPart> for Clipboard {
     fn merge_with(&mut self, part: &ClipboardPart) {
-        merge!((self, part), disable_primary);
+        merge!((self, part), disable_primary, persist);
+        merge_clone!((self, part), max_size_mb);
+    }
+}
+
+/// Plasma-style session restore: the running apps are saved on quit and relaunched at the next
+/// start, each put back into its workspace and dock slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRestore {
+    pub off: bool,
+    /// App ids (exact) never saved or relaunched.
+    pub exclude_app_ids: Vec<String>,
+}
+
+impl Default for SessionRestore {
+    fn default() -> Self {
+        Self {
+            off: false,
+            exclude_app_ids: Vec::new(),
+        }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, PartialEq, Eq)]
+pub struct SessionRestorePart {
+    #[knuffel(child)]
+    pub off: bool,
+    #[knuffel(child)]
+    pub on: bool,
+    #[knuffel(child, unwrap(arguments))]
+    pub exclude_app_ids: Option<Vec<String>>,
+}
+
+impl MergeWith<SessionRestorePart> for SessionRestore {
+    fn merge_with(&mut self, part: &SessionRestorePart) {
+        if part.off {
+            self.off = true;
+        }
+        if part.on {
+            self.off = false;
+        }
+        merge_clone!((self, part), exclude_app_ids);
+    }
+}
+
+/// Accessibility: screen zoom (magnifier) and reduced motion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Accessibility {
+    /// Factor applied per `zoom-in` / `zoom-out` step.
+    pub zoom_step: f64,
+    /// Largest zoom level.
+    pub zoom_max: f64,
+    /// Turns animations off (like `animations { off; }`), for people sensitive to motion.
+    pub reduce_motion: bool,
+}
+
+impl Default for Accessibility {
+    fn default() -> Self {
+        Self {
+            zoom_step: 1.25,
+            zoom_max: 16.,
+            reduce_motion: false,
+        }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct AccessibilityPart {
+    #[knuffel(child, unwrap(argument))]
+    pub zoom_step: Option<FloatOrInt<1, 100>>,
+    #[knuffel(child, unwrap(argument))]
+    pub zoom_max: Option<FloatOrInt<1, 100>>,
+    #[knuffel(child)]
+    pub reduce_motion: Option<Flag>,
+}
+
+impl MergeWith<AccessibilityPart> for Accessibility {
+    fn merge_with(&mut self, part: &AccessibilityPart) {
+        if let Some(step) = part.zoom_step {
+            // A step of exactly 1 would never zoom.
+            self.zoom_step = step.0.max(1.01);
+        }
+        if let Some(max) = part.zoom_max {
+            self.zoom_max = max.0;
+        }
+        merge!((self, part), reduce_motion);
     }
 }
 

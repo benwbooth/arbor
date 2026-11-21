@@ -83,6 +83,8 @@ pub struct Config {
     pub cursor: Cursor,
     pub screenshot_path: ScreenshotPath,
     pub clipboard: Clipboard,
+    pub session_restore: SessionRestore,
+    pub accessibility: Accessibility,
     pub hotkey_overlay: HotkeyOverlay,
     pub config_notification: ConfigNotification,
     pub animations: Animations,
@@ -201,6 +203,8 @@ where
                 "input" => m_merge!(input),
                 "cursor" => m_merge!(cursor),
                 "clipboard" => m_merge!(clipboard),
+                "session-restore" => m_merge!(session_restore),
+                "accessibility" => m_merge!(accessibility),
                 "hotkey-overlay" => m_merge!(hotkey_overlay),
                 "config-notification" => m_merge!(config_notification),
                 "animations" => m_merge!(animations),
@@ -1559,6 +1563,17 @@ mod tests {
             ),
             clipboard: Clipboard {
                 disable_primary: true,
+                persist: true,
+                max_size_mb: 32,
+            },
+            session_restore: SessionRestore {
+                off: false,
+                exclude_app_ids: [],
+            },
+            accessibility: Accessibility {
+                zoom_step: 1.25,
+                zoom_max: 16.0,
+                reduce_motion: false,
             },
             hotkey_overlay: HotkeyOverlay {
                 skip_at_startup: true,

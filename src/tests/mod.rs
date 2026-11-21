@@ -9,6 +9,7 @@ mod floating;
 mod glass;
 mod kde_appmenu;
 mod layer_shell;
+mod clipboard_persist;
 mod remove_output;
 mod toplevel_export;
 mod window_opening;

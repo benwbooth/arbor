@@ -7,6 +7,7 @@ pub mod animation;
 pub mod arbor;
 pub mod backend;
 pub mod cli;
+pub mod clipboard_persist;
 pub mod cursor;
 #[cfg(feature = "dbus")]
 pub mod dbus;
