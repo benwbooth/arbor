@@ -38,11 +38,23 @@
           systemd,
           wayland,
           installShellFiles,
+          rsync,
           withDbus ? true,
           withSystemd ? true,
           withScreencastSupport ? true,
         }:
 
+        let
+          cargoDeps = rustPlatform.importCargoLock {
+            # allowBuiltinFetchGit: smithay is a git dependency.
+            allowBuiltinFetchGit = true;
+            lockFile = ./Cargo.lock;
+          };
+          features =
+            lib.optional withDbus "dbus"
+            ++ lib.optional withScreencastSupport "xdp-gnome-screencast"
+            ++ lib.optional withSystemd "systemd";
+        in
         rustPlatform.buildRustPackage {
           pname = "arbor";
           version = revision;
@@ -65,11 +77,7 @@
               --replace-fail 'ExecStart=arbor' "ExecStart=$out/bin/arbor"
           '';
 
-          cargoLock = {
-            # NOTE: This is only used for Git dependencies
-            allowBuiltinFetchGit = true;
-            lockFile = ./Cargo.lock;
-          };
+          inherit cargoDeps;
 
           strictDeps = true;
 
@@ -77,6 +85,7 @@
             rustPlatform.bindgenHook
             pkg-config
             installShellFiles
+            rsync
           ];
 
           buildInputs =
@@ -97,11 +106,52 @@
             # Also includes libudev
             ++ lib.optional withSystemd systemd;
 
-          buildFeatures =
-            lib.optional withDbus "dbus"
-            ++ lib.optional withScreencastSupport "xdp-gnome-screencast"
-            ++ lib.optional withSystemd "systemd";
+          buildFeatures = features;
           buildNoDefaultFeatures = true;
+
+          # Build in a persistent target directory (/var/tmp/cargo-nix/arbor,
+          # exposed to the sandbox by Ben's system flake through
+          # extra-sandbox-paths) so a new revision only recompiles what
+          # changed instead of all of arbor and its dependencies. Without
+          # that directory it builds in a throwaway one, as before.
+          buildPhase = ''
+            runHook preBuild
+            workDir=$TMPDIR/cargo-nix
+            if [ -w /var/tmp/cargo-nix ]; then
+              workDir=/var/tmp/cargo-nix/arbor
+            fi
+            if [ "$cargoBuildType" = debug ]; then profile=dev; else profile=$cargoBuildType; fi
+            # The store vendor copy only changes with Cargo.lock; the per-build
+            # copy gets new mtimes, which would rebuild every dependency.
+            sed -i "s|^directory = .*|directory = \"${cargoDeps}\"|" "$NIX_BUILD_TOP/.cargo/config.toml"
+            (
+              # Writable by everyone: each build may run as another nixbld
+              # user. Only in this subshell, so the outputs stay normal.
+              umask 000
+              mkdir -p "$workDir/src" "$workDir/target"
+              touch "$workDir"
+              # Only rewrite changed files; cargo's freshness check uses mtimes.
+              rsync -rc --no-times --no-perms --chmod=a+rwX --delete ./ "$workDir/src/"
+              # The linker wrapper rejects output paths outside the build dir.
+              export NIX_ENFORCE_PURITY=0
+              cd "$workDir/src"
+              CARGO_HOME="$NIX_BUILD_TOP/.cargo" CARGO_TARGET_DIR="$workDir/target" \
+                cargo build --profile "$profile" --bin arbor --offline --locked \
+                  -j "$NIX_BUILD_CORES" --no-default-features \
+                  --features "${lib.concatStringsSep "," features}"
+              find "$workDir/target" -mindepth 1 -user "$(id -u)" ! -perm -o+w \
+                -exec chmod a+rwX {} + 2>/dev/null || true
+            )
+            mkdir -p target
+            cp "$workDir/target/$cargoBuildType/arbor" target/arbor
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 target/arbor -t $out/bin
+            runHook postInstall
+          '';
 
           # ever since this commit:
           # https://github.com/niri-wm/niri/commit/771ea1e81557ffe7af9cbdbec161601575b64d81
