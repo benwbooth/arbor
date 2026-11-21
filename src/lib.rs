@@ -14,6 +14,7 @@ pub mod dbus;
 #[cfg(feature = "dbus")]
 pub mod eis_server;
 pub mod frame_clock;
+pub mod frame_stats;
 pub mod glass;
 pub mod global_shortcuts;
 pub mod handlers;

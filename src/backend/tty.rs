@@ -1819,6 +1819,13 @@ impl Tty {
         }
         output_state.last_drm_sequence = Some(meta.sequence);
 
+        if crate::frame_stats::enabled() {
+            crate::frame_stats::presented(
+                &surface.name.connector,
+                output_state.frame_clock.refresh_interval(),
+                output_state.frame_clock.vrr(),
+            );
+        }
         output_state.frame_clock.presented(presentation_time);
 
         if redraw_needed || output_state.unfinished_animations_remain {
@@ -1923,6 +1930,8 @@ impl Tty {
         };
 
         // Render the elements.
+        let stats_start = crate::frame_stats::enabled()
+            .then(|| (std::time::Instant::now(), surface.name.connector.clone()));
         let ctx = RenderCtx {
             renderer: &mut renderer,
             target: RenderTarget::Output,
@@ -1972,6 +1981,14 @@ impl Tty {
         let drm_compositor = &mut surface.compositor;
         match drm_compositor.render_frame::<_, _>(&mut renderer, &elements, [0.; 4], flags) {
             Ok(res) => {
+                if let Some((start, name)) = &stats_start {
+                    crate::frame_stats::rendered(
+                        name,
+                        start.elapsed(),
+                        elements.len(),
+                        res.is_empty,
+                    );
+                }
                 let needs_sync = res.needs_sync()
                     || self
                         .config

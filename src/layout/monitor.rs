@@ -205,6 +205,7 @@ arbor_render_elements! {
         SolidColor = SolidColorRenderElement,
         ExposeTile = super::tile::TileRenderElement<R>,
         ExposeTexture = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
+        ExposeOutline = crate::render_helpers::border::BorderRenderElement,
     }
 }
 

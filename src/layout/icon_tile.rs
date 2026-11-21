@@ -49,6 +49,13 @@ pub fn set_redraw_ping(ping: calloop::ping::Ping) {
     let _ = REDRAW_PING.set(ping);
 }
 
+/// Asks the compositor to redraw (from any thread), e.g. when a background drawing finished.
+pub fn request_redraw() {
+    if let Some(ping) = REDRAW_PING.get() {
+        ping.ping();
+    }
+}
+
 /// Size icons are rasterized at; tiles scale them down.
 const ICON_SIZE: u32 = 256;
 

@@ -9,10 +9,12 @@
 //! thumbnails along the top, and the wallpaper dimmed behind.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::hash::Hash;
+use std::sync::{Arc, Mutex};
 
+use arbor_config::{Color, CornerRadius, GradientInterpolation};
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::{Alignment, EllipsizeMode, FontDescription, Weight};
 use smithay::backend::allocator::Fourcc;
@@ -29,6 +31,7 @@ use crate::layout::icon_tile::{app_color, app_icon, app_letter, paint_icon, roun
 use crate::layout::tile::Tile;
 use crate::layout::workspace::Workspace;
 use crate::layout::LayoutElement;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::memory::MemoryBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::ArborRenderer;
@@ -83,11 +86,6 @@ enum TexKey {
         width: i32,
         scale: u64,
     },
-    Outline {
-        size: (i32, i32),
-        scale: u64,
-        hovered: bool,
-    },
     Close {
         scale: u64,
     },
@@ -120,6 +118,13 @@ pub(super) struct ExposeUi<Id> {
     pointer: Option<Point<f64, Logical>>,
     drag: Option<ExposeDrag<Id>>,
     textures: RefCell<HashMap<TexKey, CachedTex>>,
+    /// Textures being rasterized on a background thread.
+    in_flight: RefCell<HashSet<TexKey>>,
+    /// Rasterized textures handed back by those threads, taken at the next render.
+    drawn: Arc<Mutex<Vec<(TexKey, Option<MemoryBuffer>, std::time::Duration)>>>,
+    /// Outline elements (GPU-drawn, so they resize with the animation for free), reused across
+    /// frames to keep their ids stable for damage tracking.
+    outlines: RefCell<Vec<BorderRenderElement>>,
     dim: RefCell<SolidColorBuffer>,
 }
 
@@ -129,6 +134,9 @@ impl<Id> Default for ExposeUi<Id> {
             pointer: None,
             drag: None,
             textures: RefCell::new(HashMap::new()),
+            in_flight: RefCell::new(HashSet::new()),
+            drawn: Arc::new(Mutex::new(Vec::new())),
+            outlines: RefCell::new(Vec::new()),
             dim: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
         }
     }
@@ -400,8 +408,25 @@ impl<W: LayoutElement> Monitor<W> {
         let fade = (p.clamp(0., 1.) * p.clamp(0., 1.)) as f32;
         let settled = p > 0.99;
 
-        for tex in self.expose.textures.borrow_mut().values_mut() {
-            tex.used = false;
+        {
+            let drawn = std::mem::take(&mut *self.expose.drawn.lock().unwrap());
+            let mut textures = self.expose.textures.borrow_mut();
+            let mut in_flight = self.expose.in_flight.borrow_mut();
+            for (key, buffer, elapsed) in drawn {
+                crate::frame_stats::overview_drawing(elapsed);
+                in_flight.remove(&key);
+                textures.insert(
+                    key,
+                    CachedTex {
+                        buffer,
+                        texture: None,
+                        used: false,
+                    },
+                );
+            }
+            for tex in textures.values_mut() {
+                tex.used = false;
+            }
         }
 
         let drag = self.expose.drag.as_ref();
@@ -419,6 +444,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let mut tile_elems: Vec<(Point<f64, Logical>, f64, &Tile<W>)> = Vec::new();
         let mut decorations: Vec<(TexKey, Point<f64, Logical>, f32)> = Vec::new();
+        let mut outlines: Vec<(Rect, bool, f32)> = Vec::new();
 
         let active_ws = self.active_workspace_idx;
         let mut dragged: Option<(Point<f64, Logical>, f64, &Tile<W>)> = None;
@@ -469,18 +495,11 @@ impl<W: LayoutElement> Monitor<W> {
                 let is_focused =
                     ws.id() == self.workspaces[active_ws].id() && focused.as_ref() == Some(id);
                 if is_hovered || is_focused {
-                    let outer: Size<f64, Logical> =
-                        Size::from((size.w + OUTLINE_PAD * 2., size.h + OUTLINE_PAD * 2.));
-                    let key = TexKey::Outline {
-                        size: (
-                            to_physical_precise_round::<i32>(scale, outer.w),
-                            to_physical_precise_round::<i32>(scale, outer.h),
-                        ),
-                        scale: scale_key(scale),
-                        hovered: is_hovered,
-                    };
-                    let loc = rect.loc - Point::from((OUTLINE_PAD, OUTLINE_PAD));
-                    decorations.push((key, loc, alpha));
+                    let outer = Rect::new(
+                        rect.loc - Point::from((OUTLINE_PAD, OUTLINE_PAD)),
+                        Size::from((size.w + OUTLINE_PAD * 2., size.h + OUTLINE_PAD * 2.)),
+                    );
+                    outlines.push((outer, is_hovered, alpha));
                 }
                 if is_hovered && settled {
                     let c = close_center(rect);
@@ -501,15 +520,16 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         // Close buttons, outlines and labels go above the windows.
-        for (key, loc, a) in decorations
-            .iter()
-            .filter(|(k, _, _)| matches!(k, TexKey::Close { .. }))
-            .chain(
-                decorations
-                    .iter()
-                    .filter(|(k, _, _)| !matches!(k, TexKey::Close { .. })),
-            )
-        {
+        let is_close = |k: &TexKey| matches!(k, TexKey::Close { .. });
+        for (key, loc, a) in decorations.iter().filter(|(k, _, _)| is_close(k)) {
+            if let Some(elem) = self.expose_texture(ctx.renderer, key.clone(), *loc, *a) {
+                push(tex_elem(elem));
+            }
+        }
+        if BorderRenderElement::has_shader(ctx.renderer) {
+            self.push_outlines(&outlines, push);
+        }
+        for (key, loc, a) in decorations.iter().filter(|(k, _, _)| !is_close(k)) {
             if let Some(elem) = self.expose_texture(ctx.renderer, key.clone(), *loc, *a) {
                 push(tex_elem(elem));
             }
@@ -555,6 +575,53 @@ impl<W: LayoutElement> Monitor<W> {
         ));
 
         self.expose.textures.borrow_mut().retain(|_, tex| tex.used);
+    }
+
+    /// Rounded outlines drawn by the border shader: no CPU rasterizing, whatever their size.
+    fn push_outlines<R: ArborRenderer>(
+        &self,
+        outlines: &[(Rect, bool, f32)],
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let scale = self.scale.fractional_scale();
+        let mut pool = self.expose.outlines.borrow_mut();
+        if pool.len() < outlines.len() {
+            pool.resize_with(outlines.len(), BorderRenderElement::empty);
+        }
+        for (border, (rect, hovered, alpha)) in pool.iter_mut().zip(outlines) {
+            let loc = rect.loc.to_physical_precise_round(scale).to_logical(scale);
+            let size = rect.size.to_physical_precise_round(scale).to_logical(scale);
+            let area = Rectangle::from_size(size);
+            let (width, color) = if *hovered {
+                let (r, g, b) = ACCENT;
+                (
+                    OUTLINE_WIDTH,
+                    Color::new_unpremul(r as f32, g as f32, b as f32, 1.),
+                )
+            } else {
+                (2., Color::new_unpremul(1., 1., 1., 0.5))
+            };
+            border.update(
+                size,
+                area,
+                GradientInterpolation::default(),
+                color,
+                color,
+                0.,
+                area,
+                width as f32,
+                CornerRadius::from(12.),
+                scale as f32,
+                *alpha,
+            );
+            let elem = MonitorInnerRenderElement::ExposeOutline(border.clone().with_location(loc));
+            let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), 1.);
+            push(RelocateRenderElement::from_element(
+                elem,
+                Point::from((0, 0)),
+                Relocate::Relative,
+            ));
+        }
     }
 
     fn push_expose_tile<R: ArborRenderer>(
@@ -641,20 +708,32 @@ impl<W: LayoutElement> Monitor<W> {
         }
         let scale = self.scale.fractional_scale();
         let mut textures = self.expose.textures.borrow_mut();
-        let tex = textures.entry(key.clone()).or_insert_with(|| {
-            let buffer = match draw(&key, scale) {
-                Ok(buffer) => buffer,
-                Err(err) => {
-                    warn!("error drawing overview element: {err:?}");
-                    None
+        let Some(tex) = textures.get_mut(&key) else {
+            // Rasterize on a background thread so a frame never waits for cairo and pango (a
+            // dozen labels and thumbnails at 5K take tens of ms); it fades in a frame later.
+            if self.expose.in_flight.borrow_mut().insert(key.clone()) {
+                let drawn = self.expose.drawn.clone();
+                let res = std::thread::Builder::new()
+                    .name("arbor-overview-draw".to_owned())
+                    .spawn(move || {
+                        let start = std::time::Instant::now();
+                        let buffer = match draw(&key, scale) {
+                            Ok(buffer) => buffer,
+                            Err(err) => {
+                                warn!("error drawing overview element: {err:?}");
+                                None
+                            }
+                        };
+                        let elapsed = start.elapsed();
+                        drawn.lock().unwrap().push((key, buffer, elapsed));
+                        crate::layout::icon_tile::request_redraw();
+                    });
+                if let Err(err) = res {
+                    warn!("error spawning overview drawing thread: {err:?}");
                 }
-            };
-            CachedTex {
-                buffer,
-                texture: None,
-                used: true,
             }
-        });
+            return None;
+        };
         tex.used = true;
         let buffer = tex.buffer.as_ref()?;
         if tex.texture.is_none() {
@@ -779,31 +858,6 @@ fn draw(key: &TexKey, scale: f64) -> anyhow::Result<Option<MemoryBuffer>> {
             cr.move_to(x0 + icon_side + spacing, (hf - f64::from(th)) / 2.);
             cr.set_source_rgba(1., 1., 1., 0.95);
             pangocairo::functions::show_layout(&cr, &layout);
-            finish(surf, cr, s)?
-        }
-        TexKey::Outline { size, hovered, .. } => {
-            let (w, h) = *size;
-            if w <= 0 || h <= 0 {
-                return Ok(None);
-            }
-            let (surf, cr) = surface(w, h)?;
-            let lw = if *hovered { OUTLINE_WIDTH } else { 2. } * s;
-            rounded_rect(
-                &cr,
-                lw / 2.,
-                lw / 2.,
-                f64::from(w) - lw,
-                f64::from(h) - lw,
-                12. * s,
-            );
-            let (r, g, b) = ACCENT;
-            if *hovered {
-                cr.set_source_rgba(r, g, b, 1.);
-            } else {
-                cr.set_source_rgba(1., 1., 1., 0.5);
-            }
-            cr.set_line_width(lw);
-            cr.stroke()?;
             finish(surf, cr, s)?
         }
         TexKey::Close { .. } => {

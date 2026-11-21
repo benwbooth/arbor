@@ -302,6 +302,9 @@ pub(crate) fn capture_backdrop(
     blur_options: Option<BlurOptions>,
 ) -> Result<(), GlesError> {
     let _span = tracy_client::span!("capture_backdrop");
+    if crate::frame_stats::enabled() {
+        crate::frame_stats::glass_capture(dst.size.w.max(0) as u64 * dst.size.h.max(0) as u64);
+    }
     let location = gpu_span_location!("capture_backdrop");
     frame.with_gpu_span(location, |frame| {
         let output_rect = Rectangle::from_size(frame.output_size());

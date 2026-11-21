@@ -143,6 +143,25 @@ niri's, so shells and binds keep working. Workspaces never zoom out (the
 `overview { zoom }` setting is gone). Touch: tapping a window or empty space works; dragging by touch
 still uses the plain interactive move (full size).
 
+Performance: outlines are drawn by the border shader (any size, no CPU
+work while they resize with the animation), and labels and thumbnails are
+rasterized with cairo on a background thread and fade in a frame later, so
+no frame waits for text layout (at 5K a dozen of them took ~80 ms, a
+visible stall when opening).
+
+## Frame stats
+
+To see why frames are slow on the real display, turn on frame stats:
+`touch $XDG_RUNTIME_DIR/arbor-frame-stats` (remove the file to turn them
+off; checked once a second), or start arbor with `ARBOR_FRAME_STATS=1`.
+Then `journalctl --user -u arbor -f | grep 'frame stats'` shows one line
+per output per second: renders/s, CPU time per frame (building and
+submitting, not GPU time), frames presented/s, the longest gap between
+presented frames and how many came later than 1.5 refresh intervals
+(dropped frames), the refresh interval and VRR state, and the largest
+element count; plus liquid glass captures (count and Mpx) and overview
+texture drawing. When off it costs one boolean check per frame.
+
 ## Camera (milestone 2)
 
 The dock tree is laid out on a *canvas*: the working area, grown where

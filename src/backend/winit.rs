@@ -226,6 +226,7 @@ impl Winit {
         let _span = tracy_client::span!("Winit::render");
 
         // Render the elements.
+        let stats_start = crate::frame_stats::enabled().then(std::time::Instant::now);
         let ctx = RenderCtx {
             renderer: self.backend.renderer(),
             target: RenderTarget::Output,
@@ -251,6 +252,14 @@ impl Winit {
                 .unwrap()
         };
 
+        if let Some(start) = stats_start {
+            crate::frame_stats::rendered(
+                &output.name(),
+                start.elapsed(),
+                elements.len(),
+                res.damage.is_none(),
+            );
+        }
         arbor.update_primary_scanout_output(output, &res.states);
 
         let rv;
@@ -268,6 +277,9 @@ impl Winit {
             }
 
             self.backend.submit(Some(damage)).unwrap();
+            if crate::frame_stats::enabled() {
+                crate::frame_stats::presented(&output.name(), None, false);
+            }
 
             let mut presentation_feedbacks = arbor.take_presentation_feedbacks(output, &res.states);
             presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
