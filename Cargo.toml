@@ -98,6 +98,7 @@ wayland-scanner = "0.31.10"
 wayland-server = "0.31.13"
 xcursor = "0.3.10"
 zbus = { version = "5.13.2", optional = true }
+reis = { version = "0.7.1", features = ["calloop"], optional = true }
 resvg = { version = "0.50.0", default-features = false }
 
 [dependencies.smithay]
@@ -137,7 +138,7 @@ pkg-config = "0.3.33"
 [features]
 default = ["dbus", "systemd", "xdp-gnome-screencast"]
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
-dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
+dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix", "dep:reis"]
 # Enables systemd integration (global environment, apps in transient scopes).
 systemd = ["dbus"]
 # Enables screencasting support through xdg-desktop-portal-gnome.

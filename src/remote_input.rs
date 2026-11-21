@@ -36,6 +36,8 @@ pub enum AbsTarget {
     Output(String),
     /// A window stream: logical coordinates within that window.
     Window(u64),
+    /// Global logical coordinates (EIS regions).
+    Global,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -936,7 +938,11 @@ impl State {
 
     /// Global logical position of (x, y) on `target`.
     fn remote_abs_global(&self, target: &AbsTarget, x: f64, y: f64) -> Option<Point<f64, Logical>> {
+        if *target == AbsTarget::Global {
+            return Some(Point::from((x, y)));
+        }
         let (origin, size): (Point<f64, Logical>, _) = match target {
+            AbsTarget::Global => unreachable!(),
             AbsTarget::Output(name) => {
                 let output = self
                     .arbor

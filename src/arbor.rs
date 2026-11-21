@@ -346,6 +346,8 @@ pub struct Arbor {
     /// Global shortcuts that apps registered through the GlobalShortcuts portal.
     pub global_shortcuts: crate::global_shortcuts::GlobalShortcuts,
     pub remote_input: crate::remote_input::RemoteInputState,
+    #[cfg(feature = "dbus")]
+    pub eis_connections: crate::eis_server::EisConnections,
     /// Button codes of the mouse buttons to suppress.
     pub suppressed_buttons: HashSet<u32>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
@@ -2652,6 +2654,8 @@ impl Arbor {
             suppressed_keys: HashSet::new(),
             global_shortcuts: Default::default(),
             remote_input: Default::default(),
+            #[cfg(feature = "dbus")]
+            eis_connections: Default::default(),
             suppressed_buttons: HashSet::new(),
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),

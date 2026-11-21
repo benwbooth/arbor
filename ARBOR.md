@@ -577,8 +577,12 @@ it directly.)
   keysym no key produces ("—", "é" on a US layout, emoji) is typed through a temporary
   keymap with one spare key, and the original keymap and modifiers come back right after.
   Calls for devices that weren't granted fail. Closing the session releases every key,
-  button and touch it still holds. `ConnectToEIS` is not offered yet; clipboard sharing
-  neither (`clipboard_enabled` is false).
+  button and touch it still holds. `ConnectToEIS` hands out a libei socket served by arbor
+  (`src/eis_server.rs`, sender context): one seat with the allowed capabilities, a keyboard
+  carrying arbor's keymap, relative and absolute pointers (one region per output, global
+  logical coordinates), touchscreen and text (keysyms and UTF-8 are typed like
+  `NotifyKeyboardKeysym`). Deskflow / Input Leap clients and other libportal users need
+  this. Clipboard sharing is not offered yet (`clipboard_enabled` is false).
 - **Remember**: when the app asks for persistence (`persist_mode`), the dialog has a
   "Remember, and don't ask again" checkbox (ticked by default). The choice goes back to the
   frontend as restore data (`("arbor", 1, {output | window-app-id + window-title, devices})`),
@@ -596,7 +600,8 @@ Code: `src/dbus/portal_casting.rs` (ScreenCast + RemoteDesktop, shared sessions)
 `src/dbus/portal_screenshot.rs`, `src/ui/portal_dialog.rs`, `src/remote_input.rs`,
 `State::start_portal_cast` in `src/screencasting/mod.rs`. Tests: `remote_input` and
 `portal_dialog` unit tests; `tests::portal_remote_desktop` drives the D-Bus API on a private
-bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close):
+bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close,
+a libei sender typing through `ConnectToEIS`):
 
 ```sh
 ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_ -- --ignored --test-threads=1
@@ -627,7 +632,7 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | OpenURI | kde | Yes |
 | Print | kde | Yes |
 | ProxyResolver | frontend only | Yes (no backend involved) |
-| RemoteDesktop | **arbor** | Yes: keyboard, pointer, touch through the Notify* methods (no EIS yet) |
+| RemoteDesktop | **arbor** | Yes: keyboard, pointer, touch through the Notify* methods or EIS (`ConnectToEIS`) |
 | ScreenCast | **arbor** | Yes: a screen or a window, arbor-drawn picker, restore tokens |
 | Screenshot | **arbor** | Yes: whole desktop, or interactive through the screenshot UI; PickColor |
 | Secret | kwallet | Yes (ksecretd/kwalletd; `pam_kwallet_init` is started by the config) |

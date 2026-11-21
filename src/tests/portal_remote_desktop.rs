@@ -130,6 +130,75 @@ fn notify(
     .unwrap();
 }
 
+/// Minimal libei sender: binds the keyboard, presses and releases `key` (evdev), calling
+/// `check(true)` after the press and `check(false)` after the release.
+fn eis_press_key(stream: std::os::unix::net::UnixStream, key: u32, check: &mut dyn FnMut(bool)) {
+    use reis::{ei, PendingRequestResult};
+
+    let context = ei::Context::new(stream).unwrap();
+    let mut keyboard_devices: HashMap<ei::Device, Option<ei::Keyboard>> = HashMap::new();
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(10), "EIS timed out");
+        context.read().unwrap();
+        while let Some(result) = context.pending_event() {
+            let PendingRequestResult::Request(event) = result else {
+                continue;
+            };
+            match event {
+                ei::Event::Handshake(handshake, ei::handshake::Event::HandshakeVersion { .. }) => {
+                    handshake.handshake_version(1);
+                    handshake.name("arbor-test");
+                    handshake.context_type(ei::handshake::ContextType::Sender);
+                    for (interface, version) in [
+                        ("ei_callback", 1),
+                        ("ei_connection", 1),
+                        ("ei_seat", 1),
+                        ("ei_device", 1),
+                        ("ei_pingpong", 1),
+                        ("ei_keyboard", 1),
+                    ] {
+                        handshake.interface_version(interface, version);
+                    }
+                    handshake.finish();
+                }
+                ei::Event::Connection(_, ei::connection::Event::Ping { ping }) => ping.done(0),
+                ei::Event::Seat(seat, ei::seat::Event::Capability { mask, interface }) => {
+                    if interface == "ei_keyboard" {
+                        seat.bind(mask);
+                    }
+                }
+                ei::Event::Seat(_, ei::seat::Event::Device { device }) => {
+                    keyboard_devices.insert(device, None);
+                }
+                ei::Event::Device(device, ei::device::Event::Interface { object }) => {
+                    if let Some(kb) = object.downcast::<ei::Keyboard>() {
+                        keyboard_devices.insert(device, Some(kb));
+                    }
+                }
+                ei::Event::Device(device, ei::device::Event::Resumed { serial }) => {
+                    let last_serial = serial;
+                    if let Some(Some(kb)) = keyboard_devices.get(&device) {
+                        device.start_emulating(last_serial, 1);
+                        kb.key(key, ei::keyboard::KeyState::Press);
+                        device.frame(last_serial, 1);
+                        context.flush().unwrap();
+                        check(true);
+                        kb.key(key, ei::keyboard::KeyState::Released);
+                        device.frame(last_serial, 2);
+                        device.stop_emulating(last_serial);
+                        context.flush().unwrap();
+                        check(false);
+                        return;
+                    }
+                }
+                _ => (),
+            }
+        }
+        context.flush().unwrap();
+    }
+}
+
 #[test]
 #[ignore = "needs a private session bus (dbus-run-session)"]
 fn portal_remote_desktop_over_dbus() {
@@ -237,6 +306,20 @@ fn portal_remote_desktop_over_dbus() {
             false,
         );
         step(Step::ExpectPressed(vec![]));
+
+        // The same session over EIS: a libei sender types a key.
+        let reply = call(
+            &conn,
+            IFACE,
+            "ConnectToEIS",
+            &(&session, "com.example.Typer", HashMap::<&str, Value>::new()),
+        )
+        .unwrap();
+        let fd: zbus::zvariant::OwnedFd = reply.body().deserialize().unwrap();
+        let stream = std::os::unix::net::UnixStream::from(std::os::fd::OwnedFd::from(fd));
+        eis_press_key(stream, KEY_A, &mut |down| {
+            step(Step::ExpectPressed(if down { vec![KEY_A] } else { vec![] }))
+        });
 
         // Third session: Escape cancels.
         let dialog = std::thread::spawn({

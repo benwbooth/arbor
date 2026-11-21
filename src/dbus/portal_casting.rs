@@ -409,6 +409,7 @@ impl Backend {
             if let Some(cast) = cast {
                 state.arbor.stop_cast(cast);
             }
+            state.close_eis(id);
             state.remote_input_source_gone(id);
         });
         Some(data)
@@ -1064,15 +1065,34 @@ impl RemoteDesktopPortal {
             })
     }
 
-    fn connect_to_e_i_s(
+    async fn connect_to_e_i_s(
         &self,
-        _session_handle: OwnedObjectPath,
+        session_handle: OwnedObjectPath,
         _app_id: String,
         _options: HashMap<String, OwnedValue>,
     ) -> fdo::Result<zbus::zvariant::OwnedFd> {
-        Err(fdo::Error::NotSupported(String::from(
-            "arbor does not offer EIS yet; use the Notify* methods",
-        )))
+        let (id, devices) = {
+            let shared = self.0.shared.lock().unwrap();
+            let Some(data) = shared.sessions.get(session_handle.as_str()) else {
+                return Err(fdo::Error::InvalidArgs(String::from("unknown session")));
+            };
+            if !data.remote || !data.started {
+                return Err(fdo::Error::Failed(String::from("session not started")));
+            }
+            (data.id, data.granted_devices)
+        };
+        let fd = self
+            .0
+            .ask(move |state, tx| {
+                let _ = tx.try_send(
+                    state
+                        .start_eis_sender(id, devices)
+                        .map_err(|err| err.to_string()),
+                );
+            })
+            .await?
+            .map_err(fdo::Error::Failed)?;
+        Ok(zbus::zvariant::OwnedFd::from(fd))
     }
 
     #[zbus(property)]

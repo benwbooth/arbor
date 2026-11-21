@@ -11,6 +11,8 @@ pub mod clipboard_persist;
 pub mod cursor;
 #[cfg(feature = "dbus")]
 pub mod dbus;
+#[cfg(feature = "dbus")]
+pub mod eis_server;
 pub mod frame_clock;
 pub mod glass;
 pub mod global_shortcuts;
