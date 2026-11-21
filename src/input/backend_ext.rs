@@ -49,3 +49,9 @@ impl ArborInputDevice for VirtualPointer {
         self.output().cloned()
     }
 }
+
+impl ArborInputDevice for crate::remote_input::RemoteDevice {
+    fn output(&self, _: &State) -> Option<Output> {
+        self.output().cloned()
+    }
+}

@@ -21,6 +21,7 @@ pub mod kglobalaccel;
 pub mod layer;
 pub mod layout;
 pub mod protocols;
+pub mod remote_input;
 pub mod render_helpers;
 pub mod rubber_band;
 #[cfg(feature = "xdp-gnome-screencast")]

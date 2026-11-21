@@ -345,6 +345,7 @@ pub struct Arbor {
     pub suppressed_keys: HashSet<Keycode>,
     /// Global shortcuts that apps registered through the GlobalShortcuts portal.
     pub global_shortcuts: crate::global_shortcuts::GlobalShortcuts,
+    pub remote_input: crate::remote_input::RemoteInputState,
     /// Button codes of the mouse buttons to suppress.
     pub suppressed_buttons: HashSet<u32>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
@@ -419,6 +420,8 @@ pub struct Arbor {
     pub config_error_notification: ConfigErrorNotification,
     pub hotkey_overlay: HotkeyOverlay,
     pub exit_confirm_dialog: ExitConfirmDialog,
+    /// Permission and source-picker dialogs of arbor's portal backend.
+    pub portal_dialog: crate::ui::portal_dialog::PortalDialog,
 
     pub window_mru_ui: WindowMruUi,
     pub pending_mru_commit: Option<PendingMruCommit>,
@@ -830,6 +833,9 @@ impl State {
 
         // These should be called periodically, before flushing the clients.
         self.arbor.popups.cleanup();
+        if self.arbor.portal_dialog.prune() {
+            self.arbor.queue_redraw_all();
+        }
         self.refresh_popup_grab();
         self.update_keyboard_focus();
 
@@ -2619,6 +2625,7 @@ impl Arbor {
             popup_grab: None,
             suppressed_keys: HashSet::new(),
             global_shortcuts: Default::default(),
+            remote_input: Default::default(),
             suppressed_buttons: HashSet::new(),
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
@@ -2673,6 +2680,7 @@ impl Arbor {
             config_error_notification,
             hotkey_overlay,
             exit_confirm_dialog,
+            portal_dialog: Default::default(),
 
             window_mru_ui,
             pending_mru_commit: None,
@@ -4305,6 +4313,16 @@ impl Arbor {
         // Next, the exit confirm dialog.
         self.exit_confirm_dialog
             .render(ctx.renderer, output, &mut |elem| push(elem.into()));
+
+        // Portal dialogs, on the active output (not over the lock screen).
+        if self.portal_dialog.is_open()
+            && !self.is_locked()
+            && self.layout.active_output() == Some(output)
+        {
+            let output_loc = self.global_space.output_geometry(output).unwrap().loc;
+            self.portal_dialog
+                .render(ctx.renderer, output, output_loc, &mut |elem| push(elem.into()));
+        }
 
         // Next, the config error notification too.
         if let Some(element) = self.config_error_notification.render(ctx.renderer, output) {

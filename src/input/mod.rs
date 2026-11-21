@@ -473,6 +473,18 @@ impl State {
                     }
                 }
 
+                if this.arbor.portal_dialog.is_open() && !this.arbor.is_locked() && pressed {
+                    let sym = match raw {
+                        Some(raw) if !(0x30..=0x39).contains(&raw.raw()) => raw,
+                        _ => modified,
+                    };
+                    if this.arbor.portal_dialog.key(sym) {
+                        this.arbor.queue_redraw_all();
+                    }
+                    this.arbor.suppressed_keys.insert(key_code);
+                    return FilterResult::Intercept(None);
+                }
+
                 if this.arbor.exit_confirm_dialog.is_open() && pressed {
                     if raw == Some(Keysym::Return) {
                         info!("quitting after confirming exit dialog");
@@ -2952,6 +2964,19 @@ impl State {
 
         // Ignore release events for mouse clicks that triggered a bind.
         if self.arbor.suppressed_buttons.remove(&button_code) {
+            return;
+        }
+
+        // Portal dialogs are modal: every press goes to them.
+        if ButtonState::Pressed == button_state
+            && self.arbor.portal_dialog.is_open()
+            && !self.arbor.is_locked()
+        {
+            if let Some(MouseButton::Left) = button {
+                self.arbor.portal_dialog.click(pointer.current_location());
+            }
+            self.arbor.suppressed_buttons.insert(button_code);
+            self.arbor.queue_redraw_all();
             return;
         }
 
