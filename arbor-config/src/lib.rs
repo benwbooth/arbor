@@ -35,6 +35,7 @@ pub mod camera;
 pub mod debug;
 pub mod error;
 pub mod gestures;
+pub mod glass;
 pub mod input;
 pub mod layer_rule;
 pub mod layout;
@@ -53,6 +54,7 @@ pub use crate::camera::{Camera, CameraPart};
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
+pub use crate::glass::{Glass, GlassLook, GlassPart};
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
 pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
@@ -85,6 +87,7 @@ pub struct Config {
     pub config_notification: ConfigNotification,
     pub animations: Animations,
     pub blur: Blur,
+    pub glass: Glass,
     pub gestures: Gestures,
     pub overview: Overview,
     pub environment: Environment,
@@ -202,6 +205,7 @@ where
                 "config-notification" => m_merge!(config_notification),
                 "animations" => m_merge!(animations),
                 "blur" => m_merge!(blur),
+                "glass" => m_merge!(glass),
                 "gestures" => m_merge!(gestures),
                 "overview" => m_merge!(overview),
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
@@ -1709,6 +1713,30 @@ mod tests {
                 offset: 3.0,
                 noise: 0.02,
                 saturation: 1.5,
+            },
+            glass: Glass {
+                off: false,
+                strength: 1.0,
+                refraction: 0.8,
+                bezel: 0.0,
+                dispersion: 0.12,
+                blur_radius: 8.0,
+                clear_blur_radius: 1.0,
+                saturation: 1.6,
+                clear_saturation: 1.3,
+                rim: 0.7,
+                tint: Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.047058824,
+                },
+                clear_tint: Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.078431375,
+                },
             },
             gestures: Gestures {
                 dnd_edge_workspace_switch: DndEdgeWorkspaceSwitch {

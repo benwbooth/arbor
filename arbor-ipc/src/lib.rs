@@ -120,6 +120,178 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
+    /// arbor: set the liquid-glass shapes drawn under a layer-shell surface or its pop-ups.
+    ///
+    /// The compositor captures what is behind each shape and draws it refracted through a
+    /// rounded-rectangle lens (with blur, saturation, tint and a rim highlight), then the
+    /// surface's own content on top. Replaces the shapes previously set for the same target
+    /// ([`SetGlass::namespace`], [`SetGlass::output`], [`SetGlass::popup`], [`SetGlass::key`]);
+    /// an empty `shapes` list clears them. Replies [`Response::Handled`].
+    SetGlass(SetGlass),
+}
+
+/// Liquid-glass shapes for one layer-shell surface (or its pop-ups), see [`Request::SetGlass`].
+///
+/// The target is the mapped layer surface whose namespace is `namespace`, on `output` (any
+/// output when `None`). When several mapped layer surfaces match on one output,
+/// `surface_size` picks the one with that logical size. Shapes persist until replaced or
+/// cleared, or until no mapped layer surface matches the target any more (the surface unmapped).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct SetGlass {
+    /// Layer-shell namespace of the target surface.
+    pub namespace: String,
+    /// Output (connector) name, or `None` for the matching surfaces on every output.
+    pub output: Option<String>,
+    /// Target the xdg pop-ups of the matching layer surface instead of the surface itself.
+    ///
+    /// Shapes are then in the pop-up's surface-local coordinates. With several pop-ups open,
+    /// `surface_size` picks the one with that size.
+    pub popup: bool,
+    /// Free-form key so that one client can keep several shape lists for the same namespace
+    /// (for example one per window); lists with different keys are independent.
+    pub key: String,
+    /// Logical size (width, height) of the target surface, used to pick between several
+    /// surfaces (or pop-ups) that match the same target. Ignored when only one matches.
+    pub surface_size: Option<(f64, f64)>,
+    /// The glass shapes, in surface-local logical coordinates. Empty clears.
+    pub shapes: Vec<GlassShape>,
+}
+
+/// One liquid-glass shape: a rounded rectangle in surface-local logical coordinates.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GlassShape {
+    /// Left edge.
+    pub x: f64,
+    /// Top edge.
+    pub y: f64,
+    /// Width.
+    pub width: f64,
+    /// Height.
+    pub height: f64,
+    /// Corner radius (continuous corners), clamped to half the smaller side.
+    #[serde(default)]
+    pub radius: f64,
+    /// Per-shape overrides of the `glass {}` config defaults.
+    #[serde(default)]
+    pub params: GlassParams,
+}
+
+/// Look of a glass shape; every field left out uses the `glass {}` config section.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct GlassParams {
+    /// `Regular` (frosted, for menus and controls) or `Clear` (little blur, for media).
+    pub variant: Option<GlassVariant>,
+    /// Overall strength 0..1: scales refraction, dispersion, rim and blur together.
+    pub strength: Option<f64>,
+    /// How strongly the backdrop bends at the rim (0..1; 1 = as much as possible without the
+    /// lens folding the backdrop into a mirror image).
+    pub refraction: Option<f64>,
+    /// Width of the bending band along the rim, in logical px (default: the corner radius).
+    pub bezel: Option<f64>,
+    /// Chromatic dispersion at the rim (0..1, 0 = none).
+    pub dispersion: Option<f64>,
+    /// Blur radius in logical px (0 = sharp).
+    pub blur_radius: Option<f64>,
+    /// Saturation of the backdrop (1 = unchanged).
+    pub saturation: Option<f64>,
+    /// Specular rim highlight strength (0..1).
+    pub rim: Option<f64>,
+    /// Tint over the glass, straight-alpha RGBA 0..1.
+    pub tint: Option<[f64; 4]>,
+    /// Opacity of the whole glass 0..1 (for fading it in and out with the client's content).
+    pub opacity: Option<f64>,
+}
+
+/// Liquid-glass variants (Apple HIG Materials).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum GlassVariant {
+    /// Frosted: stronger blur, for menus, popovers and controls.
+    Regular,
+    /// Clear: little blur, the backdrop stays legible (media-rich backgrounds).
+    Clear,
+}
+
+impl FromStr for GlassVariant {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "regular" | "Regular" => Ok(Self::Regular),
+            "clear" | "Clear" => Ok(Self::Clear),
+            _ => Err("expected \"regular\" or \"clear\""),
+        }
+    }
+}
+
+impl FromStr for GlassShape {
+    type Err = String;
+
+    /// Parses `X,Y,WIDTH,HEIGHT[,RADIUS]` (logical px).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let nums = s
+            .split(',')
+            .map(|p| p.trim().parse::<f64>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("invalid number in glass shape {s:?}: {err}"))?;
+        let (x, y, width, height, radius) = match nums[..] {
+            [x, y, w, h] => (x, y, w, h, 0.),
+            [x, y, w, h, r] => (x, y, w, h, r),
+            _ => return Err(format!("expected X,Y,WIDTH,HEIGHT[,RADIUS], got {s:?}")),
+        };
+        let shape = GlassShape {
+            x,
+            y,
+            width,
+            height,
+            radius,
+            params: GlassParams::default(),
+        };
+        shape.validate()?;
+        Ok(shape)
+    }
+}
+
+impl GlassShape {
+    /// Checks that the numbers are finite and the size is not negative.
+    pub fn validate(&self) -> Result<(), String> {
+        let nums = [self.x, self.y, self.width, self.height, self.radius];
+        if nums.iter().any(|v| !v.is_finite()) {
+            return Err(String::from("glass shape values must be finite"));
+        }
+        if self.width < 0. || self.height < 0. || self.radius < 0. {
+            return Err(String::from(
+                "glass shape width, height and radius must not be negative",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl SetGlass {
+    /// Checks the shapes; the compositor rejects requests that fail this.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.namespace.is_empty() {
+            return Err(String::from("SetGlass needs a namespace"));
+        }
+        if self.shapes.len() > 64 {
+            return Err(String::from("at most 64 glass shapes per target"));
+        }
+        if let Some((w, h)) = self.surface_size {
+            if !(w.is_finite() && h.is_finite()) {
+                return Err(String::from("surface_size must be finite"));
+            }
+        }
+        for shape in &self.shapes {
+            shape.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// Reply from arbor to client.
@@ -2134,5 +2306,85 @@ mod tests {
         );
         assert!("-".parse::<PositionChange>().is_err());
         assert!("10% ".parse::<PositionChange>().is_err());
+    }
+
+    #[test]
+    fn parse_set_glass_json() {
+        let json = r#"{"SetGlass":{"namespace":"hearth-dock","output":"DP-1","shapes":[{"x":10,"y":20.5,"width":300,"height":64,"radius":18,"params":{"variant":"Clear","refraction":0.5}}]}}"#;
+        let Request::SetGlass(req) = serde_json::from_str::<Request>(json).unwrap() else {
+            panic!("not SetGlass");
+        };
+        assert_eq!(req.namespace, "hearth-dock");
+        assert_eq!(req.output.as_deref(), Some("DP-1"));
+        assert!(!req.popup);
+        assert_eq!(req.key, "");
+        assert_eq!(req.surface_size, None);
+        assert_eq!(req.shapes.len(), 1);
+        let shape = &req.shapes[0];
+        assert_eq!(
+            (shape.x, shape.y, shape.width, shape.height),
+            (10., 20.5, 300., 64.)
+        );
+        assert_eq!(shape.radius, 18.);
+        assert_eq!(shape.params.variant, Some(GlassVariant::Clear));
+        assert_eq!(shape.params.refraction, Some(0.5));
+        assert_eq!(shape.params.blur_radius, None);
+        req.validate().unwrap();
+
+        // Minimal: a clear request, and shapes without radius or params.
+        let json = r#"{"SetGlass":{"namespace":"x","shapes":[]}}"#;
+        let Request::SetGlass(req) = serde_json::from_str::<Request>(json).unwrap() else {
+            panic!("not SetGlass");
+        };
+        assert!(req.shapes.is_empty());
+        let json = r#"{"SetGlass":{"namespace":"x","popup":true,"key":"k","surface_size":[200,100],"shapes":[{"x":0,"y":0,"width":5,"height":5}]}}"#;
+        let Request::SetGlass(req) = serde_json::from_str::<Request>(json).unwrap() else {
+            panic!("not SetGlass");
+        };
+        assert!(req.popup);
+        assert_eq!(req.surface_size, Some((200., 100.)));
+        assert_eq!(req.shapes[0].radius, 0.);
+
+        // Round trip.
+        let back = serde_json::to_string(&Request::SetGlass(req.clone())).unwrap();
+        let Request::SetGlass(again) = serde_json::from_str::<Request>(&back).unwrap() else {
+            panic!("not SetGlass");
+        };
+        assert_eq!(again, req);
+    }
+
+    #[test]
+    fn validate_set_glass() {
+        let mut req = SetGlass {
+            namespace: String::from("ns"),
+            ..Default::default()
+        };
+        req.validate().unwrap();
+        req.shapes.push(GlassShape {
+            width: -1.,
+            ..Default::default()
+        });
+        assert!(req.validate().is_err());
+        req.shapes[0].width = f64::NAN;
+        assert!(req.validate().is_err());
+        req.shapes.clear();
+        req.namespace.clear();
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn parse_glass_shape_arg() {
+        let s: GlassShape = "10,20,300,64,18".parse().unwrap();
+        assert_eq!(
+            (s.x, s.y, s.width, s.height, s.radius),
+            (10., 20., 300., 64., 18.)
+        );
+        let s: GlassShape = "1.5, 2, 3, 4".parse().unwrap();
+        assert_eq!((s.x, s.radius), (1.5, 0.));
+        assert!("1,2,3".parse::<GlassShape>().is_err());
+        assert!("1,2,3,x".parse::<GlassShape>().is_err());
+        assert!("1,2,-3,4".parse::<GlassShape>().is_err());
+        assert_eq!("clear".parse::<GlassVariant>(), Ok(GlassVariant::Clear));
+        assert!("foggy".parse::<GlassVariant>().is_err());
     }
 }
