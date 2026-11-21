@@ -234,6 +234,8 @@ impl CompositorHandler for State {
                         error!("layout is missing the window that we just added");
                     }
 
+                    self.session_restore_place(&window);
+
                     if let Some(output) = output {
                         self.arbor.layout.start_open_animation_for_window(&window);
 

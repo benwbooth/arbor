@@ -1158,6 +1158,27 @@ pub enum Action {
     FocusTabNext {},
     /// Show the previous tab of the focused tab group (arbor).
     FocusTabPrev {},
+    /// Zoom the screen in around the pointer (magnifier) by `accessibility { zoom-step }`.
+    ZoomIn {},
+    /// Zoom the screen out by `accessibility { zoom-step }`.
+    ZoomOut {},
+    /// Turn the screen zoom off.
+    ZoomReset {},
+    /// Turn reduced motion (no animations) on or off at runtime, overriding
+    /// `accessibility { reduce-motion }` until arbor restarts.
+    SetReduceMotion {
+        /// `true` for no animations.
+        #[cfg_attr(feature = "clap", arg(action = clap::ArgAction::Set))]
+        on: bool,
+    },
+    /// Toggle reduced motion at runtime.
+    ToggleReduceMotion {},
+    /// Save the running apps and their places to the session file now.
+    SessionSave {},
+    /// Relaunch the apps of the saved session and put them back in place.
+    SessionRestore {},
+    /// Delete the saved session.
+    SessionClear {},
     /// Zoom the camera out one level: show the parent of the focused window's node, ultimately
     /// everything (arbor).
     CameraZoomOut {},

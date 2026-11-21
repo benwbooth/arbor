@@ -186,6 +186,7 @@ use crate::utils::{
 };
 use crate::window::mapped::MappedId;
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef};
+use crate::zoom::{zoom_element, ScreenZoom};
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 
@@ -287,6 +288,14 @@ pub struct Arbor {
     pub screencopy_state: ScreencopyManagerState,
     pub toplevel_export_state: ToplevelExportManagerState,
     pub clipboard_persist: ClipboardPersist,
+    /// Screen zoom (magnifier).
+    pub screen_zoom: ScreenZoom,
+    /// Runtime reduce-motion setting (IPC), overriding `accessibility { reduce-motion }`.
+    pub reduce_motion_override: Option<bool>,
+    /// Where the session is saved (`None` in tests).
+    pub session_path: Option<std::path::PathBuf>,
+    /// Session restore in progress.
+    pub session_restore: Option<crate::session::PendingRestore>,
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
@@ -1480,9 +1489,13 @@ impl State {
 
         let rate = 1.0 / config.animations.slowdown.max(0.001);
         self.arbor.clock.set_rate(rate);
+        let reduce_motion = self
+            .arbor
+            .reduce_motion_override
+            .unwrap_or(config.accessibility.reduce_motion);
         self.arbor
             .clock
-            .set_complete_instantly(config.animations.off);
+            .set_complete_instantly(config.animations.off || reduce_motion);
 
         *CHILD_ENV.write().unwrap() = mem::take(&mut config.environment);
 
@@ -2280,7 +2293,8 @@ impl Arbor {
 
         let rate = 1.0 / config_.animations.slowdown.max(0.001);
         animation_clock.set_rate(rate);
-        animation_clock.set_complete_instantly(config_.animations.off);
+        animation_clock
+            .set_complete_instantly(config_.animations.off || config_.accessibility.reduce_motion);
 
         let layout = Layout::new(animation_clock.clone(), &config_);
 
@@ -2534,6 +2548,14 @@ impl Arbor {
             is_session_instance,
             start_time: Instant::now(),
             is_at_startup: true,
+            screen_zoom: ScreenZoom::new(animation_clock.clone()),
+            reduce_motion_override: None,
+            session_path: if cfg!(test) {
+                None
+            } else {
+                crate::session::default_session_path()
+            },
+            session_restore: None,
             clock: animation_clock,
 
             layout,
@@ -4101,6 +4123,7 @@ impl Arbor {
         let _span = tracy_client::span!("Arbor::advance_animations");
 
         self.layout.advance_animations();
+        self.screen_zoom.advance_animations();
         self.config_error_notification.advance_animations();
         self.exit_confirm_dialog.advance_animations();
         self.screenshot_ui.advance_animations();
@@ -4232,7 +4255,15 @@ impl Arbor {
         let state = self.output_state.get(output).unwrap();
         ctx.xray = Some(&state.xray);
 
-        self.render_inner(ctx, output, include_pointer, push);
+        // Screen zoom: scale the whole frame around the pointer (outputs only, not captures).
+        if ctx.target == RenderTarget::Output && self.screen_zoom.is_active() {
+            let zoom = self.screen_zoom.level();
+            let origin = self.screen_zoom_origin(output);
+            let mut push_zoomed = |elem| push(zoom_element(elem, origin, zoom));
+            self.render_inner(ctx, output, include_pointer, &mut push_zoomed);
+        } else {
+            self.render_inner(ctx, output, include_pointer, push);
+        }
 
         self.clear_xray_elements(output);
     }
@@ -4749,6 +4780,7 @@ impl Arbor {
             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= state.screen_transition.is_some();
+            state.unfinished_animations_remain |= self.screen_zoom.is_animating();
 
             // Also keep redrawing if the current cursor is animated.
             state.unfinished_animations_remain |= self
@@ -6652,6 +6684,7 @@ arbor_render_elements! {
     OutputRenderElements<R> => {
         Monitor = MonitorRenderElement<R>,
         RescaledTile = RescaleRenderElement<TileRenderElement<R>>,
+        Zoomed = crate::zoom::ZoomedOutputElement<R>,
         LayerSurface = LayerSurfaceRenderElement<R>,
         RelocatedLayerSurface = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
             LayerSurfaceRenderElement<R>

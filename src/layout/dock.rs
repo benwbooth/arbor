@@ -3836,3 +3836,4 @@ fn verify_node<W: LayoutElement>(node: &Node<W>, is_root: bool) {
 
     let _ = is_root;
 }
+include!("dock_shape.rs");

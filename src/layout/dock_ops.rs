@@ -8,6 +8,13 @@ use super::{InteractiveMoveState, Layout, LayoutElement, MonitorSet};
 
 impl<W: LayoutElement> Layout<W> {
     /// Minimizes a docked window (the focused one if `window` is `None`).
+    /// Rearranges the dock tree of the workspace holding `window` into `shape`.
+    pub fn apply_dock_shape_for(&mut self, window: &W::Id, shape: &super::dock::DockShape<W::Id>) {
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.has_window(window)) {
+            ws.apply_dock_shape(shape);
+        }
+    }
+
     pub fn minimize_window(&mut self, window: Option<&W::Id>) {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if window.is_none_or(|win| win == move_.tile.window().id()) {

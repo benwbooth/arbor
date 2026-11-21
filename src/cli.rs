@@ -110,6 +110,11 @@ pub enum Msg {
     OverviewState,
     /// List screencasts.
     Casts,
+    /// Save, restore or clear the saved session (the running apps and their places).
+    Session {
+        #[command(subcommand)]
+        action: SessionMsg,
+    },
     /// Set liquid glass shapes under a layer-shell surface (for testing; shells use IPC).
     ///
     /// Each --shape is X,Y,WIDTH,HEIGHT[,RADIUS] in the surface's logical coordinates. Without
@@ -164,6 +169,16 @@ pub enum Msg {
         #[arg(long)]
         clear: bool,
     },
+}
+
+#[derive(Subcommand, Clone, Copy, Debug)]
+pub enum SessionMsg {
+    /// Save the running apps and their places to ~/.local/state/arbor/session.json now.
+    Save,
+    /// Relaunch the saved apps and put their windows back in place.
+    Restore,
+    /// Delete the saved session.
+    Clear,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]

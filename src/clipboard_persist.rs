@@ -260,13 +260,13 @@ impl State {
         };
         // The new selection is installed after this callback returns; read it a moment later
         // (primary: once it has settled).
-        let _ = self
-            .arbor
-            .event_loop
-            .insert_source(Timer::from_duration(delay), move |_, _, state| {
-                state.clipboard_persist_start_read(ty, generation, formats.clone());
-                TimeoutAction::Drop
-            });
+        let _ =
+            self.arbor
+                .event_loop
+                .insert_source(Timer::from_duration(delay), move |_, _, state| {
+                    state.clipboard_persist_start_read(ty, generation, formats.clone());
+                    TimeoutAction::Drop
+                });
     }
 
     fn clipboard_persist_start_read(
@@ -340,10 +340,7 @@ impl State {
         }
         match assemble(reads, budget) {
             Some(entries) => {
-                trace!(
-                    "kept {ty:?} selection: {} formats",
-                    entries.len()
-                );
+                trace!("kept {ty:?} selection: {} formats", entries.len());
                 slot.kept = Some(SelectionData::new(entries));
             }
             None => slot.no_keep = true,
@@ -477,10 +474,7 @@ mod tests {
 
     #[test]
     fn secret_selections_are_not_kept() {
-        assert_eq!(
-            formats_to_keep(&s(&["text/plain", SECRET_HINT_MIME])),
-            None
-        );
+        assert_eq!(formats_to_keep(&s(&["text/plain", SECRET_HINT_MIME])), None);
         assert_eq!(
             formats_to_keep(&s(&["text/plain", "text/plain", "UTF8_STRING"])),
             Some(s(&["text/plain", "UTF8_STRING"]))

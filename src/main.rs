@@ -267,10 +267,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.arbor.config_error_notification.show_created(path);
     }
 
+    if cli.session {
+        state.session_start();
+    }
+
     // Run the compositor.
     event_loop
         .run(None, &mut state, |state| state.refresh_and_flush_clients())
         .unwrap();
+
+    // Save the running apps for the next start (session-restore).
+    if cli.session {
+        state.session_autosave();
+    }
 
     Ok(())
 }

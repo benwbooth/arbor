@@ -9,6 +9,16 @@ use crate::layout::title_bar::TitleBarHit;
 use crate::layout::LayoutElement;
 
 impl<W: LayoutElement> Workspace<W> {
+    /// The dock tree shape (session restore).
+    pub fn dock_shape(&self) -> Option<crate::layout::dock::DockShape<W::Id>> {
+        self.dock.shape()
+    }
+
+    /// Rearranges the docked windows into `shape` (session restore).
+    pub fn apply_dock_shape(&mut self, shape: &crate::layout::dock::DockShape<W::Id>) {
+        self.dock.apply_shape(shape);
+    }
+
     /// Minimizes a window (the active one if `id` is `None`). A docked window is hidden and its
     /// siblings take its space, but it keeps its slot; a floating window is hidden and keeps its
     /// position and size.

@@ -2471,6 +2471,21 @@ impl State {
                 self.arbor.layout.focus_tab(false);
                 self.arbor.queue_redraw_all();
             }
+            Action::ZoomIn => self
+                .arbor
+                .zoom_action(|z, step, max, anim| z.zoom_in(step, max, anim)),
+            Action::ZoomOut => self
+                .arbor
+                .zoom_action(|z, step, max, anim| z.zoom_out(step, max, anim)),
+            Action::ZoomReset => self.arbor.zoom_action(|z, _, _, anim| z.reset(anim)),
+            Action::SetReduceMotion(on) => self.arbor.set_reduce_motion(Some(on)),
+            Action::ToggleReduceMotion => {
+                let on = !self.arbor.reduce_motion();
+                self.arbor.set_reduce_motion(Some(on));
+            }
+            Action::SessionSave => self.session_save_now(),
+            Action::SessionRestore => self.session_restore_now(),
+            Action::SessionClear => self.session_clear(),
             Action::RestoreWindowById(id) => {
                 let window = self
                     .arbor
@@ -2752,6 +2767,11 @@ impl State {
 
         self.arbor.pointer_contents.clone_from(&under);
 
+        // The zoomed view follows the pointer.
+        if self.arbor.screen_zoom.is_active() {
+            self.arbor.queue_redraw_all();
+        }
+
         pointer.motion(
             self,
             under.surface.clone(),
@@ -2858,6 +2878,11 @@ impl State {
         self.arbor.handle_focus_follows_mouse(&under);
 
         self.arbor.pointer_contents.clone_from(&under);
+
+        // The zoomed view follows the pointer.
+        if self.arbor.screen_zoom.is_active() {
+            self.arbor.queue_redraw_all();
+        }
 
         pointer.motion(
             self,
@@ -4688,6 +4713,9 @@ fn allowed_when_locked(action: &Action) -> bool {
             | Action::PowerOnMonitors
             | Action::SwitchLayout(_)
             | Action::ToggleKeyboardShortcutsInhibit
+            | Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
     )
 }
 

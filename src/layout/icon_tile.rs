@@ -89,7 +89,7 @@ pub fn app_icon(app_id: &str) -> Option<Arc<IconImage>> {
     }
 }
 
-fn data_dirs() -> Vec<PathBuf> {
+pub(crate) fn data_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     match std::env::var_os("XDG_DATA_HOME") {
         Some(home) => dirs.push(PathBuf::from(home)),

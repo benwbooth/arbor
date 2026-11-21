@@ -12,7 +12,7 @@ use arbor_ipc::{
 };
 use serde_json::json;
 
-use crate::cli::Msg;
+use crate::cli::{Msg, SessionMsg};
 use crate::utils::version;
 
 pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
@@ -49,6 +49,11 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
+        Msg::Session { action } => Request::Action(match action {
+            SessionMsg::Save => Action::SessionSave {},
+            SessionMsg::Restore => Action::SessionRestore {},
+            SessionMsg::Clear => Action::SessionClear {},
+        }),
         Msg::Glass {
             namespace,
             output,
@@ -357,7 +362,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("No color was picked.");
             }
         }
-        Msg::Action { .. } | Msg::Glass { .. } => {
+        Msg::Action { .. } | Msg::Glass { .. } | Msg::Session { .. } => {
             let Response::Handled = response else {
                 bail!("unexpected response: expected Handled, got {response:?}");
             };
