@@ -45,9 +45,32 @@ pub enum GlobalShortcutsEvent {
     },
 }
 
+/// Who registered a shortcut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// The GlobalShortcuts portal (the app key is the portal app id).
+    #[default]
+    Portal,
+    /// KDE's `org.kde.kglobalaccel` API (the app key is the KGlobalAccel component name; a
+    /// component ending in `.desktop` launches that desktop file or one of its actions).
+    Kde,
+}
+
+impl Source {
+    fn is_portal(&self) -> bool {
+        *self == Source::Portal
+    }
+}
+
 /// One persisted shortcut.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredShortcut {
+    #[serde(default, skip_serializing_if = "Source::is_portal")]
+    pub source: Source,
+    /// The app's or component's display name (KDE components have one), if known.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub app_name: String,
     #[serde(default)]
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,10 +244,12 @@ struct Session {
 
 pub struct GlobalShortcuts {
     path: Option<PathBuf>,
-    store: Option<Store>,
+    pub(crate) store: Option<Store>,
     sessions: HashMap<String, Session>,
     /// Parsed triggers of all assigned shortcuts: (key, app id, shortcut id).
-    parsed: Option<Vec<(Key, String, String)>>,
+    pub(crate) parsed: Option<Vec<(Key, String, String)>>,
+    /// KDE (`org.kde.kglobalaccel`) clients' runtime state, see `crate::kglobalaccel`.
+    pub(crate) kde: crate::kglobalaccel::KdeState,
     /// Keys held down for an activated shortcut → (session, shortcut id).
     pressed: HashMap<Keycode, Vec<(String, String)>>,
     events: Option<async_channel::Sender<GlobalShortcutsEvent>>,
@@ -246,6 +271,7 @@ impl GlobalShortcuts {
             store: None,
             sessions: HashMap::new(),
             parsed: None,
+            kde: Default::default(),
             pressed: HashMap::new(),
             events: None,
         }
@@ -255,13 +281,35 @@ impl GlobalShortcuts {
         self.events = Some(sender);
     }
 
-    fn store(&mut self) -> &mut Store {
-        let path = self.path.clone();
-        self.store
-            .get_or_insert_with(|| path.map(|p| Store::load(&p)).unwrap_or_default())
+    pub(crate) fn store(&mut self) -> &mut Store {
+        if self.store.is_none() {
+            let store = match &self.path {
+                // First start with this store: bring over the KDE (Plasma) assignments once.
+                Some(path) if !path.exists() => {
+                    let mut store = Store::default();
+                    let report = crate::kglobalaccel::import::import_kde_file(&mut store, false);
+                    if report.imported > 0 {
+                        info!("imported {} shortcuts from kglobalshortcutsrc", report.imported);
+                    }
+                    if let Err(err) = store.save(path) {
+                        warn!("error saving global shortcuts to {path:?}: {err:?}");
+                    }
+                    store
+                }
+                Some(path) => Store::load(path),
+                None => Store::default(),
+            };
+            self.store = Some(store);
+        }
+        self.store.as_mut().unwrap()
     }
 
-    fn save(&mut self) {
+    /// The store's file, `None` when not persisted (tests).
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub(crate) fn save(&mut self) {
         self.parsed = None;
         let Some(path) = self.path.clone() else {
             return;
@@ -329,7 +377,12 @@ impl GlobalShortcuts {
             .store()
             .apps
             .get(&app_id)
-            .map(|app| app.keys().cloned().collect())
+            .map(|app| {
+                app.iter()
+                    .filter(|(_, s)| s.source == Source::Portal)
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
             .unwrap_or_default();
         self.sessions.insert(session, Session { app_id, active });
     }
@@ -406,15 +459,26 @@ impl GlobalShortcuts {
             .flat_map(|s| s.active.iter().map(|id| (s.app_id.clone(), id.clone())))
             .collect();
         let mut out = Vec::new();
-        for (app_id, shortcuts) in &self.store().apps {
+        self.store();
+        let store = self.store.as_ref().unwrap();
+        for (app_id, shortcuts) in &store.apps {
             for (id, s) in shortcuts {
+                let active = match s.source {
+                    Source::Portal => active.contains(&(app_id.clone(), id.clone())),
+                    Source::Kde => self.kde.is_present(app_id, id),
+                };
                 out.push(arbor_ipc::GlobalShortcut {
                     app_id: app_id.clone(),
                     id: id.clone(),
                     description: s.description.clone(),
                     trigger: s.trigger.clone(),
                     preferred_trigger: s.preferred_trigger.clone(),
-                    active: active.contains(&(app_id.clone(), id.clone())),
+                    active,
+                    source: match s.source {
+                        Source::Portal => String::from("portal"),
+                        Source::Kde => String::from("kde"),
+                    },
+                    app_name: s.app_name.clone(),
                 });
             }
         }
@@ -460,7 +524,13 @@ impl GlobalShortcuts {
             .unwrap();
         entry.user_cleared = new.is_none();
         entry.trigger = new;
+        let source = entry.source;
         self.save();
+
+        if source == Source::Kde {
+            self.kde_notify_changed(app_id, id, mod_key);
+            return Ok(());
+        }
 
         let sessions: Vec<(String, Vec<String>)> = self
             .sessions
@@ -485,20 +555,7 @@ impl GlobalShortcuts {
         if self.sessions.is_empty() {
             return Vec::new();
         }
-        if self.parsed.is_none() {
-            let parsed = self
-                .store()
-                .apps
-                .iter()
-                .flat_map(|(app, shortcuts)| {
-                    shortcuts.iter().filter_map(move |(id, s)| {
-                        let key = s.trigger.as_deref().and_then(parse_trigger)?;
-                        Some((key, app.clone(), id.clone()))
-                    })
-                })
-                .collect();
-            self.parsed = Some(parsed);
-        }
+        self.ensure_parsed();
 
         let trigger = Trigger::Keysym(sym);
         let mut out = Vec::new();
@@ -513,6 +570,24 @@ impl GlobalShortcuts {
             }
         }
         out
+    }
+
+    /// Fills [`Self::parsed`] if needed.
+    pub(crate) fn ensure_parsed(&mut self) {
+        if self.parsed.is_none() {
+            let parsed = self
+                .store()
+                .apps
+                .iter()
+                .flat_map(|(app, shortcuts)| {
+                    shortcuts.iter().filter_map(move |(id, s)| {
+                        let key = s.trigger.as_deref().and_then(parse_trigger)?;
+                        Some((key, app.clone(), id.clone()))
+                    })
+                })
+                .collect();
+            self.parsed = Some(parsed);
+        }
     }
 
     /// A key was pressed and no config bind took it. Returns whether a portal shortcut did (the

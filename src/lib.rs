@@ -16,6 +16,7 @@ pub mod glass;
 pub mod global_shortcuts;
 pub mod handlers;
 pub mod input;
+pub mod kglobalaccel;
 pub mod ipc;
 pub mod layer;
 pub mod layout;

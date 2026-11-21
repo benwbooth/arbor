@@ -9,6 +9,7 @@ pub mod freedesktop_login1;
 pub mod freedesktop_screensaver;
 pub mod gnome_shell_introspect;
 pub mod gnome_shell_screenshot;
+pub mod kglobalaccel;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
 pub mod portal_global_shortcuts;
@@ -41,6 +42,7 @@ pub struct DBusServers {
     pub conn_locale1: Option<Connection>,
     pub conn_keyboard_monitor: Option<Connection>,
     pub conn_global_shortcuts: Option<Connection>,
+    pub conn_kglobalaccel: Option<Connection>,
 }
 
 impl DBusServers {
@@ -140,6 +142,8 @@ impl DBusServers {
 
             dbus.conn_global_shortcuts =
                 portal_global_shortcuts::start(&arbor.event_loop, &mut arbor.global_shortcuts);
+            dbus.conn_kglobalaccel =
+                kglobalaccel::start(&arbor.event_loop, &mut arbor.global_shortcuts);
 
             let keyboard_monitor = KeyboardMonitor::new();
             if let Some(x) = try_start(keyboard_monitor.clone()) {

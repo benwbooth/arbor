@@ -130,8 +130,15 @@ pub enum Request {
     /// ([`SetGlass::namespace`], [`SetGlass::output`], [`SetGlass::popup`], [`SetGlass::key`]);
     /// an empty `shapes` list clears them. Replies [`Response::Handled`].
     SetGlass(SetGlass),
-    /// List the global shortcuts that apps registered through the GlobalShortcuts portal.
+    /// List the app global shortcuts: those registered through the GlobalShortcuts portal and
+    /// through KDE's `org.kde.kglobalaccel` API (one store, see [`GlobalShortcut::source`]).
     GlobalShortcuts,
+    /// Copy the shortcut assignments from KDE Plasma's `kglobalshortcutsrc` into arbor's app
+    /// shortcut store (done automatically once, when the store doesn't exist yet).
+    ImportKdeShortcuts {
+        /// Replace assignments that already exist in arbor's store.
+        overwrite: bool,
+    },
     /// Change or clear the trigger of a portal global shortcut.
     ///
     /// The change is persisted and the app is told through the portal's ShortcutsChanged signal.
@@ -357,6 +364,8 @@ pub enum Response {
     Casts(Vec<Cast>),
     /// Global shortcuts registered through the GlobalShortcuts portal.
     GlobalShortcuts(Vec<GlobalShortcut>),
+    /// Number of shortcuts imported by [`Request::ImportKdeShortcuts`].
+    ImportedKdeShortcuts(u32),
 }
 
 /// A global shortcut registered by an app through the GlobalShortcuts portal.
@@ -373,8 +382,16 @@ pub struct GlobalShortcut {
     pub trigger: Option<String>,
     /// Trigger the app asked for, if any.
     pub preferred_trigger: Option<String>,
-    /// Whether a running app currently listens to this shortcut.
+    /// Whether a running app currently listens to this shortcut (KDE `.desktop` launchers are
+    /// always active).
     pub active: bool,
+    /// How the app registered it: `"portal"` (GlobalShortcuts portal) or `"kde"`
+    /// (`org.kde.kglobalaccel`, `app_id` is then the KGlobalAccel component name).
+    #[serde(default)]
+    pub source: String,
+    /// The app's display name if known (KDE components have one).
+    #[serde(default)]
+    pub app_name: String,
 }
 
 /// Overview information.

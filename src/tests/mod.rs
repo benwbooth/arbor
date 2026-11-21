@@ -7,6 +7,8 @@ mod server;
 mod expose;
 mod floating;
 mod glass;
+#[cfg(feature = "dbus")]
+mod kglobalaccel;
 mod kde_appmenu;
 mod layer_shell;
 mod clipboard_persist;

@@ -477,6 +477,30 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 result.map_err(|_| String::from("error getting the portal shortcuts"))?;
             Response::GlobalShortcuts(shortcuts)
         }
+        Request::ImportKdeShortcuts { overwrite } => {
+            // The files are read off the compositor thread, on a copy of the store.
+            let err = || String::from("error importing the KDE shortcuts");
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let _ = tx.send_blocking(state.arbor.global_shortcuts.store().clone());
+            });
+            let mut store = rx.recv().await.map_err(|_| err())?;
+            let (tx, rx) = async_channel::bounded(1);
+            std::thread::Builder::new()
+                .name(String::from("import KDE shortcuts"))
+                .spawn(move || {
+                    let report = crate::kglobalaccel::import::import_kde_file(&mut store, overwrite);
+                    let _ = tx.send_blocking((store, report));
+                })
+                .map_err(|_| err())?;
+            let (store, report) = rx.recv().await.map_err(|_| err())?;
+            if report.imported > 0 {
+                ctx.event_loop.insert_idle(move |state| {
+                    state.arbor.global_shortcuts.replace_store(store);
+                });
+            }
+            Response::ImportedKdeShortcuts(report.imported)
+        }
         Request::SetGlobalShortcut {
             app_id,
             id,

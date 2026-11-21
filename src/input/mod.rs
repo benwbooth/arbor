@@ -525,7 +525,10 @@ impl State {
                 }
 
                 // Release of a key that activated a portal global shortcut.
-                if !pressed && this.arbor.global_shortcuts.release(key_code, time) {
+                if !pressed
+                    && (this.arbor.global_shortcuts.release(key_code, time)
+                        | this.arbor.global_shortcuts.kde_release(key_code, time))
+                {
                     this.arbor.suppressed_keys.remove(&key_code);
                     return FilterResult::Intercept(None);
                 }
@@ -559,6 +562,15 @@ impl State {
                                 .arbor
                                 .global_shortcuts
                                 .press(key_code, mod_key, raw, modifiers, time)
+                            {
+                                this.arbor.suppressed_keys.insert(key_code);
+                                return FilterResult::Intercept(None);
+                            }
+                            // Then those KDE apps registered through org.kde.kglobalaccel.
+                            if this
+                                .arbor
+                                .global_shortcuts
+                                .kde_press(key_code, mod_key, raw, modifiers, time)
                             {
                                 this.arbor.suppressed_keys.insert(key_code);
                                 return FilterResult::Intercept(None);

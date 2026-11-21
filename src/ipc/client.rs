@@ -86,6 +86,9 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             id: id.clone(),
             trigger: trigger.clone(),
         },
+        Msg::ImportKdeShortcuts { overwrite } => Request::ImportKdeShortcuts {
+            overwrite: *overwrite,
+        },
     };
 
     let mut socket = Socket::connect().context("error connecting to the arbor socket")?;
@@ -615,7 +618,12 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                     } else {
                         &s.app_id
                     };
-                    println!("App \"{name}\":");
+                    let source = if s.source == "kde" { " (KDE)" } else { "" };
+                    if s.app_name.is_empty() || s.app_name == *name {
+                        println!("App \"{name}\"{source}:");
+                    } else {
+                        println!("App \"{name}\" ({}){source}:", s.app_name);
+                    }
                     last_app = Some(s.app_id.clone());
                 }
                 let trigger = s.trigger.as_deref().unwrap_or("unassigned");
@@ -628,6 +636,16 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                     println!("    Preferred: {preferred}");
                 }
             }
+        }
+        Msg::ImportKdeShortcuts { .. } => {
+            let Response::ImportedKdeShortcuts(n) = response else {
+                bail!("unexpected response: expected ImportedKdeShortcuts, got {response:?}");
+            };
+            if json {
+                println!("{}", json!({ "imported": n }));
+                return Ok(());
+            }
+            println!("Imported {n} shortcuts from kglobalshortcutsrc.");
         }
         Msg::SetGlobalShortcut { .. } => {
             let Response::Handled = response else {

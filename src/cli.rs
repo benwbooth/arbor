@@ -140,8 +140,17 @@ pub enum Msg {
         #[arg(long)]
         blur_radius: Option<f64>,
     },
-    /// List the global shortcuts apps registered through the GlobalShortcuts portal.
+    /// List the global shortcuts apps registered (GlobalShortcuts portal and KDE kglobalaccel).
     GlobalShortcuts,
+    /// Copy shortcut assignments from KDE Plasma's kglobalshortcutsrc into arbor's store.
+    ///
+    /// arbor does this by itself once, when its store doesn't exist yet. Plasma's own
+    /// components (KWin, plasmashell, power, volume, media keys) are skipped.
+    ImportKdeShortcuts {
+        /// Replace assignments arbor already has.
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Change or clear the trigger of an app's portal global shortcut.
     SetGlobalShortcut {
         /// App id of the shortcut (see `arbor msg global-shortcuts`; may be "").
