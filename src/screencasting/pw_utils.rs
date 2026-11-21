@@ -49,6 +49,14 @@ use smithay::reexports::gbm::Modifier;
 use smithay::utils::{Logical, Physical, Point, Scale, Size, Transform};
 use zbus::object_server::SignalEmitter;
 
+/// How a new stream announces its PipeWire node id.
+pub enum StreamReady {
+    /// The Mutter ScreenCast API: emit `PipeWireStreamAdded` on the stream object.
+    Mutter(SignalEmitter<'static>),
+    /// arbor's own portal backend: send the node id.
+    Channel(async_channel::Sender<u32>),
+}
+
 use crate::arbor::{CastTarget, State};
 use crate::dbus::mutter_screen_cast::{self, CursorMode};
 use crate::render_helpers::{
@@ -286,7 +294,7 @@ impl PipeWire {
         refresh: u32,
         alpha: bool,
         mut cursor_mode: CursorMode,
-        signal_ctx: SignalEmitter<'static>,
+        ready: StreamReady,
     ) -> anyhow::Result<Cast> {
         let _span = tracy_client::span!("PipeWire::start_cast");
 
@@ -332,6 +340,7 @@ impl PipeWire {
             rendering_buffers: Vec::new(),
         }));
 
+        let mut ready = Some(ready);
         let listener = stream
             .add_local_listener_with_user_data(())
             .state_changed({
@@ -347,21 +356,33 @@ impl PipeWire {
                             if inner.node_id.is_none() {
                                 let id = stream.node_id();
                                 inner.node_id = Some(id);
-                                debug!("sending signal with {id}");
+                                debug!("stream ready with node {id}");
 
-                                let _span = tracy_client::span!("sending PipeWireStreamAdded");
-                                async_io::block_on(async {
-                                    let res = mutter_screen_cast::Stream::pipe_wire_stream_added(
-                                        &signal_ctx,
-                                        id,
-                                    )
-                                    .await;
+                                match ready.take() {
+                                    Some(StreamReady::Mutter(signal_ctx)) => {
+                                        let _span =
+                                            tracy_client::span!("sending PipeWireStreamAdded");
+                                        async_io::block_on(async {
+                                            let res =
+                                                mutter_screen_cast::Stream::pipe_wire_stream_added(
+                                                    &signal_ctx,
+                                                    id,
+                                                )
+                                                .await;
 
-                                    if let Err(err) = res {
-                                        warn!("error sending PipeWireStreamAdded: {err:?}");
-                                        stop_cast();
+                                            if let Err(err) = res {
+                                                warn!("error sending PipeWireStreamAdded: {err:?}");
+                                                stop_cast();
+                                            }
+                                        });
                                     }
-                                });
+                                    Some(StreamReady::Channel(tx)) => {
+                                        if tx.try_send(id).is_err() {
+                                            stop_cast();
+                                        }
+                                    }
+                                    None => (),
+                                }
                             }
 
                             inner.is_active = false;

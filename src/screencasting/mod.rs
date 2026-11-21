@@ -14,7 +14,6 @@ use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::gbm::Modifier;
 use smithay::utils::{Physical, Point, Scale, Size};
-use zbus::object_server::SignalEmitter;
 
 use crate::arbor::{Arbor, CastTarget, OutputRenderElements, PointerRenderElements, State};
 use crate::arbor_render_elements;
@@ -24,6 +23,7 @@ use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
 use crate::window::mapped::{MappedId, WindowCastRenderElements};
 
 mod pw_utils;
+pub use pw_utils::StreamReady;
 use pw_utils::{Cast, CastSizeChange, CursorData, PipeWire, PwToArbor};
 
 pub struct Screencasting {
@@ -49,7 +49,7 @@ pub struct PendingCast {
     pub session_id: CastSessionId,
     pub stream_id: CastStreamId,
     pub cursor_mode: CursorMode,
-    pub signal_ctx: SignalEmitter<'static>,
+    pub ready: StreamReady,
 }
 
 impl Screencasting {
@@ -365,7 +365,7 @@ impl State {
                 refresh,
                 alpha,
                 pending.cursor_mode,
-                pending.signal_ctx,
+                pending.ready,
             );
             match res {
                 Ok(mut cast) => {
@@ -417,7 +417,7 @@ impl State {
                             session_id,
                             stream_id,
                             cursor_mode,
-                            signal_ctx,
+                            ready: StreamReady::Mutter(signal_ctx),
                         });
                         return;
                     }
@@ -451,7 +451,7 @@ impl State {
                     refresh,
                     alpha,
                     cursor_mode,
-                    signal_ctx,
+                    StreamReady::Mutter(signal_ctx),
                 );
                 match res {
                     Ok(cast) => {
