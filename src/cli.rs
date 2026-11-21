@@ -27,6 +27,11 @@ pub struct Cli {
     /// on a TTY as your non-main compositor instance, to avoid messing up the global environment.
     #[arg(long)]
     pub session: bool,
+    /// Run under a supervisor that keeps the Wayland, IPC and X11 sockets, so that arbor can
+    /// restart in place (`arbor msg action reload-binary`, or after a crash) while apps
+    /// reconnect. Implied by `--session`; `ARBOR_NO_SUPERVISOR=1` turns it off.
+    #[arg(long)]
+    pub supervise: bool,
     /// Command to run upon compositor startup.
     #[arg(last = true)]
     pub command: Vec<OsString>,

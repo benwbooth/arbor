@@ -299,6 +299,17 @@ pub struct Arbor {
     pub session_path: Option<std::path::PathBuf>,
     /// Session restore in progress.
     pub session_restore: Option<crate::session::PendingRestore>,
+    /// Session lock state last sent to the supervisor (supervisor.rs).
+    pub supervisor_locked: bool,
+    /// The supervisor's Wayland socket, not accepting yet after a restart, and since when.
+    pub held_listener: Option<(RegistrationToken, Instant)>,
+    /// Floating windows put back after an in-place restart, until when (session.rs).
+    #[allow(clippy::type_complexity)]
+    pub restart_floating: Option<(
+        Instant,
+        Vec<(smithay::desktop::Window, crate::session::SavedGeometry)>,
+        Option<HashMap<String, [f64; 4]>>,
+    )>,
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
@@ -802,6 +813,25 @@ impl State {
         let _span = tracy_client::span!("State::refresh_and_flush_clients");
 
         self.refresh();
+
+        // After a restart: accept reconnecting clients once there are outputs (or after a while).
+        if let Some((token, since)) = self.arbor.held_listener {
+            if self.arbor.layout.outputs().next().is_some()
+                || since.elapsed() > Duration::from_secs(3)
+            {
+                self.arbor.held_listener = None;
+                if let Err(err) = self.arbor.event_loop.enable(&token) {
+                    warn!("error enabling the Wayland socket: {err:?}");
+                }
+            }
+        }
+
+        // The supervisor doesn't restart a compositor that crashed while locked.
+        let locked = self.arbor.is_locked();
+        if locked != self.arbor.supervisor_locked {
+            self.arbor.supervisor_locked = locked;
+            crate::supervisor::notify_locked(locked);
+        }
 
         // Advance animations to the current time (not target render time) before rendering outputs
         // in order to clear completed animations and render elements. Even if we're not rendering,
@@ -2526,20 +2556,53 @@ impl Arbor {
             )
             .unwrap();
 
-        let socket_name = create_wayland_socket.then(|| {
-            let socket_source = ListeningSocketSource::new_auto().unwrap();
-            let socket_name = socket_source.socket_name().to_os_string();
-            event_loop
-                .insert_source(socket_source, move |client, _, state| {
-                    state.arbor.insert_client(NewClient {
-                        client,
-                        restricted: false,
-                        credentials_unknown: false,
-                    });
+        let inherited_socket = create_wayland_socket
+            .then(crate::supervisor::take_wayland)
+            .flatten();
+        let mut held_listener = None;
+        let socket_name = if let Some((listener, name)) = inherited_socket {
+            // The supervisor's socket (supervisor.rs): the same name across restarts.
+            let source = Generic::new(listener, Interest::READ, Mode::Level);
+            let token = event_loop
+                .insert_source(source, |_, listener, state| {
+                    loop {
+                        match listener.accept() {
+                            Ok((client, _)) => state.arbor.insert_client(NewClient {
+                                client,
+                                restricted: false,
+                                credentials_unknown: false,
+                            }),
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Ok(PostAction::Continue)
                 })
                 .unwrap();
-            socket_name
-        });
+            // Apps reconnecting after a restart wait (in the socket backlog) until the outputs
+            // are back: a client that finds no outputs makes placeholder screens, and layer
+            // shells like hearth then misbehave.
+            if crate::supervisor::start_kind().is_restart() {
+                event_loop.disable(&token).unwrap();
+                held_listener = Some((token, Instant::now()));
+            }
+            Some(name)
+        } else {
+            create_wayland_socket.then(|| {
+                let socket_source = ListeningSocketSource::new_auto().unwrap();
+                let socket_name = socket_source.socket_name().to_os_string();
+                event_loop
+                    .insert_source(socket_source, move |client, _, state| {
+                        state.arbor.insert_client(NewClient {
+                            client,
+                            restricted: false,
+                            credentials_unknown: false,
+                        });
+                    })
+                    .unwrap();
+                socket_name
+            })
+        };
 
         let ipc_server = match IpcServer::start(&event_loop, socket_name.as_deref()) {
             Ok(server) => Some(server),
@@ -2599,6 +2662,9 @@ impl Arbor {
                 crate::session::default_session_path()
             },
             session_restore: None,
+            supervisor_locked: false,
+            held_listener,
+            restart_floating: None,
             clock: animation_clock,
 
             layout,
@@ -4364,7 +4430,9 @@ impl Arbor {
         {
             let output_loc = self.global_space.output_geometry(output).unwrap().loc;
             self.portal_dialog
-                .render(ctx.renderer, output, output_loc, &mut |elem| push(elem.into()));
+                .render(ctx.renderer, output, output_loc, &mut |elem| {
+                    push(elem.into())
+                });
         }
 
         // Next, the config error notification too.

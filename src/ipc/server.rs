@@ -48,6 +48,8 @@ pub struct IpcServer {
     ///
     /// This is `None` when creating `IpcServer` without a socket.
     pub socket_path: Option<PathBuf>,
+    /// Whether to unlink `socket_path` on drop (not the supervisor's socket).
+    owns_path: bool,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
     /// arbor: the zone drag last sent in `Event::ZoneDragChanged`.
@@ -80,13 +82,25 @@ impl IpcServer {
     ) -> anyhow::Result<Self> {
         let _span = tracy_client::span!("Ipc::start");
 
+        let inherited = wayland_socket_name
+            .is_some()
+            .then(crate::supervisor::take_ipc)
+            .flatten();
+        // The supervisor's socket (supervisor.rs) stays for the next compositor: don't unlink.
+        let owns_path = inherited.is_none();
         let socket_path = if let Some(wayland_socket_name) = wayland_socket_name {
-            let wayland_socket_name = wayland_socket_name.to_string_lossy();
-            let socket_name = format!("arbor.{wayland_socket_name}.{}.sock", process::id());
-            let mut socket_path = socket_dir();
-            socket_path.push(socket_name);
-
-            let listener = UnixListener::bind(&socket_path).context("error binding socket")?;
+            let (listener, socket_path) = match inherited {
+                Some(inherited) => inherited,
+                None => {
+                    let wayland_socket_name = wayland_socket_name.to_string_lossy();
+                    let socket_name = format!("arbor.{wayland_socket_name}.{}.sock", process::id());
+                    let mut socket_path = socket_dir();
+                    socket_path.push(socket_name);
+                    let listener =
+                        UnixListener::bind(&socket_path).context("error binding socket")?;
+                    (listener, socket_path)
+                }
+            };
             listener
                 .set_nonblocking(true)
                 .context("error setting socket to non-blocking")?;
@@ -111,6 +125,7 @@ impl IpcServer {
 
         Ok(Self {
             socket_path,
+            owns_path,
             event_streams: Rc::new(RefCell::new(Vec::new())),
             event_stream_state: Rc::new(RefCell::new(EventStreamState::default())),
             last_zone_drag: RefCell::new(None),
@@ -143,7 +158,7 @@ impl IpcServer {
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        if let Some(socket_path) = &self.socket_path {
+        if let Some(socket_path) = self.socket_path.as_ref().filter(|_| self.owns_path) {
             let _ = unlink(socket_path);
         }
     }

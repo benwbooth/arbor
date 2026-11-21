@@ -1257,6 +1257,18 @@ impl<W: LayoutElement> DockSpace<W> {
         self.camera.current(self.working_area)
     }
 
+    /// The camera mode and where it is going (in-place restarts save it).
+    pub fn camera_state(&self) -> (CameraMode, CameraView) {
+        (self.camera.mode, self.camera.target)
+    }
+
+    /// Puts the camera back to a saved state without animating (in-place restarts).
+    pub fn restore_camera(&mut self, mode: CameraMode, view: CameraView) {
+        self.camera.mode = mode;
+        self.camera.target = view;
+        self.update_camera(false);
+    }
+
     /// Whether the camera shows the canvas scaled (windows are then not interactive).
     pub fn is_zoomed(&self) -> bool {
         self.camera_view().zoom != 1.

@@ -14,6 +14,25 @@ impl<W: LayoutElement> Workspace<W> {
         self.dock.shape()
     }
 
+    /// The dock camera mode and target (in-place restarts).
+    pub fn camera_state(
+        &self,
+    ) -> (
+        crate::layout::camera::CameraMode,
+        crate::layout::camera::CameraView,
+    ) {
+        self.dock.camera_state()
+    }
+
+    /// Puts the dock camera back (in-place restarts).
+    pub fn restore_camera(
+        &mut self,
+        mode: crate::layout::camera::CameraMode,
+        view: crate::layout::camera::CameraView,
+    ) {
+        self.dock.restore_camera(mode, view);
+    }
+
     /// Rearranges the docked windows into `shape` (session restore).
     pub fn apply_dock_shape(&mut self, shape: &crate::layout::dock::DockShape<W::Id>) {
         self.dock.apply_shape(shape);

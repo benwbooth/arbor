@@ -1,0 +1,621 @@
+//! Restarting arbor in place: a new build, or after a crash, without logging out.
+//!
+//! Modelled on KWin's `kwin_wayland_wrapper`. `arbor --session` (or `arbor --supervise`) starts a
+//! small supervisor process that owns the listening sockets that clients connect to:
+//!
+//! - the Wayland socket (`$WAYLAND_DISPLAY`),
+//! - the IPC socket (`$ARBOR_SOCKET`),
+//! - the X11 display sockets for xwayland-satellite (`$DISPLAY`),
+//!
+//! and runs the compositor as its child with those sockets inherited. When the compositor exits
+//! for a reload (`arbor msg action reload-binary`) or crashes, the supervisor starts it again on
+//! the same sockets. Connections made meanwhile wait in the socket backlog, so clients that
+//! reconnect (Qt apps with `QT_WAYLAND_RECONNECT=1`, hearth's IPC connections) find the new
+//! compositor under the same names. Before a reload the compositor saves its layout (see
+//! `session.rs`), and the new one puts reconnecting windows back and relaunches apps that died.
+//!
+//! The child gets the sockets as file descriptors named in `ARBOR_SUPERVISED_*` environment
+//! variables, plus a pipe for messages to the supervisor:
+//!
+//! - `READY`: started (the supervisor tells systemd once);
+//! - `RELOAD <path>`: exiting with [`RELOAD_EXIT_CODE`] to run `<path>` next;
+//! - `LOCKED` / `UNLOCKED`: the session lock state. A compositor that crashes while the screen is
+//!   locked is not restarted (that would unlock it): the session ends instead, as without the
+//!   supervisor.
+//!
+//! A build that crashes within [`PROBATION`] of a reload is replaced by the previous binary (kept
+//! open by the supervisor, so a newer file at the same path doesn't matter). Crashes after that
+//! restart the same binary, up to [`MAX_CRASHES`] within [`CRASH_WINDOW`].
+
+use std::ffi::OsString;
+use std::fs::File;
+use std::io::{BufRead as _, BufReader, Write as _};
+use std::os::fd::{AsFd, AsRawFd as _, BorrowedFd, FromRawFd as _, OwnedFd, RawFd};
+use std::os::unix::net::UnixListener;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use std::{env, io, thread};
+
+use anyhow::Context as _;
+use smithay::reexports::rustix::io::{fcntl_getfd, fcntl_setfd, FdFlags};
+
+/// Exit code of a compositor that wants to be replaced by the binary it named.
+pub const RELOAD_EXIT_CODE: i32 = 75;
+/// A reloaded build that crashes this soon is replaced by the previous one.
+pub const PROBATION: Duration = Duration::from_secs(20);
+/// More crashes than this within [`CRASH_WINDOW`] end the session.
+pub const MAX_CRASHES: usize = 3;
+pub const CRASH_WINDOW: Duration = Duration::from_secs(60);
+
+const ENV_CONTROL: &str = "ARBOR_SUPERVISED_CONTROL_FD";
+const ENV_WAYLAND_FD: &str = "ARBOR_SUPERVISED_WAYLAND_FD";
+const ENV_WAYLAND_NAME: &str = "ARBOR_SUPERVISED_WAYLAND_NAME";
+const ENV_IPC_FD: &str = "ARBOR_SUPERVISED_IPC_FD";
+const ENV_IPC_PATH: &str = "ARBOR_SUPERVISED_IPC_PATH";
+const ENV_X11_DISPLAY: &str = "ARBOR_SUPERVISED_X11_DISPLAY";
+const ENV_X11_UNIX_FD: &str = "ARBOR_SUPERVISED_X11_UNIX_FD";
+const ENV_X11_ABSTRACT_FD: &str = "ARBOR_SUPERVISED_X11_ABSTRACT_FD";
+const ENV_START: &str = "ARBOR_SUPERVISED_START";
+const ENV_STATE: &str = "ARBOR_SUPERVISED_STATE";
+
+/// Why the compositor is starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartKind {
+    /// Not supervised, or the supervisor's first start: a fresh session.
+    First,
+    /// After `reload-binary`: the previous compositor saved its layout.
+    Reload,
+    /// After a crash: the layout from the last periodic save.
+    Crash,
+}
+
+impl StartKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            StartKind::First => "first",
+            StartKind::Reload => "reload",
+            StartKind::Crash => "crash",
+        }
+    }
+
+    pub fn is_restart(self) -> bool {
+        self != StartKind::First
+    }
+}
+
+/// What the supervisor handed this compositor process.
+#[derive(Debug, Default)]
+pub struct Inherited {
+    pub wayland: Option<(UnixListener, OsString)>,
+    pub ipc: Option<(UnixListener, PathBuf)>,
+    pub x11: Option<InheritedX11>,
+}
+
+#[derive(Debug)]
+pub struct InheritedX11 {
+    pub display_name: String,
+    pub unix_fd: OwnedFd,
+    pub abstract_fd: Option<OwnedFd>,
+}
+
+struct ChildSide {
+    control: Option<File>,
+    start: StartKind,
+    state_path: Option<PathBuf>,
+}
+
+static INHERITED: Mutex<Option<Inherited>> = Mutex::new(None);
+static CHILD: Mutex<Option<ChildSide>> = Mutex::new(None);
+
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Whether this compositor started for an in-place restart less than `within` ago (clients are
+/// reconnecting).
+pub fn restarted_within(within: Duration) -> bool {
+    start_kind().is_restart() && STARTED.get().is_some_and(|t| t.elapsed() < within)
+}
+
+/// Whether this process runs under the supervisor (call [`take_from_env`] first).
+pub fn is_supervised() -> bool {
+    CHILD.lock().unwrap().is_some()
+}
+
+/// Why this process started.
+pub fn start_kind() -> StartKind {
+    CHILD
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or(StartKind::First, |c| c.start)
+}
+
+/// Where the layout is saved for the next compositor of this supervisor.
+pub fn state_path() -> Option<PathBuf> {
+    CHILD.lock().unwrap().as_ref()?.state_path.clone()
+}
+
+fn env_fd(name: &str) -> Option<OwnedFd> {
+    let fd: RawFd = env::var(name).ok()?.parse().ok()?;
+    env::remove_var(name);
+    // SAFETY: the supervisor passed us this fd for our exclusive use.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // Not inherited by our own children.
+    let _ = fcntl_setfd(&fd, FdFlags::CLOEXEC);
+    Some(fd)
+}
+
+fn env_take(name: &str) -> Option<OsString> {
+    let v = env::var_os(name);
+    env::remove_var(name);
+    v
+}
+
+/// Reads (and removes from the environment, so apps don't see them) what the supervisor passed.
+/// Call once, early in `main`, before threads start.
+pub fn take_from_env() {
+    let Some(control) = env_fd(ENV_CONTROL) else {
+        return;
+    };
+    let start = match env_take(ENV_START).as_deref().and_then(|s| s.to_str()) {
+        Some("reload") => StartKind::Reload,
+        Some("crash") => StartKind::Crash,
+        _ => StartKind::First,
+    };
+    let state_path = env_take(ENV_STATE).map(PathBuf::from);
+
+    let mut inherited = Inherited::default();
+    let wayland_name = env_take(ENV_WAYLAND_NAME);
+    if let (Some(fd), Some(name)) = (env_fd(ENV_WAYLAND_FD), wayland_name) {
+        let listener = UnixListener::from(fd);
+        let _ = listener.set_nonblocking(true);
+        inherited.wayland = Some((listener, name));
+    }
+    let ipc_path = env_take(ENV_IPC_PATH);
+    if let (Some(fd), Some(path)) = (env_fd(ENV_IPC_FD), ipc_path) {
+        let listener = UnixListener::from(fd);
+        let _ = listener.set_nonblocking(true);
+        inherited.ipc = Some((listener, PathBuf::from(path)));
+    }
+    let x11_display = env_take(ENV_X11_DISPLAY);
+    let x11_abstract = env_fd(ENV_X11_ABSTRACT_FD);
+    if let (Some(unix_fd), Some(display)) = (env_fd(ENV_X11_UNIX_FD), x11_display) {
+        inherited.x11 = Some(InheritedX11 {
+            display_name: display.to_string_lossy().into_owned(),
+            unix_fd,
+            abstract_fd: x11_abstract,
+        });
+    }
+
+    let _ = STARTED.set(Instant::now());
+    *INHERITED.lock().unwrap() = Some(inherited);
+    *CHILD.lock().unwrap() = Some(ChildSide {
+        control: Some(File::from(control)),
+        start,
+        state_path,
+    });
+}
+
+/// The inherited Wayland listening socket and its name.
+pub fn take_wayland() -> Option<(UnixListener, OsString)> {
+    INHERITED.lock().unwrap().as_mut()?.wayland.take()
+}
+
+/// The inherited IPC listening socket and its path.
+pub fn take_ipc() -> Option<(UnixListener, PathBuf)> {
+    INHERITED.lock().unwrap().as_mut()?.ipc.take()
+}
+
+/// The inherited X11 display sockets.
+pub fn take_x11() -> Option<InheritedX11> {
+    INHERITED.lock().unwrap().as_mut()?.x11.take()
+}
+
+fn send(line: &str) {
+    let mut child = CHILD.lock().unwrap();
+    let Some(control) = child.as_mut().and_then(|c| c.control.as_mut()) else {
+        return;
+    };
+    if let Err(err) = control.write_all(format!("{line}\n").as_bytes()) {
+        warn!("error writing to the supervisor: {err:?}");
+    }
+}
+
+/// Tells the supervisor this compositor is up.
+pub fn notify_ready() {
+    send("READY");
+}
+
+/// Tells the supervisor the session lock state.
+pub fn notify_locked(locked: bool) {
+    send(if locked { "LOCKED" } else { "UNLOCKED" });
+}
+
+static RELOAD_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tells the supervisor to start `binary` (default: the binary it was started from, which may
+/// have been replaced by a newer build since) after this process exits with
+/// [`RELOAD_EXIT_CODE`].
+pub fn request_reload(binary: Option<&Path>) {
+    match binary {
+        Some(binary) => send(&format!("RELOAD {}", binary.display())),
+        None => send("RELOAD"),
+    }
+    RELOAD_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether this process should exit with [`RELOAD_EXIT_CODE`].
+pub fn reload_requested() -> bool {
+    RELOAD_REQUESTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+// --- The supervisor side ---
+
+/// Sockets the supervisor keeps open for all its compositors.
+struct Sockets {
+    // Keeps the lock file and unlinks the socket on drop.
+    wayland: wayland_server::ListeningSocket,
+    wayland_name: OsString,
+    ipc: UnixListener,
+    ipc_path: PathBuf,
+    x11: Option<crate::utils::xwayland::X11Connection>,
+}
+
+impl Drop for Sockets {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.ipc_path);
+    }
+}
+
+fn runtime_dir() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(env::temp_dir)
+}
+
+fn open_sockets(x11: bool) -> anyhow::Result<Sockets> {
+    let wayland = wayland_server::ListeningSocket::bind_auto("wayland", 1..33)
+        .context("error binding the Wayland socket")?;
+    let wayland_name = wayland.socket_name().unwrap().to_os_string();
+
+    let ipc_path = runtime_dir().join(format!(
+        "arbor.{}.{}.sock",
+        wayland_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&ipc_path);
+    let ipc = UnixListener::bind(&ipc_path).context("error binding the IPC socket")?;
+
+    let x11 = if x11 {
+        match crate::utils::xwayland::setup_connection() {
+            Ok(x11) => Some(x11),
+            Err(err) => {
+                warn!("error opening X11 sockets: {err:?}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(Sockets {
+        wayland,
+        wayland_name,
+        ipc,
+        ipc_path,
+        x11,
+    })
+}
+
+/// A binary to run, kept open so that replacing the file doesn't change what we run.
+struct Binary {
+    file: File,
+    path: PathBuf,
+}
+
+impl Binary {
+    fn open(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            file: File::open(path)?,
+            path: path.to_owned(),
+        })
+    }
+
+    fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            file: self.file.try_clone()?,
+            path: self.path.clone(),
+        })
+    }
+}
+
+enum Msg {
+    Ready,
+    Reload(PathBuf),
+    Locked(bool),
+}
+
+fn clear_cloexec(fd: BorrowedFd) -> io::Result<()> {
+    let flags = fcntl_getfd(fd)?;
+    fcntl_setfd(fd, flags - FdFlags::CLOEXEC)?;
+    Ok(())
+}
+
+struct Supervisor {
+    sockets: Sockets,
+    args: Vec<OsString>,
+    state_path: PathBuf,
+    /// Lines from the current child.
+    msgs: std::sync::mpsc::Receiver<(u64, Msg)>,
+    msgs_tx: std::sync::mpsc::Sender<(u64, Msg)>,
+    generation: u64,
+    notified_systemd: bool,
+}
+
+impl Supervisor {
+    /// Starts a compositor; returns it and the read end's reader thread generation.
+    fn spawn(&mut self, binary: &Binary, start: StartKind) -> io::Result<Child> {
+        let (read, write) = smithay::reexports::rustix::pipe::pipe_with(
+            smithay::reexports::rustix::pipe::PipeFlags::CLOEXEC,
+        )?;
+        self.generation += 1;
+        let generation = self.generation;
+        let tx = self.msgs_tx.clone();
+        thread::Builder::new()
+            .name("supervisor-pipe".to_owned())
+            .spawn(move || {
+                for line in BufReader::new(File::from(read)).lines() {
+                    let Ok(line) = line else { break };
+                    let msg = match line.split_once(' ') {
+                        Some(("RELOAD", path)) => Msg::Reload(PathBuf::from(path)),
+                        _ => match line.as_str() {
+                            "READY" => Msg::Ready,
+                            "LOCKED" => Msg::Locked(true),
+                            "UNLOCKED" => Msg::Locked(false),
+                            _ => continue,
+                        },
+                    };
+                    if tx.send((generation, msg)).is_err() {
+                        break;
+                    }
+                }
+            })?;
+
+        let s = &self.sockets;
+        let mut fds: Vec<RawFd> = vec![
+            write.as_raw_fd(),
+            s.wayland.as_fd().as_raw_fd(),
+            s.ipc.as_raw_fd(),
+        ];
+        let mut cmd = Command::new(format!("/proc/self/fd/{}", binary.file.as_raw_fd()));
+        cmd.arg0(&binary.path)
+            .args(&self.args)
+            .env(ENV_CONTROL, write.as_raw_fd().to_string())
+            .env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string())
+            .env(ENV_WAYLAND_NAME, &s.wayland_name)
+            .env(ENV_IPC_FD, s.ipc.as_raw_fd().to_string())
+            .env(ENV_IPC_PATH, &s.ipc_path)
+            .env(ENV_START, start.as_str())
+            .env(ENV_STATE, &self.state_path);
+        if let Some(x11) = &s.x11 {
+            cmd.env(ENV_X11_DISPLAY, &x11.display_name)
+                .env(ENV_X11_UNIX_FD, x11.unix_fd.as_raw_fd().to_string());
+            fds.push(x11.unix_fd.as_raw_fd());
+            if let Some(fd) = &x11.abstract_fd {
+                cmd.env(ENV_X11_ABSTRACT_FD, fd.as_raw_fd().to_string());
+                fds.push(fd.as_raw_fd());
+            }
+        }
+        // SAFETY: only async-signal-safe calls (fcntl, sigprocmask) between fork and exec.
+        unsafe {
+            cmd.pre_exec(move || {
+                for fd in &fds {
+                    clear_cloexec(BorrowedFd::borrow_raw(*fd))?;
+                }
+                crate::utils::signals::unblock_all()
+            });
+        }
+        info!(
+            "supervisor: starting {} ({})",
+            binary.path.display(),
+            start.as_str()
+        );
+        let child = cmd.spawn();
+        drop(write);
+        child
+    }
+
+    fn drain(&mut self, generation: u64, locked: &mut bool, reload: &mut Option<PathBuf>) {
+        while let Ok((gen, msg)) = self.msgs.try_recv() {
+            if gen != generation {
+                continue;
+            }
+            match msg {
+                Msg::Ready => {
+                    if !self.notified_systemd {
+                        self.notified_systemd = true;
+                        if let Err(err) = sd_notify::notify(&[sd_notify::NotifyState::Ready]) {
+                            warn!("error notifying systemd: {err:?}");
+                        }
+                    }
+                }
+                Msg::Locked(l) => *locked = l,
+                Msg::Reload(path) => *reload = Some(path),
+            }
+        }
+    }
+}
+
+/// Signals the supervisor forwards to the compositor (and then exits with it).
+static TERMINATING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static CHILD_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn forward_signal(sig: libc::c_int) {
+    TERMINATING.store(sig, std::sync::atomic::Ordering::SeqCst);
+    let pid = CHILD_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if pid > 0 {
+        // SAFETY: kill is async-signal-safe.
+        unsafe { libc::kill(pid, sig) };
+    }
+}
+
+/// Runs the supervisor: starts the compositor (this binary, with `args`) and restarts it on
+/// reloads and crashes. Returns the exit code for the process.
+pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
+    let exe = env::current_exe().context("error finding our own binary")?;
+    let mut current = Binary::open(&exe).context("error opening our own binary")?;
+    let sockets = open_sockets(x11)?;
+    info!(
+        "supervisor: Wayland socket {}, IPC {}",
+        sockets.wayland_name.to_string_lossy(),
+        sockets.ipc_path.display()
+    );
+    let state_path = runtime_dir().join(format!("arbor-restart.{}.json", std::process::id()));
+
+    for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        // SAFETY: the handler only does atomics and kill().
+        unsafe {
+            libc::signal(
+                sig,
+                forward_signal as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            )
+        };
+    }
+
+    let (msgs_tx, msgs) = std::sync::mpsc::channel();
+    let mut sup = Supervisor {
+        sockets,
+        args,
+        state_path: state_path.clone(),
+        msgs,
+        msgs_tx,
+        generation: 0,
+        notified_systemd: false,
+    };
+
+    let mut start = StartKind::First;
+    // The binary to go back to if this one fails right after a reload.
+    let mut previous: Option<Binary> = None;
+    let mut crashes: Vec<Instant> = Vec::new();
+
+    let code = loop {
+        let started = Instant::now();
+        let mut child = match sup.spawn(&current, start) {
+            Ok(child) => child,
+            Err(err) => {
+                warn!(
+                    "supervisor: error starting {}: {err:?}",
+                    current.path.display()
+                );
+                match previous.take() {
+                    Some(prev) => {
+                        current = prev;
+                        start = StartKind::Crash;
+                        continue;
+                    }
+                    None => break 1,
+                }
+            }
+        };
+        CHILD_PID.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
+        // A signal that came before the pid was stored.
+        let pending = TERMINATING.load(std::sync::atomic::Ordering::SeqCst);
+        if pending != 0 {
+            // SAFETY: plain kill() of our child.
+            unsafe { libc::kill(child.id() as i32, pending) };
+        }
+
+        let generation = sup.generation;
+        let mut locked = false;
+        let mut reload = None;
+        let status = loop {
+            sup.drain(generation, &mut locked, &mut reload);
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => thread::sleep(Duration::from_millis(50)),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => (),
+                Err(err) => {
+                    warn!("supervisor: error waiting for the compositor: {err:?}");
+                    break std::process::ExitStatus::from_raw(1 << 8);
+                }
+            }
+        };
+        CHILD_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+        // The pipe's reader thread gets EOF with the child gone; give it a moment to deliver.
+        thread::sleep(Duration::from_millis(20));
+        sup.drain(generation, &mut locked, &mut reload);
+
+        let term = TERMINATING.load(std::sync::atomic::Ordering::SeqCst);
+        if term != 0 {
+            info!("supervisor: compositor ended after signal {term}: {status}");
+            break status.code().unwrap_or(0);
+        }
+
+        match status.code() {
+            Some(0) => {
+                info!("supervisor: compositor quit");
+                break 0;
+            }
+            Some(RELOAD_EXIT_CODE) => {
+                let path = reload.unwrap_or_else(|| current.path.clone());
+                match Binary::open(&path) {
+                    Ok(next) => {
+                        info!("supervisor: reloading into {}", path.display());
+                        previous = Some(current);
+                        current = next;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "supervisor: error opening {}: {err:?}; restarting the same binary",
+                            path.display()
+                        );
+                    }
+                }
+                start = StartKind::Reload;
+                crashes.clear();
+                continue;
+            }
+            _ => (),
+        }
+
+        // A crash.
+        warn!("supervisor: compositor crashed: {status}");
+        if locked {
+            warn!("supervisor: the screen was locked; ending the session instead of restarting");
+            break status.code().unwrap_or(1);
+        }
+        if started.elapsed() < PROBATION {
+            if let Some(prev) = previous.take() {
+                warn!(
+                    "supervisor: the new build failed; going back to {}",
+                    prev.path.display()
+                );
+                current = prev;
+                start = StartKind::Crash;
+                continue;
+            }
+        }
+        let now = Instant::now();
+        crashes.retain(|t| now.duration_since(*t) < CRASH_WINDOW);
+        crashes.push(now);
+        if crashes.len() > MAX_CRASHES {
+            warn!("supervisor: too many crashes; ending the session");
+            break status.code().unwrap_or(1);
+        }
+        // Later reloads fall back to this binary, which ran fine for a while.
+        if started.elapsed() >= PROBATION {
+            previous = None;
+        }
+        current = match current.try_clone() {
+            Ok(b) => b,
+            Err(_) => break 1,
+        };
+        start = StartKind::Crash;
+    };
+
+    let _ = std::fs::remove_file(&state_path);
+    Ok(code)
+}

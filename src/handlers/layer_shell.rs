@@ -227,6 +227,7 @@ impl State {
 
         // This will call queue_redraw() inside.
         self.arbor.output_resized(&output);
+        self.restart_reapply_floating();
 
         true
     }

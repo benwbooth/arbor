@@ -47,7 +47,11 @@ pub fn setup(state: &mut State) {
     }
     drop(config);
 
-    let x11 = match super::setup_connection() {
+    let x11 = match crate::supervisor::take_x11() {
+        Some(x11) => Ok(X11Connection::inherited(x11)),
+        None => super::setup_connection(),
+    };
+    let x11 = match x11 {
         Ok(x11) => x11,
         Err(err) => {
             warn!("error opening X11 sockets, disabling xwayland-satellite integration: {err:?}");

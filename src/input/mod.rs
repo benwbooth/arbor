@@ -2521,8 +2521,17 @@ impl State {
             }
             Action::SessionSave => self.session_save_now(),
             Action::SessionRestore => self.session_restore_now(),
+            Action::ReloadBinary => self.reload_binary(None),
+            Action::ReloadBinaryPath(path) => {
+                self.reload_binary(Some(std::path::PathBuf::from(path)))
+            }
             Action::MoveWindowToZone(zone) => {
-                if zone > 0 && self.arbor.layout.move_window_to_zone(None, zone as usize - 1) {
+                if zone > 0
+                    && self
+                        .arbor
+                        .layout
+                        .move_window_to_zone(None, zone as usize - 1)
+                {
                     self.arbor.queue_redraw_all();
                 }
             }

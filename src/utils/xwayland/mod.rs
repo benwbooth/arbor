@@ -14,13 +14,27 @@ pub mod satellite;
 const TMP_UNIX_DIR: &str = "/tmp";
 const X11_TMP_UNIX_DIR: &str = "/tmp/.X11-unix";
 
-struct X11Connection {
-    display_name: String,
+pub(crate) struct X11Connection {
+    pub(crate) display_name: String,
     // Optional because there are no abstract sockets on FreeBSD.
-    abstract_fd: Option<OwnedFd>,
-    unix_fd: OwnedFd,
-    _unix_guard: Unlink,
-    _lock_guard: Unlink,
+    pub(crate) abstract_fd: Option<OwnedFd>,
+    pub(crate) unix_fd: OwnedFd,
+    // None for sockets inherited from the supervisor, which owns the files.
+    _unix_guard: Option<Unlink>,
+    _lock_guard: Option<Unlink>,
+}
+
+impl X11Connection {
+    /// Sockets opened by the supervisor (see `supervisor.rs`).
+    pub(crate) fn inherited(x11: crate::supervisor::InheritedX11) -> Self {
+        Self {
+            display_name: x11.display_name,
+            abstract_fd: x11.abstract_fd,
+            unix_fd: x11.unix_fd,
+            _unix_guard: None,
+            _lock_guard: None,
+        }
+    }
 }
 
 struct Unlink(String);
@@ -112,7 +126,7 @@ fn open_display_sockets(
     Ok((a, u, g))
 }
 
-fn setup_connection() -> anyhow::Result<X11Connection> {
+pub(crate) fn setup_connection() -> anyhow::Result<X11Connection> {
     let _span = tracy_client::span!("open_x11_sockets");
 
     ensure_x11_unix_dir()?;
@@ -154,7 +168,7 @@ fn setup_connection() -> anyhow::Result<X11Connection> {
         display_name,
         abstract_fd,
         unix_fd,
-        _unix_guard: unix_guard,
-        _lock_guard: lock_guard,
+        _unix_guard: Some(unix_guard),
+        _lock_guard: Some(lock_guard),
     })
 }

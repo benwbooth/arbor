@@ -100,6 +100,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env::set_var("XDG_SESSION_TYPE", "wayland");
     }
 
+    // Started by the supervisor? (supervisor.rs)
+    arbor::supervisor::take_from_env();
+    let start_kind = arbor::supervisor::start_kind();
+
+    if cli.subcommand.is_none()
+        && (cli.session || cli.supervise)
+        && !arbor::supervisor::is_supervised()
+        && env::var_os("ARBOR_NO_SUPERVISOR").is_none_or(|x| x != "1")
+    {
+        // Become the supervisor; the compositor runs as our child, with the same arguments.
+        let x11 = match config_path(cli.config.clone()).load().config {
+            Ok(config) => !config.xwayland_satellite.off,
+            Err(_) => true,
+        };
+        let args = env::args_os().skip(1).collect();
+        let code = arbor::supervisor::run(args, x11)?;
+        std::process::exit(code);
+    }
+
     // Handle subcommands.
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
@@ -217,9 +236,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env::remove_var("DISPLAY");
     }
 
+    if cli.session
+        && arbor::supervisor::is_supervised()
+        && env::var_os("QT_WAYLAND_RECONNECT").is_none()
+    {
+        // arbor can restart in place (supervisor.rs): Qt apps reconnect instead of exiting.
+        env::set_var("QT_WAYLAND_RECONNECT", "1");
+    }
+
     if cli.session {
-        // We're starting as a session. Import our variables.
-        import_environment();
+        // We're starting as a session. Import our variables (the same after a restart).
+        if !start_kind.is_restart() {
+            import_environment();
+        }
 
         // Inhibit power key handling so we can suspend on it.
         #[cfg(feature = "dbus")]
@@ -238,7 +267,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.arbor.a11y.start();
     }
 
-    if env::var_os("ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
+    if arbor::supervisor::is_supervised() {
+        // The supervisor tells systemd (only it may, as the service's main process).
+        arbor::supervisor::notify_ready();
+    } else if env::var_os("ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
         // Notify systemd we're ready.
         if let Err(err) = sd_notify::notify(&[NotifyState::Ready]) {
             warn!("error notifying systemd: {err:?}");
@@ -252,14 +284,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     watcher::setup(&mut state, &config_path, config_includes);
 
-    // Spawn commands from cli and auto-start.
-    spawn(cli.command, None);
+    // Spawn commands from cli and auto-start; not again after an in-place restart, where they
+    // are still running.
+    if !start_kind.is_restart() {
+        spawn(cli.command, None);
 
-    for elem in spawn_at_startup {
-        spawn(elem.command, None);
-    }
-    for elem in spawn_sh_at_startup {
-        spawn_sh(elem.command, None);
+        for elem in spawn_at_startup {
+            spawn(elem.command, None);
+        }
+        for elem in spawn_sh_at_startup {
+            spawn_sh(elem.command, None);
+        }
     }
 
     // Show the config error notification right away if needed.
@@ -271,7 +306,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if cli.session {
-        state.session_start();
+        // After an in-place restart the apps are still running: no relaunch of the saved session.
+        state.session_start(!start_kind.is_restart());
+    }
+    if arbor::supervisor::is_supervised() {
+        // Put back the windows of the previous compositor (reload, crash) as they reconnect, and
+        // keep a copy of the layout for the next one in case this one crashes.
+        state.restart_start(start_kind);
     }
 
     // Run the compositor.
@@ -284,6 +325,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.session_autosave();
     }
 
+    if arbor::supervisor::reload_requested() {
+        // The supervisor starts the new binary on the same sockets. Exiting right away (no
+        // destructors) keeps the gap short.
+        info!("exiting for an in-place reload");
+        std::process::exit(arbor::supervisor::RELOAD_EXIT_CODE);
+    }
+
     Ok(())
 }
 
@@ -293,6 +341,7 @@ fn import_environment() {
         "DISPLAY",
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
+        "QT_WAYLAND_RECONNECT",
         SOCKET_PATH_ENV,
         COMPAT_SOCKET_PATH_ENV,
     ]

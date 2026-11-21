@@ -398,6 +398,9 @@ pub enum Action {
     ToggleReduceMotion,
     SessionSave,
     SessionRestore,
+    ReloadBinary,
+    #[knuffel(skip)]
+    ReloadBinaryPath(String),
     MoveWindowToZone(#[knuffel(argument)] u32),
     #[knuffel(skip)]
     MoveWindowToZoneById {
@@ -751,6 +754,8 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::ToggleReduceMotion {} => Self::ToggleReduceMotion,
             arbor_ipc::Action::SessionSave {} => Self::SessionSave,
             arbor_ipc::Action::SessionRestore {} => Self::SessionRestore,
+            arbor_ipc::Action::ReloadBinary { path: None } => Self::ReloadBinary,
+            arbor_ipc::Action::ReloadBinary { path: Some(path) } => Self::ReloadBinaryPath(path),
             arbor_ipc::Action::MoveWindowToZone { id: None, zone } => Self::MoveWindowToZone(zone),
             arbor_ipc::Action::MoveWindowToZone { id: Some(id), zone } => {
                 Self::MoveWindowToZoneById { id, zone }

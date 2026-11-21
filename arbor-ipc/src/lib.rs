@@ -1270,6 +1270,17 @@ pub enum Action {
     SessionSave {},
     /// Relaunch the apps of the saved session and put them back in place.
     SessionRestore {},
+    /// Restart arbor in place (a new build) without logging out (arbor).
+    ///
+    /// Only when arbor runs under its supervisor (`arbor --session`). Windows of apps that
+    /// reconnect (Qt apps with `QT_WAYLAND_RECONNECT=1`) go back where they were; apps that exit
+    /// when the compositor goes away are relaunched through session restore.
+    ReloadBinary {
+        /// Binary to run; default: the one the session started with (a newer build at that
+        /// path is picked up).
+        #[cfg_attr(feature = "clap", arg(long))]
+        path: Option<String>,
+    },
     /// Move a window into a zone (see [`Request::SetZones`]) of its output: it floats and fills
     /// the zone (arbor).
     MoveWindowToZone {

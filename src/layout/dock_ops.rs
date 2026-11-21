@@ -15,6 +15,18 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Puts back the dock camera of the workspace holding `window` (in-place restarts).
+    pub fn restore_camera_for(
+        &mut self,
+        window: &W::Id,
+        mode: super::camera::CameraMode,
+        view: super::camera::CameraView,
+    ) {
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.has_window(window)) {
+            ws.restore_camera(mode, view);
+        }
+    }
+
     pub fn minimize_window(&mut self, window: Option<&W::Id>) {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if window.is_none_or(|win| win == move_.tile.window().id()) {

@@ -789,6 +789,51 @@ restoring their own windows) is not implemented; smithay has no support.
 Code: `src/session.rs`, `src/layout/dock_shape.rs`; tests in
 `src/tests/session.rs`.
 
+## Restarting in place (new builds without logging out)
+
+`arbor --session` (or `arbor --supervise`, for nested testing) runs a small
+supervisor process, like KWin's `kwin_wayland_wrapper`. It owns the
+sockets clients connect to (Wayland `$WAYLAND_DISPLAY`, IPC
+`$ARBOR_SOCKET`, the X11 sockets behind `$DISPLAY`) and runs the compositor
+as its child with them inherited. When the compositor exits for
+`arbor msg action reload-binary [--path FILE]`, or crashes, the supervisor
+starts it again on the same sockets: connections made meanwhile wait in the
+socket backlog (reconnecting clients are let in once the outputs are back),
+so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
+
+- **Qt apps reconnect** and keep running: under the supervisor the session
+  sets `QT_WAYLAND_RECONNECT=1` (exported to systemd and D-Bus activation).
+  For the 30 s after a restart, a buffer a reconnecting Qt Quick window draws
+  before its first configure is dropped instead of being a protocol error
+  (Qt's render thread races the new configure).
+- **Layout:** the compositor saves its layout to
+  `$XDG_RUNTIME_DIR/arbor-restart.<supervisor pid>.json` before a reload and
+  every 20 s (for crashes): the session-restore data plus each window's pid,
+  the focused window and each workspace's camera. The next compositor puts
+  reconnecting windows back (matched by app id, preferring the same title),
+  floating windows again once the shell's bar is back.
+- **Apps that can't reconnect** (GTK, Electron/Chromium, foot, X11 apps:
+  xwayland-satellite goes with the compositor) exit; 2 s and 8 s after the
+  restart, the ones whose process is gone and none of whose windows came
+  back are relaunched through session restore's commands.
+  `session-restore { exclude-app-ids }` apps are put back but never
+  relaunched (hearth lists `org.quickshell`: the shell restarts itself).
+- **hearth** quits (exit 75) when its arbor event stream drops and its
+  wrapper starts it again: Quickshell's own Wayland objects don't survive
+  Qt's reconnect.
+- **Failures:** a build that crashes within 20 s of a reload is replaced by
+  the previous binary (the supervisor keeps it open, so a newer file at the
+  same path doesn't matter). Other crashes restart the same binary, up to 3
+  within a minute; then the session ends. A crash while the screen is
+  locked ends the session (restarting would unlock it), and
+  `reload-binary` is refused while locked.
+- With no `--path`, `reload-binary` runs the binary the session started
+  from, re-read from its path (devloop's build is replaced at the same path).
+  devloop (home-services `apps/arbor.conf`) swaps the session onto each new
+  build.
+
+Code: `src/supervisor.rs`, the restart half of `src/session.rs`.
+
 ## Clipboard after the app quits
 
 Like Klipper: arbor reads every format of each new clipboard and primary
@@ -893,7 +938,7 @@ Actions (for `binds` and `arbor msg action ...`):
   `center-column` (floating windows).
 - **arbor:** `minimize-window`, `restore-window`, `focus-tab-next/prev`,
   `zoom-in`, `zoom-out`, `zoom-reset`, `set-reduce-motion`, `toggle-reduce-motion`,
-  `session-save`, `session-restore`, `session-clear`,
+  `session-save`, `session-restore`, `session-clear`, `reload-binary`,
   `camera-zoom-out/in`, `camera-show-all`, `camera-frame-window`,
   `camera-pan-left/right/up/down`, `camera-back/forward`.
 - **Workspaces, monitors, overview, screenshots, misc:** as in niri

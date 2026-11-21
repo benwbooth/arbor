@@ -51,6 +51,8 @@ impl CompositorHandler for State {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
+        // Before smithay's role hooks (added later, with the role) and the dmabuf hook.
+        add_unconfigured_buffer_hook(surface);
         self.add_default_dmabuf_pre_commit_hook(surface);
     }
 
@@ -591,4 +593,48 @@ impl State {
             error!("tried to remove dmabuf pre-commit hook but there was none");
         }
     }
+}
+
+/// Right after an in-place restart, drops a buffer committed to a layer or xdg surface before it
+/// acked its initial configure, instead of ending the client with a protocol error (smithay's
+/// role hooks post one; they still do at any other time).
+///
+/// Qt Quick apps reconnecting after an in-place restart (supervisor.rs, `QT_WAYLAND_RECONNECT`)
+/// recreate their windows and their render thread can draw one frame before the new compositor's
+/// first configure arrives; hearth's layer surfaces did. The frame is just skipped: the client
+/// draws again for the configure.
+fn add_unconfigured_buffer_hook(surface: &WlSurface) {
+    use smithay::wayland::shell::wlr_layer::LayerSurfaceData;
+    use smithay::wayland::shell::xdg::{XdgPopupSurfaceData, XdgToplevelSurfaceData};
+
+    add_pre_commit_hook::<State, _>(surface, |_state, _dh, surface| {
+        if !crate::supervisor::restarted_within(std::time::Duration::from_secs(30)) {
+            return;
+        }
+        with_states(surface, |states| {
+            let data = &states.data_map;
+            let unconfigured = if let Some(d) = data.get::<LayerSurfaceData>() {
+                d.lock().unwrap().last_acked.is_none()
+            } else if let Some(d) = data.get::<XdgToplevelSurfaceData>() {
+                d.lock().unwrap().last_acked.is_none()
+            } else if let Some(d) = data.get::<XdgPopupSurfaceData>() {
+                d.lock().unwrap().last_acked.is_none()
+            } else {
+                return;
+            };
+            if !unconfigured {
+                return;
+            }
+            let mut guard = states.cached_state.get::<SurfaceAttributes>();
+            let pending = guard.pending();
+            if let Some(BufferAssignment::NewBuffer(buffer)) = &pending.buffer {
+                debug!(
+                    "dropping a buffer attached to {} before its initial configure was acked",
+                    surface.id()
+                );
+                buffer.release();
+                pending.buffer = None;
+            }
+        });
+    });
 }

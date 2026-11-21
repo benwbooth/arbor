@@ -23,6 +23,7 @@ use smithay::output::Output;
 
 use crate::arbor::State;
 use crate::ipc::server::make_ipc_window;
+use crate::layout::camera::{CameraMode, CameraView};
 use crate::layout::dock::DockShape;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::utils::spawning::spawn;
@@ -71,6 +72,54 @@ pub struct SavedWindow {
     pub maximized: bool,
     pub fullscreen: bool,
     pub minimized: bool,
+    /// Process id when saved: after an in-place restart, an app whose process is still alive
+    /// reconnects by itself and is not launched again.
+    #[serde(default)]
+    pub pid: Option<i32>,
+}
+
+/// A dock camera (in-place restarts).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedCamera {
+    /// "follow", "framed", "show-all" or "free".
+    pub mode: String,
+    #[serde(default)]
+    pub depth: usize,
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl SavedCamera {
+    fn new(mode: CameraMode, view: CameraView) -> Self {
+        let (mode, depth) = match mode {
+            CameraMode::Follow => ("follow", 0),
+            CameraMode::Framed { depth } => ("framed", depth),
+            CameraMode::ShowAll => ("show-all", 0),
+            CameraMode::Free => ("free", 0),
+        };
+        Self {
+            mode: mode.to_owned(),
+            depth,
+            x: view.offset.x,
+            y: view.offset.y,
+            zoom: view.zoom,
+        }
+    }
+
+    fn get(&self) -> (CameraMode, CameraView) {
+        let mode = match self.mode.as_str() {
+            "framed" => CameraMode::Framed { depth: self.depth },
+            "show-all" => CameraMode::ShowAll,
+            "free" => CameraMode::Free,
+            _ => CameraMode::Follow,
+        };
+        let view = CameraView {
+            offset: smithay::utils::Point::from((self.x, self.y)),
+            zoom: if self.zoom > 0. { self.zoom } else { 1. },
+        };
+        (mode, view)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,6 +127,8 @@ pub struct SavedWorkspace {
     pub workspace: SavedWorkspaceRef,
     /// Dock tree with window slots as leaves.
     pub tree: Option<DockShape<u32>>,
+    #[serde(default)]
+    pub camera: Option<SavedCamera>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -85,6 +136,9 @@ pub struct SessionFile {
     pub version: u32,
     pub windows: Vec<SavedWindow>,
     pub workspaces: Vec<SavedWorkspace>,
+    /// Slot of the focused window.
+    #[serde(default)]
+    pub focused: Option<u32>,
 }
 
 impl SessionFile {
@@ -110,16 +164,30 @@ pub struct PendingRestore {
     pub deadline: Instant,
     /// Slots taken by mapped windows.
     pub claimed: Vec<(u32, Window)>,
+    /// Launch groups launched so far (in-place restarts launch only the apps that died).
+    pub launched: Vec<u32>,
+    /// An in-place restart (supervisor.rs) rather than a login.
+    pub restart: bool,
 }
 
 impl PendingRestore {
-    /// Claims the first unclaimed slot for `app_id`.
-    pub fn claim(&mut self, app_id: &str, window: &Window) -> Option<SavedWindow> {
+    /// Claims the first unclaimed slot for `app_id`, preferring one with the same title.
+    pub fn claim(
+        &mut self,
+        app_id: &str,
+        title: Option<&str>,
+        window: &Window,
+    ) -> Option<SavedWindow> {
+        let free = |w: &&SavedWindow| {
+            w.app_id == app_id && !self.claimed.iter().any(|(s, _)| *s == w.slot)
+        };
         let saved = self
             .file
             .windows
             .iter()
-            .find(|w| w.app_id == app_id && !self.claimed.iter().any(|(s, _)| *s == w.slot))?
+            .filter(free)
+            .find(|w| title.is_some() && w.title.as_deref() == title)
+            .or_else(|| self.file.windows.iter().find(free))?
             .clone();
         self.claimed.push((saved.slot, window.clone()));
         Some(saved)
@@ -251,8 +319,16 @@ fn output_name(output: &Output) -> String {
 impl State {
     /// Collects the current session.
     pub fn session_collect(&self) -> SessionFile {
+        self.session_collect_for(false)
+    }
+
+    /// Collects the current session; `for_restart` (in-place restarts) keeps the windows of
+    /// apps excluded from session restore too, without a command, so they go back in place when
+    /// they reconnect but are never launched.
+    pub fn session_collect_for(&self, for_restart: bool) -> SessionFile {
         let config = self.arbor.config.borrow();
         let excluded = &config.session_restore.exclude_app_ids;
+        let focused = self.arbor.layout.focus().map(|m| m.window.clone());
         let layout = &self.arbor.layout;
         let data_dirs = crate::layout::icon_tile::data_dirs();
 
@@ -283,16 +359,21 @@ impl State {
             let Some(app_id) = ipc.app_id.clone().filter(|a| !a.is_empty()) else {
                 return;
             };
-            if excluded.contains(&app_id) {
+            let is_excluded = excluded.contains(&app_id);
+            if is_excluded && !for_restart {
                 return;
             }
             let Some(workspace) = ws_id.and_then(|id| ws_refs.get(&id)).cloned() else {
                 return;
             };
 
-            let (desktop_entry, command) = match desktop_entry_for(&app_id, &data_dirs) {
-                Some((id, exec)) => (Some(id), exec),
-                None => (None, ipc.pid.map(proc_cmdline).unwrap_or_default()),
+            let (desktop_entry, command) = if is_excluded {
+                (None, Vec::new())
+            } else {
+                match desktop_entry_for(&app_id, &data_dirs) {
+                    Some((id, exec)) => (Some(id), exec),
+                    None => (None, ipc.pid.map(proc_cmdline).unwrap_or_default()),
+                }
             };
             let launch_group = match ipc.pid {
                 Some(pid) => *groups.entry(pid).or_insert_with(|| {
@@ -329,6 +410,7 @@ impl State {
                 maximized: mode.is_maximized(),
                 fullscreen: mode.is_fullscreen(),
                 minimized: ipc.is_minimized,
+                pid: ipc.pid,
             });
         });
 
@@ -346,13 +428,23 @@ impl State {
             let Some(workspace) = ws_refs.get(&ws.id()).cloned() else {
                 continue;
             };
-            workspaces.push(SavedWorkspace { workspace, tree });
+            let camera = for_restart.then(|| {
+                let (mode, view) = ws.camera_state();
+                SavedCamera::new(mode, view)
+            });
+            workspaces.push(SavedWorkspace {
+                workspace,
+                tree,
+                camera,
+            });
         }
 
+        let focused = focused.and_then(|f| slots.iter().find(|(w, _)| *w == f).map(|(_, s)| *s));
         SessionFile {
             version: SESSION_VERSION,
             windows,
             workspaces,
+            focused,
         }
     }
 
@@ -434,12 +526,15 @@ impl State {
             file,
             deadline: Instant::now() + RESTORE_TIMEOUT,
             claimed: Vec::new(),
+            launched: Vec::new(),
+            restart: false,
         });
     }
 
-    /// At session start: restore after a short delay, then autosave periodically.
-    pub fn session_start(&mut self) {
-        let off = self.arbor.config.borrow().session_restore.off;
+    /// At session start: restore after a short delay (if `restore`), then autosave
+    /// periodically.
+    pub fn session_start(&mut self, restore: bool) {
+        let off = self.arbor.config.borrow().session_restore.off || !restore;
         let _ = self.arbor.event_loop.insert_source(
             Timer::from_duration(STARTUP_DELAY),
             move |_, _, state| {
@@ -475,18 +570,26 @@ impl State {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
-        let (app_id, has_parent) = with_toplevel_role(toplevel, |role| {
-            (role.app_id.clone(), role.parent.is_some())
+        let (app_id, title, has_parent) = with_toplevel_role(toplevel, |role| {
+            (
+                role.app_id.clone(),
+                role.title.clone(),
+                role.parent.is_some(),
+            )
         });
         let Some(app_id) = app_id else { return };
         if has_parent {
             return;
         }
-        let Some(saved) = pending.claim(&app_id, window) else {
+        let Some(saved) = pending.claim(&app_id, title.as_deref(), window) else {
             return;
         };
+        let focus = pending.file.focused == Some(saved.slot);
         let complete = pending.is_complete();
         self.session_place_window(window, &saved);
+        if focus {
+            self.arbor.layout.activate_window(window);
+        }
         if complete {
             debug!("session restore complete");
             self.arbor.session_restore = None;
@@ -534,32 +637,21 @@ impl State {
                 layout.set_window_floating(Some(window), true);
                 layout.set_window_width(Some(window), arbor_ipc::SizeChange::SetFixed(geo.width));
                 layout.set_window_height(Some(window), arbor_ipc::SizeChange::SetFixed(geo.height));
-                layout.move_floating_window(
-                    Some(window),
-                    PositionChange::SetFixed(geo.x),
-                    PositionChange::SetFixed(geo.y),
-                    false,
-                );
-                // Positions are set relative to the working area but reported relative to the
-                // view: correct by the difference once.
-                let mut pos = None;
-                layout.with_windows(|mapped, _, ws_id, l| {
-                    if mapped.window == *window {
-                        pos = make_ipc_window(mapped, ws_id, l)
-                            .layout
-                            .tile_pos_in_workspace_view;
-                    }
-                });
-                if let Some((x, y)) = pos {
-                    let (dx, dy) = (geo.x - x, geo.y - y);
-                    if dx.abs() > 0.5 || dy.abs() > 0.5 {
-                        layout.move_floating_window(
-                            Some(window),
-                            PositionChange::AdjustFixed(dx),
-                            PositionChange::AdjustFixed(dy),
-                            false,
-                        );
-                    }
+                self.session_move_floating(window, geo);
+                let restart = self
+                    .arbor
+                    .session_restore
+                    .as_ref()
+                    .is_some_and(|p| p.restart);
+                if restart {
+                    // The shell's bar may come back after this and shrink the working area,
+                    // which moves floating windows proportionally: put them back then.
+                    let areas = self.arbor.layout.working_areas();
+                    let list = self.arbor.restart_floating.get_or_insert_with(|| {
+                        (Instant::now() + RESTART_TIMEOUT, Vec::new(), None)
+                    });
+                    list.1.push((window.clone(), geo));
+                    list.2 = Some(areas);
                 }
             }
             None => {
@@ -580,32 +672,238 @@ impl State {
         self.arbor.queue_redraw_all();
     }
 
+    /// Moves a floating window to a saved position (workspace view coordinates).
+    fn session_move_floating(&mut self, window: &Window, geo: SavedGeometry) {
+        let layout = &mut self.arbor.layout;
+        layout.move_floating_window(
+            Some(window),
+            PositionChange::SetFixed(geo.x),
+            PositionChange::SetFixed(geo.y),
+            false,
+        );
+        // Positions are set relative to the working area but reported relative to the view:
+        // correct by the difference once.
+        let mut pos = None;
+        layout.with_windows(|mapped, _, ws_id, l| {
+            if mapped.window == *window {
+                pos = make_ipc_window(mapped, ws_id, l)
+                    .layout
+                    .tile_pos_in_workspace_view;
+            }
+        });
+        if let Some((x, y)) = pos {
+            let (dx, dy) = (geo.x - x, geo.y - y);
+            if dx.abs() > 0.5 || dy.abs() > 0.5 {
+                layout.move_floating_window(
+                    Some(window),
+                    PositionChange::AdjustFixed(dx),
+                    PositionChange::AdjustFixed(dy),
+                    false,
+                );
+            }
+        }
+    }
+
+    /// A layer surface changed an output's working area: during an in-place restart, put the
+    /// floating windows placed so far back at their saved positions.
+    pub fn restart_reapply_floating(&mut self) {
+        let Some((until, list, areas)) = self.arbor.restart_floating.take() else {
+            return;
+        };
+        if Instant::now() > until {
+            return;
+        }
+        // Only when a working area changed (this runs on every layer surface commit).
+        let now_areas = self.arbor.layout.working_areas();
+        if areas.as_ref() == Some(&now_areas) {
+            self.arbor.restart_floating = Some((until, list, areas));
+            return;
+        }
+        for (window, geo) in &list {
+            let mut floating = None;
+            self.arbor.layout.with_windows(|mapped, _, ws_id, l| {
+                if mapped.window == *window {
+                    floating = Some(make_ipc_window(mapped, ws_id, l).is_floating);
+                }
+            });
+            if floating == Some(true) {
+                self.session_move_floating(window, *geo);
+            }
+        }
+        self.arbor.restart_floating = Some((until, list, Some(now_areas)));
+    }
+
     /// Rebuilds the saved dock trees with the windows claimed so far.
     fn session_apply_trees(&mut self) {
         let Some(pending) = &self.arbor.session_restore else {
             return;
         };
         let claimed = pending.claimed.clone();
-        let trees: Vec<DockShape<Window>> = pending
+        let trees: Vec<(DockShape<Window>, Option<SavedCamera>)> = pending
             .file
             .workspaces
             .iter()
-            .filter_map(|ws| ws.tree.as_ref())
-            .filter_map(|tree| {
-                tree.filter_map(&|slot| {
+            .filter_map(|ws| Some((ws.tree.as_ref()?, ws.camera.clone())))
+            .filter_map(|(tree, camera)| {
+                let tree = tree.filter_map(&|slot| {
                     claimed
                         .iter()
                         .find(|(s, _)| s == slot)
                         .map(|(_, w)| w.clone())
-                })
+                })?;
+                Some((tree, camera))
             })
             .collect();
-        for tree in trees {
+        for (tree, camera) in trees {
             let mut ids = Vec::new();
             tree.ids(&mut ids);
             let Some(first) = ids.first() else { continue };
             self.arbor.layout.apply_dock_shape_for(first, &tree);
+            if let Some(camera) = camera {
+                let (mode, view) = camera.get();
+                self.arbor.layout.restore_camera_for(first, mode, view);
+            }
         }
+    }
+}
+
+/// How long windows get to come back after an in-place restart.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
+/// After an in-place restart, apps whose process died (GTK, Electron, ...) are launched again at
+/// these times; apps still running reconnect by themselves (Qt with `QT_WAYLAND_RECONNECT=1`).
+const RESTART_LAUNCH_CHECKS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(8)];
+/// The layout is saved this often for the compositor that replaces a crashed one.
+const RESTART_SAVE_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Whether a process is running (not gone, not a zombie).
+fn pid_alive(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // "pid (comm) S ...": the state follows the last ')'.
+    let state = stat
+        .rfind(')')
+        .and_then(|i| stat[i + 1..].split_whitespace().next());
+    !matches!(state, Some("Z") | Some("X") | None)
+}
+
+impl State {
+    /// Saves the layout for the next compositor of the supervisor (supervisor.rs).
+    pub fn restart_save(&self) {
+        let Some(path) = crate::supervisor::state_path() else {
+            return;
+        };
+        let file = self.session_collect_for(true);
+        match store(&path, &file) {
+            Ok(()) => trace!("saved restart state ({} windows)", file.windows.len()),
+            Err(err) => warn!("error saving restart state to {}: {err:?}", path.display()),
+        }
+    }
+
+    /// Under the supervisor: after a restart, put back the previous compositor's windows as they
+    /// reconnect and relaunch apps that died; save the layout periodically for the next restart.
+    pub fn restart_start(&mut self, kind: crate::supervisor::StartKind) {
+        if kind.is_restart() {
+            match crate::supervisor::state_path().map(|p| (load(&p), p)) {
+                Some((Ok(file), _)) => {
+                    info!(
+                        "in-place restart ({kind:?}): putting back {} windows",
+                        file.windows.len()
+                    );
+                    self.arbor.session_restore = Some(PendingRestore {
+                        file,
+                        deadline: Instant::now() + RESTART_TIMEOUT,
+                        claimed: Vec::new(),
+                        launched: Vec::new(),
+                        restart: true,
+                    });
+                    for delay in RESTART_LAUNCH_CHECKS {
+                        let _ = self.arbor.event_loop.insert_source(
+                            Timer::from_duration(delay),
+                            |_, _, state| {
+                                state.restart_launch_dead();
+                                TimeoutAction::Drop
+                            },
+                        );
+                    }
+                }
+                Some((Err(err), path)) => {
+                    warn!("no layout to restore from {}: {err:?}", path.display());
+                }
+                None => (),
+            }
+        }
+
+        let _ = self.arbor.event_loop.insert_source(
+            Timer::from_duration(RESTART_SAVE_INTERVAL),
+            |_, _, state| {
+                // Not while windows are still coming back: their places would be lost.
+                if state.arbor.session_restore.is_none() {
+                    state.restart_save();
+                }
+                TimeoutAction::ToDuration(RESTART_SAVE_INTERVAL)
+            },
+        );
+    }
+
+    /// Launches the apps of the restoring layout whose process is gone and none of whose windows
+    /// came back.
+    fn restart_launch_dead(&mut self) {
+        let Some(pending) = &mut self.arbor.session_restore else {
+            return;
+        };
+        let mut launches = Vec::new();
+        for win in &pending.file.windows {
+            let group = win.launch_group;
+            if win.command.is_empty() || pending.launched.contains(&group) {
+                continue;
+            }
+            let group_back = pending.file.windows.iter().any(|w| {
+                w.launch_group == group && pending.claimed.iter().any(|(s, _)| *s == w.slot)
+            });
+            if group_back || win.pid.is_some_and(pid_alive) {
+                continue;
+            }
+            pending.launched.push(group);
+            launches.push((win.app_id.clone(), win.command.clone()));
+        }
+        for (app_id, command) in launches {
+            info!("relaunching {app_id} (it exited with the previous compositor)");
+            spawn(command, None);
+        }
+    }
+
+    /// `reload-binary`: restarts arbor in place under its supervisor, with `path` or the binary
+    /// the session started with.
+    pub fn reload_binary(&mut self, path: Option<PathBuf>) {
+        if !crate::supervisor::is_supervised() {
+            warn!(
+                "reload-binary: arbor isn't running under its supervisor \
+                 (it starts with `arbor --session` or `arbor --supervise`)"
+            );
+            return;
+        }
+        if self.arbor.is_locked() {
+            warn!("reload-binary: not while the screen is locked");
+            return;
+        }
+        if let Some(path) = &path {
+            if !path.is_file() {
+                warn!("reload-binary: {} is not a file", path.display());
+                return;
+            }
+        }
+        info!("reloading in place");
+        // A moment later, so the reply to an IPC request still goes out.
+        let _ = self.arbor.event_loop.insert_source(
+            Timer::from_duration(Duration::from_millis(100)),
+            move |_, _, state| {
+                state.restart_save();
+                crate::supervisor::request_reload(path.as_deref());
+                state.arbor.stop_signal.stop();
+                TimeoutAction::Drop
+            },
+        );
     }
 }
 
@@ -645,17 +943,55 @@ mod tests {
             maximized: false,
             fullscreen: false,
             minimized: false,
+            pid: None,
         };
         let file = SessionFile {
             version: SESSION_VERSION,
             windows: vec![win(0, 1, "a"), win(1, 1, "a"), win(2, 2, "b")],
             workspaces: vec![],
+            focused: None,
         };
         assert_eq!(file.launch_commands(), [vec!["a"], vec!["b"]]);
 
         let json = serde_json::to_string(&file).unwrap();
         let back: SessionFile = serde_json::from_str(&json).unwrap();
         assert_eq!(back, file);
+    }
+
+    #[test]
+    fn old_session_files_load() {
+        // Written before pids, cameras and focus were saved.
+        let json = r#"{"version":1,"windows":[{"slot":0,"app_id":"a","title":null,
+            "launch_group":1,"command":["a"],"desktop_entry":null,
+            "workspace":{"output":null,"index":0,"name":null},"floating":null,
+            "maximized":false,"fullscreen":false,"minimized":false}],
+            "workspaces":[{"workspace":{"output":null,"index":0,"name":null},"tree":null}]}"#;
+        let file: SessionFile = serde_json::from_str(json).unwrap();
+        assert_eq!(file.windows[0].pid, None);
+        assert_eq!(file.focused, None);
+        assert_eq!(file.workspaces[0].camera, None);
+    }
+
+    #[test]
+    fn camera_round_trip() {
+        for mode in [
+            CameraMode::Follow,
+            CameraMode::Framed { depth: 2 },
+            CameraMode::ShowAll,
+            CameraMode::Free,
+        ] {
+            let view = CameraView {
+                offset: smithay::utils::Point::from((10., -4.5)),
+                zoom: 0.5,
+            };
+            assert_eq!(SavedCamera::new(mode, view).get(), (mode, view));
+        }
+    }
+
+    #[test]
+    fn pid_liveness() {
+        assert!(pid_alive(std::process::id() as i32));
+        assert!(!pid_alive(i32::MAX));
     }
 
     #[test]
