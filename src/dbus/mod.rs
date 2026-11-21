@@ -3,6 +3,7 @@ use zbus::object_server::Interface;
 
 use crate::arbor::State;
 
+pub mod appmenu_registrar;
 pub mod freedesktop_a11y;
 pub mod freedesktop_locale1;
 pub mod freedesktop_login1;
@@ -49,6 +50,7 @@ pub struct DBusServers {
     pub conn_keyboard_monitor: Option<Connection>,
     pub conn_global_shortcuts: Option<Connection>,
     pub conn_kglobalaccel: Option<Connection>,
+    pub conn_appmenu_registrar: Option<Connection>,
 }
 
 impl DBusServers {
@@ -221,6 +223,22 @@ impl DBusServers {
             Err(err) => {
                 warn!("error starting locale1 watcher: {err:?}");
             }
+        }
+
+        let (to_arbor, from_registrar) = calloop::channel::channel();
+        arbor
+            .event_loop
+            .insert_source(from_registrar, move |event, _, state| match event {
+                calloop::channel::Event::Msg(owned) => {
+                    debug!("global menu registrar present: {owned}");
+                    state.arbor.gtk_shell_state.set_global_menu_bar(owned);
+                }
+                calloop::channel::Event::Closed => (),
+            })
+            .unwrap();
+        match appmenu_registrar::start(to_arbor) {
+            Ok(conn) => dbus.conn_appmenu_registrar = Some(conn),
+            Err(err) => warn!("error starting the appmenu registrar watcher: {err:?}"),
         }
 
         arbor.dbus = Some(dbus);

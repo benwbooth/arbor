@@ -37,6 +37,26 @@ use wayland_protocols_plasma::appmenu::client::org_kde_kwin_appmenu_manager::Org
 
 use crate::utils::id::IdCounter;
 
+/// Client side of GTK's `gtk_shell1` (`resources/gtk-shell.xml`).
+pub mod gtk_shell {
+    #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables)]
+    #![allow(non_upper_case_globals, non_snake_case, unused_imports)]
+    #![allow(missing_docs, clippy::all)]
+
+    use wayland_client;
+    use wayland_client::protocol::*;
+
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("resources/gtk-shell.xml");
+    }
+    use self::__interfaces::*;
+
+    wayland_scanner::generate_client_code!("resources/gtk-shell.xml");
+}
+use gtk_shell::gtk_shell1::{self, GtkShell1};
+use gtk_shell::gtk_surface1::GtkSurface1;
+
 pub struct Client {
     pub id: ClientId,
     pub event_loop: EventLoop<'static, State>,
@@ -58,6 +78,9 @@ pub struct State {
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
     pub appmenu_manager: Option<OrgKdeKwinAppmenuManager>,
+    pub gtk_shell: Option<GtkShell1>,
+    /// Last `gtk_shell1.capabilities`.
+    pub gtk_shell_capabilities: Option<u32>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -185,6 +208,8 @@ impl Client {
             spbm: None,
             viewporter: None,
             appmenu_manager: None,
+            gtk_shell: None,
+            gtk_shell_capabilities: None,
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -517,6 +542,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == OrgKdeKwinAppmenuManager::interface().name {
                     let version = min(version, OrgKdeKwinAppmenuManager::interface().version);
                     state.appmenu_manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == GtkShell1::interface().name {
+                    let version = min(version, 4);
+                    state.gtk_shell = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -785,6 +813,35 @@ impl Dispatch<OrgKdeKwinAppmenuManager, ()> for State {
         _qhandle: &QueueHandle<Self>,
     ) {
         unreachable!()
+    }
+}
+
+impl Dispatch<GtkShell1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &GtkShell1,
+        event: <GtkShell1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            gtk_shell1::Event::Capabilities { capabilities } => {
+                state.gtk_shell_capabilities = Some(capabilities)
+            }
+        }
+    }
+}
+
+impl Dispatch<GtkSurface1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &GtkSurface1,
+        _event: <GtkSurface1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
     }
 }
 

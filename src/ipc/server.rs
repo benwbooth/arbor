@@ -34,6 +34,7 @@ use crate::arbor::State;
 use crate::backend::IpcOutputMap;
 use crate::input::pick_window_grab::PickWindowGrab;
 use crate::layout::workspace::WorkspaceId;
+use crate::protocols::gtk_shell::gtk_menu_address;
 use crate::protocols::kde_appmenu::app_menu_address;
 use crate::utils::{version, with_toplevel_role};
 use crate::window::Mapped;
@@ -588,6 +589,7 @@ pub(crate) fn make_ipc_window(
 ) -> arbor_ipc::Window {
     // Outside with_toplevel_role(): both lock the same surface's states.
     let app_menu = ipc_app_menu(mapped);
+    let gtk_menu = ipc_gtk_menu(mapped);
     with_toplevel_role(mapped.toplevel(), |role| arbor_ipc::Window {
         id: mapped.id().get(),
         title: role.title.clone(),
@@ -601,6 +603,20 @@ pub(crate) fn make_ipc_window(
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
         app_menu,
+        gtk_menu,
+    })
+}
+
+fn ipc_gtk_menu(mapped: &Mapped) -> Option<Box<arbor_ipc::GtkMenu>> {
+    gtk_menu_address(mapped.toplevel().wl_surface()).map(|a| {
+        Box::new(arbor_ipc::GtkMenu {
+            application_id: a.application_id,
+            unique_bus_name: a.unique_bus_name,
+            menubar_path: a.menubar_path,
+            app_menu_path: a.app_menu_path,
+            window_object_path: a.window_object_path,
+            application_object_path: a.application_object_path,
+        })
     })
 }
 
@@ -806,6 +822,7 @@ impl State {
             });
 
             changed |= ipc_win.app_menu != ipc_app_menu(mapped);
+            changed |= ipc_win.gtk_menu != ipc_gtk_menu(mapped);
 
             if changed {
                 let window = make_ipc_window(mapped, ws_id, window_layout);

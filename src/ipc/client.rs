@@ -821,6 +821,18 @@ fn print_window(window: &Window) {
         );
     }
 
+    if let Some(gtk_menu) = &window.gtk_menu {
+        println!(
+            "  GTK menu: {} {}",
+            gtk_menu.unique_bus_name,
+            if gtk_menu.menubar_path.is_empty() {
+                &gtk_menu.app_menu_path
+            } else {
+                &gtk_menu.menubar_path
+            }
+        );
+    }
+
     let WindowLayout {
         pos_in_scrolling_layout,
         tile_size,

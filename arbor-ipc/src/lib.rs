@@ -1621,6 +1621,15 @@ pub struct Window {
     /// implements `com.canonical.dbusmenu`.
     #[serde(default)]
     pub app_menu: Option<AppMenu>,
+    /// Where the window's GTK menus live on the session bus, if it told the compositor.
+    ///
+    /// Set by GTK 3/4 apps (`GtkApplication` menus, or `GtkMenuBar`s exported by
+    /// appmenu-gtk-module) through the `gtk_shell1` Wayland protocol. The menus implement
+    /// `org.gtk.Menus`, the actions `org.gtk.Actions`.
+    ///
+    /// Boxed: six strings would make every `Window` (and `Event`) much larger.
+    #[serde(default)]
+    pub gtk_menu: Option<Box<GtkMenu>>,
 }
 
 /// DBus location of a window's menu bar (`com.canonical.dbusmenu`).
@@ -1631,6 +1640,26 @@ pub struct AppMenu {
     pub service_name: String,
     /// DBus object path.
     pub object_path: String,
+}
+
+/// DBus location of a GTK window's menus (`org.gtk.Menus` / `org.gtk.Actions`).
+///
+/// Empty strings mean the app didn't set that part.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GtkMenu {
+    /// The app's application ID (`GApplication` ID).
+    pub application_id: String,
+    /// Unique name of the app's session bus connection.
+    pub unique_bus_name: String,
+    /// `org.gtk.Menus` object of the menu bar.
+    pub menubar_path: String,
+    /// `org.gtk.Menus` object of the app menu (GNOME 3 style).
+    pub app_menu_path: String,
+    /// `org.gtk.Actions` object with the window's `win.` actions.
+    pub window_object_path: String,
+    /// `org.gtk.Actions` object with the app's `app.` actions.
+    pub application_object_path: String,
 }
 
 /// A moment in time.

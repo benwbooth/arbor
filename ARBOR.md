@@ -232,7 +232,8 @@ layout {
    - [ ] saved views
    - [x] resting ~400 ms over the middle of a docked window arms the tab
      drop (floating and docked drags)
-4. KDE appmenu protocol for hearth's global menu bar.
+4. KDE appmenu protocol and GTK's gtk_shell1 (GMenuModel addresses) for
+   hearth's global menu bar.
 5. NixOS session (`nixosModules.arbor`, done) + hearth backend on the
    (niri-compatible) IPC.
 
@@ -905,6 +906,16 @@ default-column-display }`, the `default-column-display` window rule,
   (`WindowOpenedOrChanged` fires when it changes). Qt only exports its menu
   if `com.canonical.AppMenu.Registrar` is on the session bus when the app
   starts, so the shell has to own that name (a stub is enough).
+- `src/protocols/gtk_shell.rs`: server side of GTK's private `gtk_shell1`
+  (version 4; `resources/gtk-shell.xml` from GTK 4). Only
+  `gtk_surface1.set_dbus_properties` does anything: GTK 3/4 apps (and
+  appmenu-gtk-module) tell us where their GMenuModel menus live
+  (`org.gtk.Menus` / `org.gtk.Actions`), shown as `gtk_menu` on IPC windows.
+  The `global_menu_bar` + `global_app_menu` capabilities are sent while
+  `com.canonical.AppMenu.Registrar` has an owner (`src/dbus/appmenu_registrar.rs`
+  watches the name), so GTK hides its in-window menu bars exactly when Qt
+  does; GTK picks capability changes up live. Version 4, not 5+, so GTK
+  keeps handling titlebar double/right/middle clicks itself.
 - `src/global_shortcuts.rs`: the app shortcut store (portal and KDE);
   `src/dbus/portal_global_shortcuts.rs`, `src/dbus/kglobalaccel.rs`: its
   D-Bus faces; `src/kglobalaccel/`: KGlobalAccel semantics, Qt key codes

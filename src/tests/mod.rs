@@ -8,6 +8,7 @@ mod clipboard_persist;
 mod expose;
 mod floating;
 mod glass;
+mod gtk_shell;
 mod kde_appmenu;
 #[cfg(feature = "dbus")]
 mod kglobalaccel;

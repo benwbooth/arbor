@@ -148,6 +148,7 @@ use crate::layout::{
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
 use crate::protocols::gamma_control::GammaControlManagerState;
+use crate::protocols::gtk_shell::GtkShellState;
 use crate::protocols::kde_appmenu::KdeAppmenuManagerState;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
@@ -330,6 +331,7 @@ pub struct Arbor {
     pub activation_state: XdgActivationState,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
     pub kde_appmenu_state: KdeAppmenuManagerState,
+    pub gtk_shell_state: GtkShellState,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
     // particular, shaders will need to learn about the single pixel buffer. Also, it must be
@@ -2457,6 +2459,7 @@ impl Arbor {
             MutterX11InteropManagerState::new::<State, _>(&display_handle, move |_| true);
         let kde_appmenu_state =
             KdeAppmenuManagerState::new::<State, _>(&display_handle, move |_| true);
+        let gtk_shell_state = GtkShellState::new::<State, _>(&display_handle, move |_| true);
 
         #[cfg(test)]
         let single_pixel_buffer_state = SinglePixelBufferState::new::<State>(&display_handle);
@@ -2671,6 +2674,7 @@ impl Arbor {
             activation_state,
             mutter_x11_interop_state,
             kde_appmenu_state,
+            gtk_shell_state,
             #[cfg(test)]
             single_pixel_buffer_state,
 
