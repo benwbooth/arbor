@@ -14,6 +14,8 @@ mod kglobalaccel;
 mod layer_shell;
 #[cfg(feature = "dbus")]
 mod portal_global_shortcuts;
+#[cfg(feature = "dbus")]
+mod portal_input_capture;
 #[cfg(feature = "xdp-gnome-screencast")]
 mod portal_remote_desktop;
 mod remove_output;

@@ -196,18 +196,7 @@ fn cursor_mode(portal_mode: u32) -> CursorMode {
     }
 }
 
-/// A readable name for an app id: the last part of a reverse-DNS id, or "An app".
-pub fn app_name(app_id: &str) -> String {
-    let name = app_id.rsplit('.').next().unwrap_or("").trim();
-    if name.is_empty() {
-        return String::from("An app");
-    }
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::from("An app"),
-    }
-}
+pub use crate::ui::portal_dialog::app_name;
 
 fn devices_text(devices: u32) -> String {
     let mut parts = Vec::new();

@@ -80,7 +80,7 @@ struct ConnState {
     scroll_y: DiscreteAccumulator,
 }
 
-fn keymap_fd(state: &mut State) -> Option<(OwnedFd, u32)> {
+pub(crate) fn keymap_fd(state: &mut State) -> Option<(OwnedFd, u32)> {
     let keyboard = state.arbor.seat.get_keyboard()?;
     let text = keyboard.with_xkb_state(state, |ctx| {
         let xkb = ctx.xkb().lock().unwrap();

@@ -379,6 +379,12 @@ impl State {
         let time = Event::time_msec(&event);
         let pressed = event.state() == KeyState::Pressed;
 
+        // A capturing InputCapture session gets every key.
+        #[cfg(feature = "dbus")]
+        if self.input_capture_key(event.key_code(), event.state()) {
+            return;
+        }
+
         // Stop bind key repeat on any release. This won't work 100% correctly in cases like:
         // 1. Press Mod
         // 2. Press Left (repeat starts)
@@ -2621,6 +2627,13 @@ impl State {
             return;
         }
 
+        // InputCapture: pushing through a barrier starts capturing; while capturing, motion
+        // goes to the capturing app.
+        #[cfg(feature = "dbus")]
+        if self.input_capture_motion(event.delta()) {
+            return;
+        }
+
         let serial = SERIAL_COUNTER.next_serial();
 
         let pointer = self.arbor.seat.get_pointer().unwrap();
@@ -2980,6 +2993,11 @@ impl State {
             return;
         }
 
+        #[cfg(feature = "dbus")]
+        if self.input_capture_button(button_code, button_state) {
+            return;
+        }
+
         // Portal dialogs are modal: every press goes to them.
         if ButtonState::Pressed == button_state
             && self.arbor.portal_dialog.is_open()
@@ -3272,6 +3290,20 @@ impl State {
     }
 
     fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
+        #[cfg(feature = "dbus")]
+        if self.input_capture_scroll(
+            (
+                event.amount(Axis::Horizontal).unwrap_or(0.),
+                event.amount(Axis::Vertical).unwrap_or(0.),
+            ),
+            (
+                event.amount_v120(Axis::Horizontal),
+                event.amount_v120(Axis::Vertical),
+            ),
+        ) {
+            return;
+        }
+
         let pointer = &self.arbor.seat.get_pointer().unwrap();
 
         let source = event.source();

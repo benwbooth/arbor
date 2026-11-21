@@ -194,7 +194,8 @@ in
           # defined. No Secret portal here (set "org.freedesktop.impl.portal.Secret"
           # yourself, e.g. to "kwallet").
           #
-          # arbor implements screen sharing, screenshots, remote control, global
+          # arbor implements screen sharing, screenshots, remote control, input
+          # capture, global
           # shortcuts, wallpaper and idle inhibition itself
           # (share/xdg-desktop-portal/portals/arbor.portal); the KDE portal covers
           # the rest (file chooser, settings, notifications, access dialogs), with
@@ -207,6 +208,7 @@ in
             "org.freedesktop.impl.portal.ScreenCast" = "arbor";
             "org.freedesktop.impl.portal.Screenshot" = "arbor";
             "org.freedesktop.impl.portal.RemoteDesktop" = "arbor";
+            "org.freedesktop.impl.portal.InputCapture" = "arbor";
             "org.freedesktop.impl.portal.GlobalShortcuts" = "arbor";
             "org.freedesktop.impl.portal.Wallpaper" = "arbor";
             "org.freedesktop.impl.portal.Inhibit" = "arbor";

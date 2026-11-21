@@ -54,6 +54,19 @@ pub struct DialogRequest {
     pub reply: async_channel::Sender<DialogAnswer>,
 }
 
+/// A readable name for an app id: the last part of a reverse-DNS id, or "An app".
+pub fn app_name(app_id: &str) -> String {
+    let name = app_id.rsplit('.').next().unwrap_or("").trim();
+    if name.is_empty() {
+        return String::from("An app");
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::from("An app"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Hit {
     Choice(usize),

@@ -16,6 +16,7 @@ pub mod mutter_service_channel;
 pub mod portal_casting;
 pub mod portal_global_shortcuts;
 pub mod portal_inhibit;
+pub mod portal_input_capture;
 pub mod portal_screenshot;
 pub mod portal_wallpaper;
 
@@ -162,6 +163,11 @@ impl DBusServers {
                     portal_casting::register(conn, &arbor.event_loop, &mut arbor.casting)
                 {
                     warn!("error starting the ScreenCast/RemoteDesktop portal: {err:?}");
+                }
+                if let Err(err) =
+                    portal_input_capture::register(conn, &arbor.event_loop, &mut arbor.input_capture)
+                {
+                    warn!("error starting the InputCapture portal: {err:?}");
                 }
                 if let Err(err) = portal_screenshot::register(conn, &arbor.event_loop) {
                     warn!("error starting the Screenshot portal: {err:?}");

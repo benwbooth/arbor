@@ -18,6 +18,8 @@ pub mod glass;
 pub mod global_shortcuts;
 pub mod handlers;
 pub mod input;
+#[cfg(feature = "dbus")]
+pub mod input_capture;
 pub mod ipc;
 pub mod kglobalaccel;
 pub mod layer;

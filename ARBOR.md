@@ -590,6 +590,15 @@ it directly.)
   (Whisper Typer's keyboard-only session, a meeting app re-sharing the same screen). A
   restored screen that is gone, a window that no longer exists, or more devices than were
   allowed before bring the dialog back.
+- **InputCapture** (Deskflow / Input Leap servers): `CreateSession` asks once ("take over your
+  keyboard and mouse"). Zones are the screens (global logical coordinates); barriers must lie
+  on an outer screen edge (others come back in `failed_barriers`). After `Enable`, pushing the
+  pointer through a barrier activates the capture: `Activated` (activation id, cursor
+  position, barrier id), and from then on relative motion, buttons, scroll and keys go to the
+  app over EIS (`ConnectToEIS`, receiver context, keyboard with arbor's keymap) instead of to
+  windows, until the app calls `Release` (optionally with a cursor position to warp to) or
+  `Disable`, or the user presses **Super+Shift+Escape** (always works; disables the
+  session). Code: `src/input_capture.rs`, `src/dbus/portal_input_capture.rs`.
 - **Screenshot**: non-interactive requests capture every screen into one PNG (the portal
   frontend asks permission first through the Access portal and remembers it); interactive ones
   open arbor's screenshot UI (Escape cancels). Files go to `screenshot-path`, or
@@ -599,7 +608,8 @@ it directly.)
 Code: `src/dbus/portal_casting.rs` (ScreenCast + RemoteDesktop, shared sessions),
 `src/dbus/portal_screenshot.rs`, `src/ui/portal_dialog.rs`, `src/remote_input.rs`,
 `State::start_portal_cast` in `src/screencasting/mod.rs`. Tests: `remote_input` and
-`portal_dialog` unit tests; `tests::portal_remote_desktop` drives the D-Bus API on a private
+`portal_dialog` / `input_capture` unit tests; `tests::portal_input_capture` (a libei receiver
+through barrier, activation, captured motion and keys, release) and `tests::portal_remote_desktop` drive the D-Bus API on a private
 bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close,
 a libei sender typing through `ConnectToEIS`):
 
@@ -611,8 +621,8 @@ ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_ -- --ignored --
 
 What KDE Plasma provided to apps, and what serves it under arbor + hearth.
 Portal backends assume the portal config `default=kde;gtk`, Secret
-`kwallet`, and ScreenCast / Screenshot / RemoteDesktop / GlobalShortcuts /
-Wallpaper / Inhibit `arbor` (see "Screen sharing, screenshots and remote
+`kwallet`, and ScreenCast / Screenshot / RemoteDesktop / InputCapture /
+GlobalShortcuts / Wallpaper / Inhibit `arbor` (see "Screen sharing, screenshots and remote
 control"). Nothing needs xdg-desktop-portal-gnome.
 
 | Portal | Backend under arbor | Works outside KWin? |
@@ -627,7 +637,7 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | FileChooser | kde | Yes (KDE file dialog; needs KIO, installed) |
 | GlobalShortcuts | **arbor** | Yes (above). The kde backend would also work now, through arbor's kglobalaccel |
 | Inhibit | **arbor** | Yes for idle (above). kde (PowerDevil) and gnome (gnome-session) don't run here |
-| InputCapture | none yet | Not yet (Deskflow / Input Leap as a server need it, with EIS) |
+| InputCapture | **arbor** | Yes: barriers on outer screen edges, capture over EIS (Deskflow / Input Leap servers) |
 | Notification | kde | Yes: KNotification → `org.freedesktop.Notifications` (swaync, started by hearth) |
 | OpenURI | kde | Yes |
 | Print | kde | Yes |

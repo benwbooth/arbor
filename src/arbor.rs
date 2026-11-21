@@ -348,6 +348,8 @@ pub struct Arbor {
     pub remote_input: crate::remote_input::RemoteInputState,
     #[cfg(feature = "dbus")]
     pub eis_connections: crate::eis_server::EisConnections,
+    #[cfg(feature = "dbus")]
+    pub input_capture: crate::input_capture::InputCapture,
     /// Button codes of the mouse buttons to suppress.
     pub suppressed_buttons: HashSet<u32>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
@@ -2656,6 +2658,8 @@ impl Arbor {
             remote_input: Default::default(),
             #[cfg(feature = "dbus")]
             eis_connections: Default::default(),
+            #[cfg(feature = "dbus")]
+            input_capture: Default::default(),
             suppressed_buttons: HashSet::new(),
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
