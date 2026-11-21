@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -5807,11 +5807,18 @@ impl Arbor {
         renderer: &mut GlesRenderer,
         output: &Output,
         mapped: &Mapped,
-        write_to_disk: bool,
-        show_pointer: bool,
-        path: Option<String>,
+        opts: WindowScreenshotOptions,
     ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Arbor::screenshot_window");
+
+        let WindowScreenshotOptions {
+            write_to_disk,
+            show_pointer,
+            path,
+            decorations,
+            shadow,
+            clipboard,
+        } = opts;
 
         let scale = Scale::from(output.current_scale().fractional_scale());
         let alpha =
@@ -5821,6 +5828,21 @@ impl Arbor {
                 mapped.rules().opacity.unwrap_or(1.).clamp(0., 1.)
             };
 
+        // With decorations, render the whole tile (title bar, border, shadow) with its top-left
+        // corner at the origin; otherwise the window with its visual geometry at the origin.
+        let tile = decorations
+            .then(|| {
+                self.layout
+                    .workspaces()
+                    .flat_map(|(_, _, ws)| ws.tiles())
+                    .find(|tile| tile.window().id() == mapped.id())
+            })
+            .flatten();
+        let (window_offset, crop_size) = match tile {
+            Some(tile) => (tile.window_loc(), tile.tile_size()),
+            None => (Point::default(), mapped.window.geometry().size.to_f64()),
+        };
+
         let mut elements: Vec<WindowScreenshotRenderElement<GlesRenderer>> = Vec::new();
 
         // Add pointer if requested and it's over this window.
@@ -5828,7 +5850,9 @@ impl Arbor {
             if let Some((_, win_pos)) = self.pointer_pos_for_window_cast(mapped) {
                 // Pointer elements are at output-local physical coords.
                 // Relocate by -win_pos to make them window-relative.
-                let pos = win_pos.to_physical_precise_round(scale).upscale(-1);
+                let pos = (win_pos - window_offset)
+                    .to_physical_precise_round(scale)
+                    .upscale(-1);
                 self.render_pointer(renderer, output, &mut |elem| {
                     let elem = RelocateRenderElement::from_element(elem, pos, Relocate::Relative);
                     elements.push(elem.into());
@@ -5842,18 +5866,32 @@ impl Arbor {
             target: RenderTarget::ScreenCapture,
             xray: None,
         };
-        mapped.render(
-            ctx,
-            mapped.window.geometry().loc.to_f64(),
-            scale,
-            alpha,
-            XrayPos::default(),
-            &mut |elem| elements.push(elem.into()),
-        );
+        match tile {
+            Some(tile) => tile.render(
+                ctx,
+                Point::default(),
+                XrayPos::default(),
+                false,
+                &mut |elem| elements.push(WindowScreenshotRenderElement::Tile(elem)),
+            ),
+            None => mapped.render(
+                ctx,
+                Point::default(),
+                scale,
+                alpha,
+                XrayPos::default(),
+                &mut |elem| elements.push(elem.into()),
+            ),
+        }
 
         // The pointer is not included in encompassing_geo because we don't want it to expand the
-        // screenshot size.
-        let geo = encompassing_geo(scale, elements.iter().skip(pointer_count));
+        // screenshot size. Without shadows, crop to the window (or tile) itself.
+        let geo = if shadow {
+            encompassing_geo(scale, elements.iter().skip(pointer_count))
+        } else {
+            Rectangle::from_size(crop_size).to_physical_precise_round(scale)
+        };
+        anyhow::ensure!(!geo.is_empty(), "window has nothing to capture");
         let elements = elements.iter().rev().map(|elem| {
             RelocateRenderElement::from_element(elem, geo.loc.upscale(-1), Relocate::Relative)
         });
@@ -5866,7 +5904,7 @@ impl Arbor {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
+        self.save_screenshot_with(geo.size, pixels, write_to_disk, path, clipboard)
             .context("error saving screenshot")
     }
 
@@ -5876,6 +5914,19 @@ impl Arbor {
         pixels: Vec<u8>,
         write_to_disk: bool,
         path_arg: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.save_screenshot_with(size, pixels, write_to_disk, path_arg, true)
+    }
+
+    /// Encodes and saves a screenshot. `clipboard`: also set it as the clipboard selection and
+    /// show a notification (screenshot tools that handle the image themselves turn this off).
+    pub fn save_screenshot_with(
+        &self,
+        size: Size<i32, Physical>,
+        pixels: Vec<u8>,
+        write_to_disk: bool,
+        path_arg: Option<String>,
+        clipboard: bool,
     ) -> anyhow::Result<()> {
         let path = write_to_disk
             .then(|| {
@@ -5937,7 +5988,9 @@ impl Arbor {
             }
 
             let buf: Arc<[u8]> = Arc::from(buf.into_boxed_slice());
-            let _ = tx.send(buf.clone());
+            if clipboard {
+                let _ = tx.send(buf.clone());
+            }
 
             let mut image_path = None;
 
@@ -5957,7 +6010,7 @@ impl Arbor {
                     }
                 }
 
-                match std::fs::write(&path, buf) {
+                match write_atomically(&path, &buf) {
                     Ok(()) => image_path = Some(path),
                     Err(err) => {
                         warn!("error saving screenshot image: {err:?}");
@@ -5968,7 +6021,11 @@ impl Arbor {
             }
 
             #[cfg(feature = "dbus")]
-            if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref()) {
+            if !clipboard {
+                // The caller handles the result itself.
+            } else if let Err(err) =
+                crate::utils::show_screenshot_notification(image_path.as_deref())
+            {
                 warn!("error showing screenshot notification: {err:?}");
             }
 
@@ -6732,6 +6789,7 @@ arbor_render_elements! {
 arbor_render_elements! {
     WindowScreenshotRenderElement<R> => {
         Layout = LayoutElementRenderElement<R>,
+        Tile = TileRenderElement<R>,
         Pointer = RelocateRenderElement<PointerRenderElements<R>>,
     }
 }
@@ -6757,5 +6815,71 @@ arbor_render_elements! {
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
+    }
+}
+
+/// Options for [`Arbor::screenshot_window`].
+#[derive(Debug, Clone)]
+pub struct WindowScreenshotOptions {
+    pub write_to_disk: bool,
+    pub show_pointer: bool,
+    pub path: Option<String>,
+    /// Render the tile: arbor's title bar, border and shadow.
+    pub decorations: bool,
+    /// Keep shadows (arbor's with `decorations`, the client's own otherwise); off crops to the
+    /// window or tile rectangle.
+    pub shadow: bool,
+    /// Set the clipboard selection and show a notification.
+    pub clipboard: bool,
+}
+
+impl Default for WindowScreenshotOptions {
+    fn default() -> Self {
+        Self {
+            write_to_disk: true,
+            show_pointer: false,
+            path: None,
+            decorations: false,
+            shadow: true,
+            clipboard: true,
+        }
+    }
+}
+
+/// Writes `buf` to a temporary file next to `path` and renames it into place, so whoever
+/// waits for `path` to appear never reads a half-written image.
+fn write_atomically(path: &Path, buf: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, buf)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::*;
+
+    #[test]
+    fn write_atomically_replaces_and_leaves_no_part_file() {
+        let dir = std::env::temp_dir().join(format!("arbor-shot-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot.png");
+        write_atomically(&path, b"first").unwrap();
+        write_atomically(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert!(!dir.join("shot.png.part").exists());
+        // A path in a missing directory fails without leaving anything behind.
+        assert!(write_atomically(&dir.join("missing/shot.png"), b"x").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn window_screenshot_defaults_match_the_old_behaviour() {
+        let o = WindowScreenshotOptions::default();
+        assert!(o.write_to_disk && o.shadow && o.clipboard);
+        assert!(!o.show_pointer && !o.decorations && o.path.is_none());
     }
 }

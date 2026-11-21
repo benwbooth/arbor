@@ -600,7 +600,7 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | Service | Under arbor |
 | --- | --- |
 | `org.kde.kglobalaccel` (global shortcuts of KDE apps) | arbor (above) |
-| `org.kde.KWin` | Not provided. Matters for Spectacle (KWin ScreenShot2; hearth's Print overlay uses satty instead), KWin scripts, "show desktop"/window lists over KWin D-Bus, krunner's window runner. Window activation goes through xdg-activation, which arbor implements |
+| `org.kde.KWin` | Not provided, on purpose (arbor and hearth don't depend on KDE tools). Spectacle needs KWin's ScreenShot2 and zkde_screencast, so it doesn't work here; hearth has its own Spectacle-style tool (Screenshots below). Also matters for KWin scripts, "show desktop"/window lists over KWin D-Bus, krunner's window runner. Window activation goes through xdg-activation, which arbor implements |
 | `org.freedesktop.ScreenSaver` | arbor: Inhibit/UnInhibit stop idle notifications (swayidle honours them through ext-idle-notify); `Lock`/`GetActive`/`SimulateUserActivity` not implemented. Locking goes through logind (`loginctl lock-session` → swayidle `lock` → hyprlock), which KDE Connect uses |
 | `org.freedesktop.Notifications` | swaync (hearth) |
 | Brightness / volume / media keys (PowerDevil, kmix, mediacontrol) | arbor config binds → hearth IPC, wpctl, playerctl. Apps calling PowerDevil's D-Bus get nothing |
@@ -609,6 +609,31 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | StatusNotifierItem (tray) | hearth is the watcher and host |
 | `com.canonical.AppMenu.Registrar` (global menu) | hearth (see Code map) |
 | kded modules (plasma-nm secret agent, bluedevil, printer and disk notifiers, keyboard layout OSD) | kded6 doesn't run. hearth has a Bluetooth agent; without plasma-nm's agent, Wi-Fi/VPN password prompts need another NetworkManager secret agent |
+
+### Screenshots and screen recording
+
+hearth's screenshot tool (Print; Settings > Screenshots in hearth) stands in
+for Spectacle. Outputs and regions come from wlr-screencopy (Quickshell's
+frozen `ScreencopyView`, grim), recordings from wf-recorder over the same
+protocol. Windows come from arbor itself, `Action::ScreenshotWindow`
+(`arbor msg action screenshot-window --id N --path P ...`):
+
+- `decorations` (default false): render the whole tile, i.e. arbor's title
+  bar, border and shadow, not just the window's surfaces. Off: the window
+  alone, its visual geometry at the origin.
+- `shadow` (default true): keep shadows (arbor's with `decorations`, the
+  client's own drawn shadow otherwise). Off crops the image to the tile or
+  the window geometry.
+- `clipboard` (default true): set the PNG as the clipboard selection and
+  show the "Screenshot captured" notification. Tools that handle the image
+  themselves pass false.
+
+The window is rendered by itself, so it captures even when covered or on
+another workspace, at its output's scale (4/3 gives 4/3-sized pixels, no
+resampling), in SDR like the other screenshots. With an explicit `--path`
+the PNG is written to `<path>.part` and renamed, so a caller waiting for the
+file never reads half of it. Code: `Arbor::screenshot_window` and
+`WindowScreenshotOptions` in `src/arbor.rs`.
 
 ## Window previews (window capture)
 

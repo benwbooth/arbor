@@ -45,7 +45,7 @@ use self::pick_color_grab::PickColorGrab;
 use self::pick_window_grab::PickWindowGrab;
 use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
-use crate::arbor::{CastTarget, PointerVisibility, State};
+use crate::arbor::{CastTarget, PointerVisibility, State, WindowScreenshotOptions};
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::dock::DockSide;
@@ -809,15 +809,16 @@ impl State {
             Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
                 let focus = self.arbor.layout.focus_with_output();
                 if let Some((mapped, output)) = focus {
+                    let opts = WindowScreenshotOptions {
+                        write_to_disk,
+                        show_pointer,
+                        path,
+                        ..Default::default()
+                    };
                     self.backend.with_primary_renderer(|renderer| {
-                        if let Err(err) = self.arbor.screenshot_window(
-                            renderer,
-                            output,
-                            mapped,
-                            write_to_disk,
-                            show_pointer,
-                            path,
-                        ) {
+                        if let Err(err) =
+                            self.arbor.screenshot_window(renderer, output, mapped, opts)
+                        {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });
@@ -828,20 +829,32 @@ impl State {
                 write_to_disk,
                 show_pointer,
                 path,
+                decorations,
+                shadow,
+                clipboard,
             } => {
-                let mut windows = self.arbor.layout.windows();
-                let window = windows.find(|(_, m)| m.id().get() == id);
-                if let Some((Some(monitor), mapped)) = window {
-                    let output = monitor.output();
+                let opts = WindowScreenshotOptions {
+                    write_to_disk,
+                    show_pointer,
+                    path,
+                    decorations,
+                    shadow,
+                    clipboard,
+                };
+                let target = match id {
+                    Some(id) => self
+                        .arbor
+                        .layout
+                        .windows()
+                        .find(|(_, m)| m.id().get() == id)
+                        .and_then(|(mon, m)| Some((m, mon?.output()))),
+                    None => self.arbor.layout.focus_with_output(),
+                };
+                if let Some((mapped, output)) = target {
                     self.backend.with_primary_renderer(|renderer| {
-                        if let Err(err) = self.arbor.screenshot_window(
-                            renderer,
-                            output,
-                            mapped,
-                            write_to_disk,
-                            show_pointer,
-                            path,
-                        ) {
+                        if let Err(err) =
+                            self.arbor.screenshot_window(renderer, output, mapped, opts)
+                        {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });

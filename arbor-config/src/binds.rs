@@ -137,10 +137,14 @@ pub enum Action {
     ),
     #[knuffel(skip)]
     ScreenshotWindowById {
-        id: u64,
+        /// `None` = the focused window.
+        id: Option<u64>,
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
+        decorations: bool,
+        shadow: bool,
+        clipboard: bool,
     },
     ToggleKeyboardShortcutsInhibit,
     CloseWindow,
@@ -431,17 +435,26 @@ impl From<arbor_ipc::Action> for Action {
                 write_to_disk,
                 show_pointer,
                 path,
+                decorations: false,
+                shadow: true,
+                clipboard: true,
             } => Self::ScreenshotWindow(write_to_disk, show_pointer, path),
             arbor_ipc::Action::ScreenshotWindow {
-                id: Some(id),
+                id,
                 write_to_disk,
                 show_pointer,
                 path,
+                decorations,
+                shadow,
+                clipboard,
             } => Self::ScreenshotWindowById {
                 id,
                 write_to_disk,
                 show_pointer,
                 path,
+                decorations,
+                shadow,
+                clipboard,
             },
             arbor_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
@@ -1140,6 +1153,49 @@ mod tests {
                 trigger: Trigger::Keysym(Keysym::a),
                 modifiers: Modifiers::ISO_LEVEL5_SHIFT
             },
+        );
+    }
+
+    #[test]
+    fn screenshot_window_from_ipc() {
+        let ipc = |id, decorations, shadow, clipboard| arbor_ipc::Action::ScreenshotWindow {
+            id,
+            write_to_disk: true,
+            show_pointer: false,
+            path: None,
+            decorations,
+            shadow,
+            clipboard,
+        };
+        // Plain request: the config action (focused window, old behaviour).
+        assert_eq!(
+            Action::from(ipc(None, false, true, true)),
+            Action::ScreenshotWindow(true, false, None)
+        );
+        // Any option or an id: the full action.
+        assert_eq!(
+            Action::from(ipc(None, true, false, false)),
+            Action::ScreenshotWindowById {
+                id: None,
+                write_to_disk: true,
+                show_pointer: false,
+                path: None,
+                decorations: true,
+                shadow: false,
+                clipboard: false,
+            }
+        );
+        assert_eq!(
+            Action::from(ipc(Some(7), false, true, true)),
+            Action::ScreenshotWindowById {
+                id: Some(7),
+                write_to_disk: true,
+                show_pointer: false,
+                path: None,
+                decorations: false,
+                shadow: true,
+                clipboard: true,
+            }
         );
     }
 }

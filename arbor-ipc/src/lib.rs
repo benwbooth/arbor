@@ -502,6 +502,27 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = false))]
         show_pointer: bool,
 
+        /// Include arbor's decorations: the server-side title bar, border and shadow.
+        ///
+        /// Off: only the window's own surfaces (client-side shadows are cropped to the window's
+        /// visual geometry when this is off and `shadow` is off as well).
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = false))]
+        #[serde(default)]
+        decorations: bool,
+
+        /// Include shadows: arbor's shadow with `decorations`, the client's own drawn shadow
+        /// otherwise.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        #[serde(default = "default_true")]
+        shadow: bool,
+
+        /// Put the image on the clipboard and show a notification.
+        ///
+        /// Screenshot tools that handle the result themselves set this to false.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        #[serde(default = "default_true")]
+        clipboard: bool,
+
         /// Path to save the screenshot to.
         ///
         /// The path must be absolute, otherwise an error is returned.
@@ -2317,9 +2338,48 @@ impl OutputAction {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_window_option_defaults() {
+        // Older clients don't send the new fields: arbor keeps its old behaviour.
+        let json = r#"{"ScreenshotWindow":{"id":3,"write_to_disk":true,"show_pointer":false,"path":null}}"#;
+        let Action::ScreenshotWindow {
+            id,
+            decorations,
+            shadow,
+            clipboard,
+            ..
+        } = serde_json::from_str(json).unwrap()
+        else {
+            panic!("wrong action");
+        };
+        assert_eq!(id, Some(3));
+        assert!(!decorations);
+        assert!(shadow);
+        assert!(clipboard);
+
+        let json = r#"{"ScreenshotWindow":{"id":null,"write_to_disk":true,"show_pointer":true,
+            "path":"/tmp/x.png","decorations":true,"shadow":false,"clipboard":false}}"#;
+        let Action::ScreenshotWindow {
+            decorations,
+            shadow,
+            clipboard,
+            path,
+            ..
+        } = serde_json::from_str(json).unwrap()
+        else {
+            panic!("wrong action");
+        };
+        assert!(decorations && !shadow && !clipboard);
+        assert_eq!(path.as_deref(), Some("/tmp/x.png"));
+    }
 
     #[test]
     fn parse_size_change() {
