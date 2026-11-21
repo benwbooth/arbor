@@ -393,9 +393,12 @@ binds {
     XF86MonBrightnessUp allow-when-locked=true { spawn "brightnessctl" "--class=backlight" "set" "+10%"; }
     XF86MonBrightnessDown allow-when-locked=true { spawn "brightnessctl" "--class=backlight" "set" "10%-"; }
 
-    // Open/close the Overview: a zoomed-out view of workspaces and windows.
+    // Open/close the Overview: every window of the workspace side by side, with
+    // workspace thumbnails along the top. Click a window to go to it, click its
+    // close button (or middle-click) to close it, drag it onto a thumbnail to
+    // move it there, click a thumbnail to switch, Escape to leave.
     // You can also move the mouse into the top-left hot corner,
-    // or do a four-finger swipe up on a touchpad.
+    // or swipe up with three or four fingers on a touchpad.
     Mod+O repeat=false { toggle-overview; }
 
     Mod+Q repeat=false { close-window; }

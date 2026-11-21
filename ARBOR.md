@@ -35,8 +35,45 @@ arbor changes in new files where possible so rebases stay small.
 
 ## Touchpad
 
-3- and 4-finger swipes work like macOS: vertical opens/closes the overview,
-horizontal switches workspaces (both interactive).
+3- and 4-finger swipes work like macOS: vertical opens/closes the overview
+(see Overview), horizontal switches workspaces (both interactive).
+
+## Overview
+
+The overview (`toggle-overview` / `open-overview` / `close-overview`, the
+top-left hot corner, or a 3/4-finger swipe up) works like macOS Mission
+Control and KDE's Overview instead of niri's zoomed-out workspace strip:
+
+- Every shown window of the workspace (docked and floating; the shown tab
+  of a tab group) glides from where it is to a slot in a non-overlapping
+  layout: rows filling the working area, windows in their rough on-screen
+  order, all scaled by one factor (never enlarged), with gaps. Closing
+  glides them back. The swipe scrubs the same animation: the windows follow
+  the fingers and the release settles open or closed.
+- Minimized windows are left out (restore them from the dock/taskbar).
+- Under each window: its app icon and title. Hovering a window outlines it
+  in the accent colour and shows a close button at its top right; the
+  focused window has a subtle outline (arrow keys move the focus,
+  Enter/Escape leave the overview on it).
+- Along the top: a thumbnail per workspace (window outlines with app
+  icons), the shown one outlined in the accent colour, and a "+" thumbnail
+  for the empty workspace at the end.
+- The wallpaper and bottom layers are dimmed behind it (no blur yet). Panels
+  (top/overlay layers) stay on top and clickable.
+
+| Do this | To |
+| --- | --- |
+| Click a window | Go to it (closes the overview) |
+| Click its close button, or middle-click it | Close the window |
+| Drag a window onto a workspace thumbnail | Move it to that workspace ("+" makes a new one) |
+| Click a workspace thumbnail | Show that workspace's windows |
+| Click empty space, Escape, or the overview key again | Leave the overview |
+
+IPC (`OverviewState`, `OverviewOpenedOrClosed`) and the action names are
+niri's, so shells and binds keep working. Workspaces no longer zoom out
+(`compute_overview_zoom` is 1); the `overview { zoom }` setting has no
+effect. Touch: tapping a window or empty space works; dragging by touch
+still uses niri's interactive move (full size).
 
 ## Camera (milestone 2)
 
@@ -196,6 +233,12 @@ without `prefer-no-csd`, so that Qt stops drawing its own bar.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
   `niri-config/src/title_bar.rs`: server-side title bars.
 - `src/layout/icon_tile.rs`: icon tiles.
+- `src/layout/expose.rs`: overview layout math (unit tested) and `Layout`
+  entry points; `src/layout/monitor_expose.rs` (included from
+  `monitor.rs`): overview rendering and hit testing; `src/input/expose.rs`:
+  overview clicks, drags and hover; `src/tests/expose.rs`: headless render
+  check (`cargo test --lib tests::expose -- --ignored`, needs EGL;
+  `ARBOR_EXPOSE_SHOT_DIR` writes the frames as PNGs).
 - `src/layout/camera.rs`: camera math (framing, panning, history);
   `src/input/camera.rs`: pinch and zoomed clicks.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
