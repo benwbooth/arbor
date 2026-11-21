@@ -172,14 +172,13 @@ impl Start for ScreenSaver {
         let future = {
             let conn = async_conn.clone();
             async move {
-                if let Err(err) =
-                    monitor_disappeared_clients(
-                        &conn,
-                        is_inhibited.clone(),
-                        inhibitors.clone(),
-                        wake,
-                    )
-                    .await
+                if let Err(err) = monitor_disappeared_clients(
+                    &conn,
+                    is_inhibited.clone(),
+                    inhibitors.clone(),
+                    wake,
+                )
+                .await
                 {
                     warn!("error monitoring org.freedesktop.ScreenSaver clients: {err:?}");
                     is_broken.store(true, Ordering::SeqCst);

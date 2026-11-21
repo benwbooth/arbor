@@ -13,12 +13,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use zbus::fdo;
 use zbus::message::Header;
 use zbus::names::UniqueName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{NoneValue, OwnedObjectPath, OwnedValue};
-use zbus::{interface, ObjectServer};
+use zbus::{fdo, interface, ObjectServer};
 
 const FLAG_IDLE: u32 = 8;
 
@@ -82,6 +81,7 @@ impl Request {
 
 #[interface(name = "org.freedesktop.impl.portal.Inhibit")]
 impl Inhibit {
+    #[allow(clippy::too_many_arguments)]
     async fn inhibit(
         &self,
         #[zbus(header)] hdr: Header<'_>,

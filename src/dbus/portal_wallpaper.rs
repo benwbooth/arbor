@@ -64,7 +64,9 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     // Skip an authority ("localhost").
     let path = &rest[rest.find('/')?..];
-    Some(PathBuf::from(std::ffi::OsString::from_vec(percent_decode(path))))
+    Some(PathBuf::from(std::ffi::OsString::from_vec(percent_decode(
+        path,
+    ))))
 }
 
 fn cache_dir() -> Option<PathBuf> {
@@ -176,7 +178,10 @@ impl Wallpaper {
         let (tx, rx) = async_channel::bounded(1);
         let sent = self.to_arbor.send(Box::new(move |state| {
             let portal = state.arbor.config.borrow().portal.clone();
-            let _ = tx.try_send((portal.wallpaper_command, portal.lockscreen_wallpaper_command));
+            let _ = tx.try_send((
+                portal.wallpaper_command,
+                portal.lockscreen_wallpaper_command,
+            ));
         }));
         if sent.is_err() {
             return RESPONSE_OTHER;

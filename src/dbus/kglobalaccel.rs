@@ -221,7 +221,10 @@ impl KGlobalAccel {
     ) -> Result<OwnedObjectPath, KError> {
         let name = crate::kglobalaccel::component_name(&component_unique).to_owned();
         let n = name.clone();
-        let exists = self.to_arbor.gs(move |gs, _, _| gs.kde_has_component(&n)).await?;
+        let exists = self
+            .to_arbor
+            .gs(move |gs, _, _| gs.kde_has_component(&n))
+            .await?;
         if !exists {
             return Err(KError::NoSuchComponent(format!(
                 "The component '{component_unique}' doesn't exist."
@@ -298,7 +301,11 @@ impl KGlobalAccel {
     }
 
     #[zbus(name = "setForeignShortcut")]
-    async fn set_foreign_shortcut(&self, action_id: ActionId, keys: Vec<i32>) -> Result<(), KError> {
+    async fn set_foreign_shortcut(
+        &self,
+        action_id: ActionId,
+        keys: Vec<i32>,
+    ) -> Result<(), KError> {
         let keys: Vec<KeySeq> = keys.into_iter().map(|k| [k, 0, 0, 0]).collect();
         self.to_arbor
             .gs(move |gs, b, m| gs.kde_set_foreign(&action_id, &keys, b, m))
@@ -479,13 +486,17 @@ impl Component {
     #[zbus(name = "cleanUp")]
     async fn clean_up(&self) -> Result<bool, KError> {
         let name = self.name.clone();
-        self.to_arbor.gs(move |gs, _, _| gs.kde_clean_up(&name)).await
+        self.to_arbor
+            .gs(move |gs, _, _| gs.kde_clean_up(&name))
+            .await
     }
 
     #[zbus(name = "isActive")]
     async fn is_active(&self) -> Result<bool, KError> {
         let name = self.name.clone();
-        self.to_arbor.gs(move |gs, _, _| gs.kde_is_active(&name)).await
+        self.to_arbor
+            .gs(move |gs, _, _| gs.kde_is_active(&name))
+            .await
     }
 
     #[zbus(name = "shortcutNames")]

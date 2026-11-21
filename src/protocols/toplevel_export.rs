@@ -70,8 +70,10 @@ pub struct ToplevelExportGlobalData {
 pub trait ToplevelExportHandler {
     fn toplevel_export_state(&mut self) -> &mut ToplevelExportManagerState;
     /// Resolves a wlr foreign toplevel handle to the window it stands for.
-    fn export_target_for_handle(&mut self, handle: &ZwlrForeignToplevelHandleV1)
-        -> Option<ExportTarget>;
+    fn export_target_for_handle(
+        &mut self,
+        handle: &ZwlrForeignToplevelHandleV1,
+    ) -> Option<ExportTarget>;
     /// Resolves an arbor window id.
     fn export_target_for_id(&mut self, id: u64) -> Option<ExportTarget>;
     /// A client asked to copy a frame. The handler must synchronously either finish it (render,
@@ -305,8 +307,7 @@ where
         let size = target.size;
         let buffer = if let Ok(dmabuf) = dmabuf::get_dmabuf(&buffer) {
             let format_ok = matches!(dmabuf.format().code, Fourcc::Argb8888 | Fourcc::Xrgb8888);
-            if format_ok && dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32
-            {
+            if format_ok && dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32 {
                 ExportBuffer::Dmabuf(dmabuf.clone())
             } else {
                 frame.post_error(
@@ -410,7 +411,8 @@ impl ToplevelExport {
     }
 
     fn submit(mut self, timestamp: Duration) {
-        self.frame.flags(hyprland_toplevel_export_frame_v1::Flags::empty());
+        self.frame
+            .flags(hyprland_toplevel_export_frame_v1::Flags::empty());
         let secs = timestamp.as_secs();
         self.frame.ready(
             (secs >> 32) as u32,
@@ -420,7 +422,11 @@ impl ToplevelExport {
         self.submitted = true;
     }
 
-    pub fn submit_after_sync<T>(self, sync_point: Option<SyncPoint>, event_loop: &LoopHandle<'_, T>) {
+    pub fn submit_after_sync<T>(
+        self,
+        sync_point: Option<SyncPoint>,
+        event_loop: &LoopHandle<'_, T>,
+    ) {
         let timestamp = get_monotonic_time();
         match sync_point.and_then(|s| s.export()) {
             None => self.submit(timestamp),

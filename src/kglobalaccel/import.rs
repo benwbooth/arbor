@@ -102,7 +102,10 @@ pub fn import_kde(
             continue;
         }
         let component = &path[0];
-        let ids: Vec<&String> = entries.keys().filter(|k| *k != "_k_friendly_name").collect();
+        let ids: Vec<&String> = entries
+            .keys()
+            .filter(|k| *k != "_k_friendly_name")
+            .collect();
         if SKIP_COMPONENTS.contains(&component.as_str()) {
             report.skipped += ids.len() as u32;
             continue;
@@ -125,7 +128,11 @@ pub fn import_kde(
                 id.clone(),
                 StoredShortcut {
                     source: if portal { Source::Portal } else { Source::Kde },
-                    app_name: if portal { String::new() } else { app_name.clone() },
+                    app_name: if portal {
+                        String::new()
+                    } else {
+                        app_name.clone()
+                    },
                     description: fields[2].clone(),
                     preferred_trigger: first_key(&fields[1]),
                     trigger: Some(trigger),
@@ -149,7 +156,14 @@ pub fn import_kde(
                 continue;
             };
             let description = if id == "_launch" {
-                format!("Launch {}", if app_name.is_empty() { &service } else { &app_name })
+                format!(
+                    "Launch {}",
+                    if app_name.is_empty() {
+                        &service
+                    } else {
+                        &app_name
+                    }
+                )
             } else {
                 id.clone()
             };
@@ -257,11 +271,15 @@ RectangularRegionScreenShot=Meta+Shift+S
         assert_eq!(s.trigger.as_deref(), Some("Ctrl+Alt+space"));
 
         assert_eq!(
-            store.apps["org.kde.kdeconnect.daemon"]["ring"].trigger.as_deref(),
+            store.apps["org.kde.kdeconnect.daemon"]["ring"]
+                .trigger
+                .as_deref(),
             Some("Alt+Super+R")
         );
         assert_eq!(
-            store.apps["net.local.whisper-toggle.desktop"]["_launch"].trigger.as_deref(),
+            store.apps["net.local.whisper-toggle.desktop"]["_launch"]
+                .trigger
+                .as_deref(),
             Some("Pause")
         );
         let spectacle = &store.apps["org.kde.spectacle.desktop"];
@@ -270,7 +288,10 @@ RectangularRegionScreenShot=Meta+Shift+S
             spectacle["RectangularRegionScreenShot"].trigger.as_deref(),
             Some("Shift+Super+S")
         );
-        assert_eq!(spectacle["RectangularRegionScreenShot"].app_name, "Spectacle");
+        assert_eq!(
+            spectacle["RectangularRegionScreenShot"].app_name,
+            "Spectacle"
+        );
         assert_eq!(report.imported, 6);
 
         // Importing again changes nothing unless asked to overwrite.

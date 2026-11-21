@@ -66,7 +66,10 @@ pub enum KdeEvent {
         timestamp: i64,
     },
     /// `yourShortcutsChanged`: the keys of an app's action changed from outside the app.
-    ShortcutsChanged { action_id: ActionId, keys: Vec<KeySeq> },
+    ShortcutsChanged {
+        action_id: ActionId,
+        keys: Vec<KeySeq>,
+    },
 }
 
 #[derive(Default)]
@@ -324,7 +327,9 @@ impl GlobalShortcuts {
         let Some(entry) = self.kde_entry_ref(component, action) else {
             return;
         };
-        self.kde.fresh.remove(&(component.to_owned(), action.to_owned()));
+        self.kde
+            .fresh
+            .remove(&(component.to_owned(), action.to_owned()));
         let keys = trigger_keys(entry.trigger.as_deref(), mod_key);
         self.kde.send(KdeEvent::ShortcutsChanged {
             action_id: vec![
@@ -427,7 +432,14 @@ impl GlobalShortcuts {
         self.kde_infos(&component, mod_key)
             .into_iter()
             .filter(|i| !fresh.contains(&(i.component.clone(), i.action.clone())))
-            .map(|i| vec![i.component, i.action, i.component_friendly, i.action_friendly])
+            .map(|i| {
+                vec![
+                    i.component,
+                    i.action,
+                    i.component_friendly,
+                    i.action_friendly,
+                ]
+            })
             .collect()
     }
 
@@ -462,7 +474,12 @@ impl GlobalShortcuts {
             return Vec::new();
         };
         match self.kde_info(&component, &action, mod_key) {
-            Some(i) => vec![i.component, i.action, i.component_friendly, i.action_friendly],
+            Some(i) => vec![
+                i.component,
+                i.action,
+                i.component_friendly,
+                i.action_friendly,
+            ],
             None => Vec::new(),
         }
     }
@@ -660,16 +677,35 @@ mod tests {
         // What KGlobalAccel::setShortcut does for a new action: register, set the active keys
         // (autoloading, present), then the defaults.
         assert!(gs.kde_register(&id("app", "ring"), Some(":1.5".into())));
-        let got = gs.kde_set_keys(&id("app", "ring"), &[qt("Meta+Alt+R")], SET_PRESENT, NO_BINDS, m);
+        let got = gs.kde_set_keys(
+            &id("app", "ring"),
+            &[qt("Meta+Alt+R")],
+            SET_PRESENT,
+            NO_BINDS,
+            m,
+        );
         assert_eq!(got, vec![qt("Meta+Alt+R")]);
-        gs.kde_set_keys(&id("app", "ring"), &[qt("Meta+Alt+R")], IS_DEFAULT, NO_BINDS, m);
-        assert_eq!(gs.kde_default_keys(&id("app", "ring"), m), vec![qt("Meta+Alt+R")]);
+        gs.kde_set_keys(
+            &id("app", "ring"),
+            &[qt("Meta+Alt+R")],
+            IS_DEFAULT,
+            NO_BINDS,
+            m,
+        );
+        assert_eq!(
+            gs.kde_default_keys(&id("app", "ring"), m),
+            vec![qt("Meta+Alt+R")]
+        );
 
         let code = Keycode::new(27);
         assert!(gs.kde_press(code, m, Keysym::r, Modifiers::SUPER | Modifiers::ALT, 5));
         assert_eq!(
             rx.try_recv().unwrap(),
-            KdeEvent::Pressed { component: "app".into(), action: "ring".into(), timestamp: 5 }
+            KdeEvent::Pressed {
+                component: "app".into(),
+                action: "ring".into(),
+                timestamp: 5
+            }
         );
         assert!(gs.kde_release(code, 6));
         assert!(matches!(rx.try_recv().unwrap(), KdeEvent::Released { .. }));
@@ -678,7 +714,13 @@ mod tests {
         gs.kde_owner_vanished(":1.5");
         assert!(!gs.kde_press(code, m, Keysym::r, Modifiers::SUPER | Modifiers::ALT, 7));
         assert!(!gs.kde_register(&id("app", "ring"), Some(":1.6".into())));
-        let got = gs.kde_set_keys(&id("app", "ring"), &[qt("Meta+X")], SET_PRESENT, NO_BINDS, m);
+        let got = gs.kde_set_keys(
+            &id("app", "ring"),
+            &[qt("Meta+X")],
+            SET_PRESENT,
+            NO_BINDS,
+            m,
+        );
         assert_eq!(got, vec![qt("Meta+Alt+R")]);
 
         // A settings UI changes it: the app hears about it.
@@ -689,7 +731,8 @@ mod tests {
         ));
 
         // IPC change goes through set_trigger and notifies too.
-        gs.set_trigger("app", "ring", Some("Ctrl+F10"), NO_BINDS, m).unwrap();
+        gs.set_trigger("app", "ring", Some("Ctrl+F10"), NO_BINDS, m)
+            .unwrap();
         assert!(matches!(
             rx.try_recv().unwrap(),
             KdeEvent::ShortcutsChanged { keys, .. } if keys == vec![qt("Ctrl+F10")]

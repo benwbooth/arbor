@@ -489,7 +489,8 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             std::thread::Builder::new()
                 .name(String::from("import KDE shortcuts"))
                 .spawn(move || {
-                    let report = crate::kglobalaccel::import::import_kde_file(&mut store, overwrite);
+                    let report =
+                        crate::kglobalaccel::import::import_kde_file(&mut store, overwrite);
                     let _ = tx.send_blocking((store, report));
                 })
                 .map_err(|_| err())?;

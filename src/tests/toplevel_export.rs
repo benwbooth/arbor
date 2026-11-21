@@ -205,7 +205,12 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for State {
     }
 }
 
-fn color_window(f: &mut Fixture, id: ClientId, (w, h): (u16, u16), rgb: (u32, u32, u32)) -> WlSurface {
+fn color_window(
+    f: &mut Fixture,
+    id: ClientId,
+    (w, h): (u16, u16),
+    rgb: (u32, u32, u32),
+) -> WlSurface {
     let window = f.client(id).create_window();
     let surface = window.surface.clone();
     window.commit();
@@ -230,14 +235,25 @@ struct ShmTarget {
 impl ShmTarget {
     fn new(f: &mut Fixture, id: ClientId, shm: &WlShm, w: u32, h: u32, format: u32) -> Self {
         let len = (w * h * 4) as usize;
-        let fd = smithay::reexports::rustix::fs::memfd_create("export", smithay::reexports::rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        let fd = smithay::reexports::rustix::fs::memfd_create(
+            "export",
+            smithay::reexports::rustix::fs::MemfdFlags::CLOEXEC,
+        )
+        .unwrap();
         let memfd = std::fs::File::from(fd);
         memfd.set_len(len as u64).unwrap();
         let client = f.client(id);
         let pool = shm.create_pool(memfd.as_fd(), len as i32, &client.qh, ());
         let format = wl_shm::Format::try_from(format).unwrap();
-        let buffer =
-            pool.create_buffer(0, w as i32, h as i32, (w * 4) as i32, format, &client.qh, 0u8);
+        let buffer = pool.create_buffer(
+            0,
+            w as i32,
+            h as i32,
+            (w * 4) as i32,
+            format,
+            &client.qh,
+            0u8,
+        );
         pool.destroy();
         Self { buffer, memfd, len }
     }

@@ -157,7 +157,11 @@ _launch=Pause
         let kwin = c.group(&["kwin"]).unwrap();
         assert_eq!(
             split_list(&kwin["Walk Through Windows"]),
-            ["Meta+Tab\tAlt+Tab", "Meta+Tab\tAlt+Tab", "Walk Through Windows"]
+            [
+                "Meta+Tab\tAlt+Tab",
+                "Meta+Tab\tAlt+Tab",
+                "Walk Through Windows"
+            ]
         );
         let sn = c.group(&["net.mkiol.SpeechNote"]).unwrap();
         assert_eq!(

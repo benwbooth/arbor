@@ -16,6 +16,16 @@ use crate::global_shortcuts::GlobalShortcuts;
 use crate::kglobalaccel::keys::parse_seq;
 
 type DKeySeq = (Vec<i32>,);
+type DInfo = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Vec<i32>,
+    Vec<i32>,
+);
 
 #[zbus::proxy(
     interface = "org.kde.KGlobalAccel",
@@ -44,12 +54,14 @@ trait KGlobalAccel {
 )]
 trait Component {
     #[zbus(signal, name = "globalShortcutPressed")]
-    fn global_shortcut_pressed(&self, component: String, action: String, ts: i64)
-        -> zbus::Result<()>;
-    #[zbus(name = "allShortcutInfos")]
-    fn all_shortcut_infos(
+    fn global_shortcut_pressed(
         &self,
-    ) -> zbus::Result<Vec<(String, String, String, String, String, String, Vec<i32>, Vec<i32>)>>;
+        component: String,
+        action: String,
+        ts: i64,
+    ) -> zbus::Result<()>;
+    #[zbus(name = "allShortcutInfos")]
+    fn all_shortcut_infos(&self) -> zbus::Result<Vec<DInfo>>;
     #[zbus(property, name = "friendlyName")]
     fn friendly_name(&self) -> zbus::Result<String>;
 }
@@ -97,7 +109,9 @@ fn kglobalaccel_over_dbus() {
             let path = kga.get_component("org.example.app").await.unwrap();
             assert_eq!(path.as_str(), "/component/org_example_app");
             let comps = kga.all_main_components().await.unwrap();
-            assert!(comps.iter().any(|c| c[0] == "org.example.app" && c[1] == "Example"));
+            assert!(comps
+                .iter()
+                .any(|c| c[0] == "org.example.app" && c[1] == "Example"));
 
             let component = ComponentProxy::builder(&conn)
                 .path(path)
@@ -113,7 +127,11 @@ fn kglobalaccel_over_dbus() {
             // Signatures as KF6's KGlobalAccel expects them (if busctl is around).
             let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap();
             if let Ok(out) = std::process::Command::new("busctl")
-                .args([&format!("--address={addr}"), "introspect", "org.kde.kglobalaccel"])
+                .args([
+                    &format!("--address={addr}"),
+                    "introspect",
+                    "org.kde.kglobalaccel",
+                ])
                 .args(["/kglobalaccel", "org.kde.KGlobalAccel"])
                 .output()
             {
@@ -145,7 +163,13 @@ fn kglobalaccel_over_dbus() {
     // The client listens now: press Ctrl+Alt+K in the compositor.
     let gs = &mut server.state.arbor.global_shortcuts;
     let code = Keycode::new(45);
-    assert!(gs.kde_press(code, ModKey::Super, Keysym::k, Modifiers::CTRL | Modifiers::ALT, 1));
+    assert!(gs.kde_press(
+        code,
+        ModKey::Super,
+        Keysym::k,
+        Modifiers::CTRL | Modifiers::ALT,
+        1
+    ));
     assert!(gs.kde_release(code, 2));
 
     pump(&mut server, || client.is_finished());
@@ -169,7 +193,10 @@ fn idle_inhibit_over_dbus() {
     let mut server = Server::new(Config::default());
     let arbor = &mut server.state.arbor;
     let (ping, source) = calloop::ping::make_ping().unwrap();
-    arbor.event_loop.insert_source(source, |_, _, _| ()).unwrap();
+    arbor
+        .event_loop
+        .insert_source(source, |_, _, _| ())
+        .unwrap();
     let _ss = ScreenSaver::new(arbor.is_fdo_idle_inhibited.clone(), Some(ping.clone()))
         .start()
         .unwrap();
@@ -178,11 +205,15 @@ fn idle_inhibit_over_dbus() {
     portal
         .request_name("org.freedesktop.impl.portal.desktop.arbor")
         .unwrap();
-    crate::dbus::portal_inhibit::register(&portal, arbor.is_portal_idle_inhibited.clone(), Some(ping))
-        .unwrap();
+    crate::dbus::portal_inhibit::register(
+        &portal,
+        arbor.is_portal_idle_inhibited.clone(),
+        Some(ping),
+    )
+    .unwrap();
 
     let client = zbus::blocking::Connection::session().unwrap();
-    let mut inhibited = |server: &mut Server| {
+    let inhibited = |server: &mut Server| {
         server.dispatch();
         server.state.arbor.idle_notifier_state.is_inhibited()
     };
@@ -211,8 +242,9 @@ fn idle_inhibit_over_dbus() {
         .unwrap();
     assert!(!inhibited(&mut server));
 
-    let handle = zbus::zvariant::ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1_1/t")
-        .unwrap();
+    let handle =
+        zbus::zvariant::ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1_1/t")
+            .unwrap();
     let options: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
     client
         .call_method(

@@ -172,6 +172,9 @@ in
             "org.freedesktop.impl.portal.Notification" = "gtk";
             # arbor's own GlobalShortcuts backend (share/xdg-desktop-portal/portals/arbor.portal).
             "org.freedesktop.impl.portal.GlobalShortcuts" = "arbor";
+            # arbor's Wallpaper (portal { wallpaper-command }) and Inhibit (idle) backends.
+            "org.freedesktop.impl.portal.Wallpaper" = "arbor";
+            "org.freedesktop.impl.portal.Inhibit" = "arbor";
           };
 
           # Screencasting goes through arbor's Mutter-compatible D-Bus API, which

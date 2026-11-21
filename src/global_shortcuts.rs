@@ -289,7 +289,10 @@ impl GlobalShortcuts {
                     let mut store = Store::default();
                     let report = crate::kglobalaccel::import::import_kde_file(&mut store, false);
                     if report.imported > 0 {
-                        info!("imported {} shortcuts from kglobalshortcutsrc", report.imported);
+                        info!(
+                            "imported {} shortcuts from kglobalshortcutsrc",
+                            report.imported
+                        );
                     }
                     if let Err(err) = store.save(path) {
                         warn!("error saving global shortcuts to {path:?}: {err:?}");

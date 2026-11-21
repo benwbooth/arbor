@@ -313,7 +313,14 @@ pub fn render_elements_to_dmabuf(
         "invalid buffer size"
     );
     let mut target = renderer.bind(&mut dmabuf).context("error binding dmabuf")?;
-    render_elements(renderer, &mut target, size, scale, Transform::Normal, elements)
+    render_elements(
+        renderer,
+        &mut target,
+        size,
+        scale,
+        Transform::Normal,
+        elements,
+    )
 }
 
 pub fn render_to_shm(

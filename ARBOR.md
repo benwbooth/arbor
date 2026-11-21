@@ -399,13 +399,15 @@ line itself.
   window.
 - Assignments are stored per app id in
   `$XDG_CONFIG_HOME/arbor/global-shortcuts.json`
-  (`apps.<app id>.<shortcut id> = { description, preferred_trigger, trigger, user_cleared }`).
+  (`apps.<app id>.<shortcut id> = { description, preferred_trigger, trigger, user_cleared }`,
+  plus `source: "kde"` and `app_name` for KDE shortcuts, below). This one
+  store holds every app shortcut, portal and KDE alike.
   Clearing a trigger sets `user_cleared`, so the preferred trigger isn't
   re-applied when the app starts again.
 
 | Command | Does |
 | --- | --- |
-| `arbor msg global-shortcuts` (`--json`) | List every app shortcut: app id, id, description, trigger, preferred trigger, whether the app is running |
+| `arbor msg global-shortcuts` (`--json`) | List every app shortcut (portal and KDE): app id / KDE component, id, description, trigger, preferred trigger, whether the app is running, `source`, `app_name` |
 | `arbor msg set-global-shortcut <app-id> <id> <trigger>` | Assign a trigger (fails on a clash, naming it) |
 | `arbor msg set-global-shortcut <app-id> <id> --clear` | Remove the assignment |
 
@@ -413,6 +415,151 @@ IPC: `Request::GlobalShortcuts` → `Response::GlobalShortcuts(Vec<GlobalShortcu
 `Request::SetGlobalShortcut { app_id, id, trigger: Option<String> }` →
 `Handled` or an error string. A change is sent to the running app as
 `ShortcutsChanged`. Unsandboxed apps can have an empty app id (use `""`).
+
+### KDE global shortcuts (kglobalaccel)
+
+KDE/Qt apps (Speech Note, KDE Connect, Spectacle, Kate, Konsole, ...)
+register global actions with KGlobalAccel over `org.kde.kglobalaccel`.
+Under Plasma kglobalacceld inside KWin grabs those keys; under arbor the
+compositor serves that D-Bus API itself (`src/dbus/kglobalaccel.rs`,
+`src/kglobalaccel/`) as a compatibility layer over the store above:
+
+- `/kglobalaccel` (`org.kde.KGlobalAccel`, the KF6 interface: `doRegister`,
+  `setShortcutKeys`/`setShortcut`, `setForeignShortcutKeys`, `shortcutKeys`,
+  `defaultShortcutKeys`, `setInactive`, `unregister`, `getComponent`,
+  `allComponents`, `allMainComponents`, `allActionsForComponent`,
+  `actionList`, `globalShortcutsByKey`, `globalShortcutAvailable`,
+  `blockGlobalShortcuts`, the deprecated `int` variants, signal
+  `yourShortcutsChanged`) and `/component/<name>`
+  (`org.kde.kglobalaccel.Component`: `globalShortcutPressed` /
+  `globalShortcutReleased`, `invokeShortcut`, `allShortcutInfos`,
+  `shortcutNames`, `cleanUp`, `isActive`, `friendlyName`, `uniqueName`).
+- Registrations become store entries with `source: "kde"`, keyed by the
+  component name. Keys come from the store; a new action gets the keys the
+  app asks for (its default) if they are free: no config bind and no other
+  app shortcut has them. Config binds always win, then portal shortcuts,
+  then KDE ones; not while locked or while a client inhibits shortcuts.
+- KGlobalAccel semantics kept: a running app's later "set my shortcut"
+  calls load the stored keys back (autoloading); only actions of running
+  apps take key presses, and an app that leaves the bus stops taking them.
+- Components named `*.desktop` are launchers (KDE's "custom shortcuts" and
+  `X-KDE-Shortcuts`): `_launch` starts the desktop file, other ids its
+  `[Desktop Action]`s (found in `applications/` or `kglobalaccel/` under the
+  XDG data dirs). They always take their keys.
+- Not supported: shortcut contexts (`component|context` maps to the
+  component), multi-key sequences, modifier-only shortcuts, the
+  context-taking overloads of `shortcutNames`/`allShortcutInfos`, and
+  several keys per action (the store keeps the first).
+- arbor owns `org.kde.kglobalaccel` from startup (session instance). There
+  is no D-Bus activation file for it, and `plasma-kglobalaccel.service` is
+  only pulled in by `plasma-workspace.target`, so kglobalacceld doesn't
+  start under arbor; if it did, it couldn't take the name.
+
+**One-off import from Plasma.** The first time arbor starts without
+`global-shortcuts.json`, it copies the assignments from
+`$XDG_CONFIG_HOME/kglobalshortcutsrc` into it (read only; arbor never
+writes that file). `arbor msg import-kde-shortcuts [--overwrite]` does it
+again (IPC `Request::ImportKdeShortcuts { overwrite }` →
+`Response::ImportedKdeShortcuts(count)`). Imported: app components (their
+current key, if arbor can bind it), `[services]` launchers, and
+Chromium/Electron shortcuts that xdg-desktop-portal-kde had stored (ids
+`<32 hex>-name`), which go in as portal shortcuts under their app id.
+Skipped: Plasma's own components (`kwin`, `plasmashell`, `ksmserver`,
+`mediacontrol`, `kmix`, `org_kde_powerdevil`, `KDE Keyboard Layout
+Switcher`, `kaccess`, `ActivityManager`, `khotkeys`, ...: arbor binds and
+hearth do those jobs), the krunner/kscreen/touchpad/system monitor
+launchers, unassigned actions, and keys already taken by an earlier entry.
+
+`arbor msg global-shortcuts` and `set-global-shortcut` cover KDE entries
+too (`app-id` is the component, e.g. `net.mkiol.SpeechNote`); a change is
+sent to the running app as `yourShortcutsChanged`.
+
+Test on a private bus (registers an action like KGlobalAccel, presses the
+key, checks `globalShortcutPressed`; checks the signatures with busctl):
+`dbus-run-session -- cargo test --lib tests::kglobalaccel -- --ignored`
+(needs libwayland on `LD_LIBRARY_PATH` and a throwaway `XDG_RUNTIME_DIR`).
+
+## Wallpaper and Inhibit portals
+
+arbor's portal backend (`arbor.portal`, `org.freedesktop.impl.portal.desktop.arbor`)
+also implements:
+
+- **Wallpaper** (`SetWallpaperURI`): arbor draws no wallpaper, so it runs a
+  command with the image path appended. The image is first copied (or, for
+  http(s), downloaded with `curl`) to `$XDG_CACHE_HOME/arbor/wallpaper/`
+  under a new name, so it outlives the app's document-portal grant and path
+  watchers notice. `set-on` picks the command(s); `show-preview` is ignored
+  (no dialog). Response 2 when no command is configured or it fails.
+
+  ```kdl
+  portal {
+      wallpaper-command "hearth-ipc" "call" "wallpaper" "setImage"
+      // lockscreen-wallpaper-command "..."
+  }
+  ```
+
+- **Inhibit**: the `idle` flag stops arbor's idle notifications (what
+  swayidle listens to) until the request is closed or the portal goes away.
+  Logout/switch-user/suspend flags are accepted without effect;
+  `CreateMonitor` (session state) isn't implemented. The KDE and GNOME
+  backends forward to PowerDevil / gnome-session, which don't run here.
+
+Select them: `org.freedesktop.impl.portal.Wallpaper=arbor;` and
+`org.freedesktop.impl.portal.Inhibit=arbor;` (`arbor-portals.conf` and the
+NixOS module do).
+
+`org.freedesktop.ScreenSaver.Inhibit` (browsers, video players) also stops
+idle notifications; changes wake the compositor loop so that an
+un-inhibit reaches swayidle even when nothing else happens on screen
+(before, a paused video in an idle session kept the screen awake until the
+next input). Only `Inhibit`/`UnInhibit` are implemented (no `Lock`,
+`GetActive`, `SimulateUserActivity`). Test: `tests::kglobalaccel::idle_inhibit_over_dbus`
+(same private-bus command as above).
+
+## Desktop integration
+
+What KDE Plasma provided to apps, and what serves it under arbor + hearth.
+Portal backends assume the portal config `default=kde;gtk`, ScreenCast /
+Screenshot / RemoteDesktop `gnome` (arbor's Mutter-compatible D-Bus API),
+Secret `kwallet`, and GlobalShortcuts / Wallpaper / Inhibit `arbor`.
+
+| Portal | Backend under arbor | Works outside KWin? |
+| --- | --- | --- |
+| Access | kde | Yes (Qt dialog) |
+| Account | kde | Yes |
+| AppChooser | kde | Yes |
+| Background | kde | Partly: autostart requests work; the running-apps list comes from KWin's window management protocol, which arbor doesn't offer, so apps are never seen as running in the background |
+| Clipboard | gnome (with RemoteDesktop) | Only with arbor's Mutter RemoteDesktop/clipboard (in progress on the portals branch) |
+| DynamicLauncher | kde | Yes |
+| Email | kde | Yes |
+| FileChooser | kde | Yes (KDE file dialog; needs KIO, installed) |
+| GlobalShortcuts | **arbor** | Yes (above). The kde backend would also work now, through arbor's kglobalaccel |
+| Inhibit | **arbor** | Yes for idle (above). kde (PowerDevil) and gnome (gnome-session) don't run here |
+| InputCapture | gnome | Only with arbor's Mutter InputCapture (in progress on the portals branch) |
+| Notification | kde | Yes: KNotification → `org.freedesktop.Notifications` (swaync, started by hearth) |
+| OpenURI | kde | Yes |
+| Print | kde | Yes |
+| ProxyResolver | frontend only | Yes (no backend involved) |
+| RemoteDesktop | gnome | Only with arbor's Mutter RemoteDesktop (portals branch) |
+| ScreenCast | gnome | Yes (arbor's Mutter ScreenCast API) |
+| Screenshot | gnome | Yes (arbor's GNOME Shell Screenshot API) |
+| Secret | kwallet | Yes (ksecretd/kwalletd; `pam_kwallet_init` is started by the config) |
+| Settings | kde | Yes: reads kdeglobals (colour scheme, fonts, accent) |
+| Usb | none | No: neither kde nor gtk implements `impl.portal.Usb` |
+| Wallpaper | **arbor** | Yes with `portal { wallpaper-command }` (above). kde's needs plasmashell |
+
+| Service | Under arbor |
+| --- | --- |
+| `org.kde.kglobalaccel` (global shortcuts of KDE apps) | arbor (above) |
+| `org.kde.KWin` | Not provided. Matters for Spectacle (KWin ScreenShot2; hearth's Print overlay uses satty instead), KWin scripts, "show desktop"/window lists over KWin D-Bus, krunner's window runner. Window activation goes through xdg-activation, which arbor implements |
+| `org.freedesktop.ScreenSaver` | arbor: Inhibit/UnInhibit stop idle notifications (swayidle honours them through ext-idle-notify); `Lock`/`GetActive`/`SimulateUserActivity` not implemented. Locking goes through logind (`loginctl lock-session` → swayidle `lock` → hyprlock), which KDE Connect uses |
+| `org.freedesktop.Notifications` | swaync (hearth) |
+| Brightness / volume / media keys (PowerDevil, kmix, mediacontrol) | arbor config binds → hearth IPC, wpctl, playerctl. Apps calling PowerDevil's D-Bus get nothing |
+| xdg-activation / startup feedback | arbor implements xdg-activation-v1 (focus stealing prevention, `XDG_ACTIVATION_TOKEN` for spawned apps). There is no launch feedback (busy cursor, dock bounce) in arbor; that would be hearth's dock |
+| KDE Connect | kdeconnectd + `kdeconnect-indicator` (started by the config): notification sync, MPRIS, clipboard (wlr-data-control), lock (logind), screensaver inhibit, its global shortcuts (kglobalaccel) work; remote input needs the RemoteDesktop portal (portals branch) |
+| StatusNotifierItem (tray) | hearth is the watcher and host |
+| `com.canonical.AppMenu.Registrar` (global menu) | hearth (see Code map) |
+| kded modules (plasma-nm secret agent, bluedevil, printer and disk notifiers, keyboard layout OSD) | kded6 doesn't run. hearth has a Bluetooth agent; without plasma-nm's agent, Wi-Fi/VPN password prompts need another NetworkManager secret agent |
 
 ## Configuration
 
@@ -433,6 +580,7 @@ Top-level sections, mostly as in niri:
 | `layer-rule` | the same idea for layer-shell surfaces (panels, wallpapers) |
 | `glass` | arbor: liquid glass defaults (see Liquid glass) |
 | `binds` | key, mouse button, wheel and touchpad-scroll binds to actions (below) |
+| `portal` | arbor's portal backend: `wallpaper-command`, `lockscreen-wallpaper-command` (see Wallpaper and Inhibit portals) |
 | `animations`, `gestures` (hot corners, DnD workspace switch), `overview`, `cursor`, `environment`, `spawn-at-startup` / `spawn-sh-at-startup`, `workspace "name"`, `screenshot-path`, `hotkey-overlay`, `clipboard`, `prefer-no-csd`, `xwayland-satellite`, `debug` | as in niri |
 
 Actions (for `binds` and `arbor msg action ...`):
@@ -508,3 +656,10 @@ default-column-display }`, the `default-column-display` window rule,
   (`WindowOpenedOrChanged` fires when it changes). Qt only exports its menu
   if `com.canonical.AppMenu.Registrar` is on the session bus when the app
   starts, so the shell has to own that name (a stub is enough).
+- `src/global_shortcuts.rs`: the app shortcut store (portal and KDE);
+  `src/dbus/portal_global_shortcuts.rs`, `src/dbus/kglobalaccel.rs`: its
+  D-Bus faces; `src/kglobalaccel/`: KGlobalAccel semantics, Qt key codes
+  (`qt_keys.rs` is generated from Qt's tables), the one-off
+  `kglobalshortcutsrc` import, desktop-file launchers.
+- `src/dbus/portal_wallpaper.rs`, `src/dbus/portal_inhibit.rs`: the
+  Wallpaper and Inhibit portal backends.

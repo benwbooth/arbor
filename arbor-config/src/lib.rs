@@ -1814,6 +1814,10 @@ mod tests {
                 off: false,
                 path: "xwayland-satellite",
             },
+            portal: Portal {
+                wallpaper_command: None,
+                lockscreen_wallpaper_command: None,
+            },
             window_rules: [
                 WindowRule {
                     matches: [

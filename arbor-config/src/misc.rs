@@ -231,7 +231,11 @@ pub struct PortalPart {
 
 impl MergeWith<PortalPart> for Portal {
     fn merge_with(&mut self, part: &PortalPart) {
-        merge_clone_opt!((self, part), wallpaper_command, lockscreen_wallpaper_command);
+        merge_clone_opt!(
+            (self, part),
+            wallpaper_command,
+            lockscreen_wallpaper_command
+        );
     }
 }
 

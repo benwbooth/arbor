@@ -92,7 +92,10 @@ impl ForeignToplevelManagerState {
 
 impl ForeignToplevelManagerState {
     /// The toplevel surface a wlr foreign toplevel handle stands for.
-    pub fn surface_for_wlr_handle(&self, handle: &ZwlrForeignToplevelHandleV1) -> Option<WlSurface> {
+    pub fn surface_for_wlr_handle(
+        &self,
+        handle: &ZwlrForeignToplevelHandleV1,
+    ) -> Option<WlSurface> {
         self.toplevels
             .iter()
             .find(|(_, data)| data.wlr_management_instances.contains_key(handle))
