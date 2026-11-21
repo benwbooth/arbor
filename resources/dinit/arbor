@@ -1,7 +1,0 @@
-type               = process
-command            = arbor --session
-restart            = false
-working-dir        = $HOME
-ready-notification = pipevar:NOTIFY_FD
-logfile            = $HOME/.local/share/arbor/arbor.log
-depends-on:        dbus

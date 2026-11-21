@@ -1,6 +1,0 @@
-type           = internal
-restart        = false
-depends-on:    arbor
-waits-for.d:   $XDG_CONFIG_HOME/dinit.d/arbor.d/
-waits-for.d:   $HOME/.config/dinit.d/arbor.d/
-waits-for.d:   /etc/dinit.d/user/arbor.d/

@@ -2,7 +2,6 @@
 members = [
     "niri-config",
     "niri-ipc",
-    "niri-visual-tests",
 ]
 
 [workspace.package]
@@ -153,8 +152,6 @@ profile-with-tracy = ["profiling/profile-with-tracy", "tracy-client/default", "s
 profile-with-tracy-ondemand = ["profile-with-tracy", "tracy-client/ondemand", "tracy-client/manual-lifetime"]
 # Enables Tracy allocation profiling.
 profile-with-tracy-allocations = ["profile-with-tracy"]
-# Enables dinit integration (global environment).
-dinit = []
 
 [lints.clippy]
 new_without_default = "allow"
@@ -172,28 +169,3 @@ debug = false
 [profile.dev.package]
 insta.opt-level = 3
 similar.opt-level = 3
-
-[package.metadata.generate-rpm]
-version = "26.04"
-assets = [
-    { source = "target/release/arbor", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/arbor-session", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/arbor.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
-    { source = "resources/arbor-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
-    { source = "resources/arbor.service", dest = "/usr/lib/systemd/user/", mode = "644" },
-    { source = "resources/arbor-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
-]
-[package.metadata.generate-rpm.requires]
-alacritty = "*"
-fuzzel = "*"
-
-[package.metadata.deb]
-depends = "alacritty, fuzzel"
-assets = [
-    ["target/release/arbor", "usr/bin/", "755"],
-    ["resources/arbor-session", "usr/bin/", "755"],
-    ["resources/arbor.desktop", "/usr/share/wayland-sessions/", "644"],
-    ["resources/arbor-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
-    ["resources/arbor.service", "/usr/lib/systemd/user/", "644"],
-    ["resources/arbor-shutdown.target", "/usr/lib/systemd/user/", "644"],
-]

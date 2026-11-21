@@ -1,4 +1,3 @@
-# This flake file is community maintained
 {
   description = "arbor: a Wayland compositor with a docking layout under a zoomable camera.";
 
@@ -42,7 +41,6 @@
           withDbus ? true,
           withSystemd ? true,
           withScreencastSupport ? true,
-          withDinit ? false,
         }:
 
         rustPlatform.buildRustPackage {
@@ -54,7 +52,6 @@
             fileset = lib.fileset.unions [
               ./niri-config
               ./niri-ipc
-              ./niri-visual-tests
               ./resources
               ./src
               ./Cargo.toml
@@ -102,7 +99,6 @@
 
           buildFeatures =
             lib.optional withDbus "dbus"
-            ++ lib.optional withDinit "dinit"
             ++ lib.optional withScreencastSupport "xdp-gnome-screencast"
             ++ lib.optional withSystemd "systemd";
           buildNoDefaultFeatures = true;
@@ -217,12 +213,9 @@
             nativeBuildInputs = [
               pkgs.rustPlatform.bindgenHook
               pkgs.pkg-config
-              pkgs.wrapGAppsHook4 # For `niri-visual-tests`
             ];
 
-            buildInputs = arbor.buildInputs ++ [
-              pkgs.libadwaita # For `niri-visual-tests`
-            ];
+            buildInputs = arbor.buildInputs;
 
             env = {
               # WARN: Do not overwrite this variable in your shell!

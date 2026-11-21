@@ -294,9 +294,6 @@ fn import_environment() {
         )
         .unwrap();
     }
-    if cfg!(feature = "dinit") {
-        write!(init_system_import, "dinitctl setenv {variables};").unwrap();
-    }
 
     let rv = Command::new("/bin/sh")
         .args([
