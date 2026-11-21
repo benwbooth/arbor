@@ -269,5 +269,8 @@
       overlays.default = final: _: {
         arbor = final.callPackage arbor-package { };
       };
+
+      nixosModules.arbor = import ./nix/module.nix self;
+      nixosModules.default = self.nixosModules.arbor;
     };
 }
