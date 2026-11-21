@@ -582,7 +582,14 @@ it directly.)
   carrying arbor's keymap, relative and absolute pointers (one region per output, global
   logical coordinates), touchscreen and text (keysyms and UTF-8 are typed like
   `NotifyKeyboardKeysym`). Deskflow / Input Leap clients and other libportal users need
-  this. Clipboard sharing is not offered yet (`clipboard_enabled` is false).
+  this.
+- **Clipboard** (with RemoteDesktop): when the app calls `RequestClipboard` before `Start`,
+  the dialog asks for the clipboard too and `clipboard_enabled` comes back true. The session
+  hears about every clipboard change (`SelectionOwnerChanged`, mime types, whether it set it
+  itself), reads arbor's clipboard with `SelectionRead`, and takes it over with
+  `SetSelection`: arbor then offers its formats to windows and forwards each paste to the
+  session (`SelectionTransfer` → `SelectionWrite` hands over the paste target's fd). Works
+  with the clipboard persistence (a remote selection is never copied or kept).
 - **Remember**: when the app asks for persistence (`persist_mode`), the dialog has a
   "Remember, and don't ask again" checkbox (ticked by default). The choice goes back to the
   frontend as restore data (`("arbor", 1, {output | window-app-id + window-title, devices})`),
@@ -611,7 +618,7 @@ Code: `src/dbus/portal_casting.rs` (ScreenCast + RemoteDesktop, shared sessions)
 `portal_dialog` / `input_capture` unit tests; `tests::portal_input_capture` (a libei receiver
 through barrier, activation, captured motion and keys, release) and `tests::portal_remote_desktop` drive the D-Bus API on a private
 bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close,
-a libei sender typing through `ConnectToEIS`):
+a libei sender typing through `ConnectToEIS`, clipboard sharing both ways):
 
 ```sh
 ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_ -- --ignored --test-threads=1
@@ -621,7 +628,7 @@ ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_ -- --ignored --
 
 What KDE Plasma provided to apps, and what serves it under arbor + hearth.
 Portal backends assume the portal config `default=kde;gtk`, Secret
-`kwallet`, and ScreenCast / Screenshot / RemoteDesktop / InputCapture /
+`kwallet`, and ScreenCast / Screenshot / RemoteDesktop / Clipboard / InputCapture /
 GlobalShortcuts / Wallpaper / Inhibit `arbor` (see "Screen sharing, screenshots and remote
 control"). Nothing needs xdg-desktop-portal-gnome.
 
@@ -631,7 +638,7 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | Account | kde | Yes |
 | AppChooser | kde | Yes |
 | Background | kde | Partly: autostart requests work; the running-apps list comes from KWin's window management protocol, which arbor doesn't offer, so apps are never seen as running in the background |
-| Clipboard | none yet | Not yet: remote-desktop clipboard sharing is not implemented (RemoteDesktop reports `clipboard_enabled=false`) |
+| Clipboard | **arbor** | Yes: clipboard sharing for remote-desktop sessions (both directions) |
 | DynamicLauncher | kde | Yes |
 | Email | kde | Yes |
 | FileChooser | kde | Yes (KDE file dialog; needs KIO, installed) |

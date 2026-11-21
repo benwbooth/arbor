@@ -974,6 +974,177 @@ impl State {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Clipboard sharing for remote-desktop sessions.
+
+/// What the portal side is told about the clipboard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteClipboardEvent {
+    /// The clipboard changed hands; `is_owner` is whether `source` itself set it.
+    OwnerChanged {
+        source: RemoteSourceId,
+        mime_types: Vec<String>,
+        is_owner: bool,
+    },
+    /// A client pastes from `source`'s selection: the session should write `mime_type` data to
+    /// the fd it gets from `SelectionWrite(serial)`.
+    Transfer {
+        source: RemoteSourceId,
+        mime_type: String,
+        serial: u32,
+    },
+}
+
+#[derive(Debug, Default)]
+pub struct RemoteClipboard {
+    /// Sources with clipboard sharing enabled.
+    pub enabled: std::collections::HashSet<RemoteSourceId>,
+    transfers: HashMap<u32, (RemoteSourceId, std::os::fd::OwnedFd)>,
+    next_serial: u32,
+    /// Formats of the last selection a client set.
+    client_mime_types: Vec<String>,
+    pub events: Option<async_channel::Sender<RemoteClipboardEvent>>,
+}
+
+impl RemoteClipboard {
+    fn send(&self, event: RemoteClipboardEvent) {
+        if let Some(tx) = &self.events {
+            let _ = tx.try_send(event);
+        }
+    }
+}
+
+impl State {
+    /// The clipboard changed (`owner` is the remote source that set it, if any).
+    pub fn remote_clipboard_owner_changed(
+        &mut self,
+        mime_types: Vec<String>,
+        owner: Option<RemoteSourceId>,
+    ) {
+        if owner.is_none() {
+            self.arbor.remote_clipboard.client_mime_types = mime_types.clone();
+        }
+        let rc = &self.arbor.remote_clipboard;
+        for &source in &rc.enabled {
+            rc.send(RemoteClipboardEvent::OwnerChanged {
+                source,
+                mime_types: mime_types.clone(),
+                is_owner: owner == Some(source),
+            });
+        }
+    }
+
+    /// A client asks for the selection that remote `source` owns.
+    pub fn remote_clipboard_transfer(
+        &mut self,
+        source: RemoteSourceId,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+    ) {
+        let rc = &mut self.arbor.remote_clipboard;
+        if !rc.enabled.contains(&source) {
+            return;
+        }
+        rc.next_serial = rc.next_serial.wrapping_add(1);
+        let serial = rc.next_serial;
+        rc.transfers.insert(serial, (source, fd));
+        rc.send(RemoteClipboardEvent::Transfer {
+            source,
+            mime_type,
+            serial,
+        });
+    }
+
+    /// The fd for a pending transfer (`SelectionWrite`).
+    pub fn remote_clipboard_take_transfer(
+        &mut self,
+        source: RemoteSourceId,
+        serial: u32,
+    ) -> Option<std::os::fd::OwnedFd> {
+        let rc = &mut self.arbor.remote_clipboard;
+        match rc.transfers.get(&serial) {
+            Some((s, _)) if *s == source => rc.transfers.remove(&serial).map(|(_, fd)| fd),
+            _ => None,
+        }
+    }
+
+    /// Makes remote `source` the clipboard owner, offering `mime_types`.
+    pub fn remote_clipboard_set(&mut self, source: RemoteSourceId, mime_types: Vec<String>) {
+        let dh = self.arbor.display_handle.clone();
+        let seat = self.arbor.seat.clone();
+        smithay::wayland::selection::data_device::set_data_device_selection(
+            &dh,
+            &seat,
+            mime_types.clone(),
+            crate::clipboard_persist::SelectionData::remote(source, mime_types.clone()),
+        );
+        self.remote_clipboard_owner_changed(mime_types, Some(source));
+    }
+
+    /// Reads the current clipboard as `mime_type` into a pipe for remote `source`.
+    pub fn remote_clipboard_read(
+        &mut self,
+        source: RemoteSourceId,
+        mime_type: String,
+    ) -> Result<std::os::fd::OwnedFd, String> {
+        use smithay::wayland::selection::data_device::{
+            current_data_device_selection_userdata, request_data_device_client_selection,
+        };
+        if !self.arbor.remote_clipboard.enabled.contains(&source) {
+            return Err(String::from("clipboard not enabled"));
+        }
+        let (read, write) = smithay::reexports::rustix::pipe::pipe_with(
+            smithay::reexports::rustix::pipe::PipeFlags::CLOEXEC,
+        )
+        .map_err(|err| err.to_string())?;
+        let seat = self.arbor.seat.clone();
+        if let Some(data) = current_data_device_selection_userdata(&seat) {
+            if data.remote_owner().is_some() {
+                return Err(String::from("the selection belongs to a remote session"));
+            }
+            let bytes = data
+                .get(&mime_type)
+                .ok_or_else(|| String::from("format not offered"))?;
+            crate::clipboard_persist::write_selection(write, bytes);
+            return Ok(read);
+        }
+        request_data_device_client_selection(&seat, mime_type, write)
+            .map_err(|err| format!("{err:?}"))?;
+        Ok(read)
+    }
+
+    /// Enables or disables clipboard sharing for `source`; on enable, tells it the current
+    /// selection.
+    pub fn remote_clipboard_enable(&mut self, source: RemoteSourceId, enable: bool) {
+        if !enable {
+            self.arbor.remote_clipboard.enabled.remove(&source);
+            self.arbor
+                .remote_clipboard
+                .transfers
+                .retain(|_, (s, _)| *s != source);
+            return;
+        }
+        self.arbor.remote_clipboard.enabled.insert(source);
+        use smithay::wayland::selection::data_device::current_data_device_selection_userdata;
+        let seat = self.arbor.seat.clone();
+        let (mime_types, is_owner) = match current_data_device_selection_userdata(&seat) {
+            Some(data) => (data.mime_types(), data.remote_owner() == Some(source)),
+            None => (self.client_clipboard_mime_types(), false),
+        };
+        self.arbor
+            .remote_clipboard
+            .send(RemoteClipboardEvent::OwnerChanged {
+                source,
+                mime_types,
+                is_owner,
+            });
+    }
+
+    fn client_clipboard_mime_types(&self) -> Vec<String> {
+        self.arbor.remote_clipboard.client_mime_types.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

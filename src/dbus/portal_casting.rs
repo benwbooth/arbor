@@ -22,7 +22,7 @@ use zbus::{fdo, interface, ObjectServer};
 use crate::arbor::State;
 use crate::dbus::mutter_screen_cast::CursorMode;
 use crate::layout::LayoutElement as _;
-use crate::remote_input::{AbsTarget, RemoteInput, ScrollSource};
+use crate::remote_input::{AbsTarget, RemoteClipboardEvent, RemoteInput, ScrollSource};
 use crate::screencasting::{PortalCastTarget, PortalStreamMeta};
 use crate::ui::portal_dialog::{DialogAnswer, DialogRequest};
 use crate::utils::CastSessionId;
@@ -61,6 +61,7 @@ pub struct RestoreChoice {
     pub window_app_id: Option<String>,
     pub window_title: Option<String>,
     pub devices: u32,
+    pub clipboard: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -96,6 +97,8 @@ struct SessionData {
     granted_devices: u32,
     cast_session: Option<CastSessionId>,
     streams: Vec<StreamEntry>,
+    clipboard_requested: bool,
+    clipboard_enabled: bool,
 }
 
 #[derive(Default)]
@@ -134,6 +137,7 @@ fn encode_restore(choice: &RestoreChoice) -> OwnedValue {
         dict.insert(String::from("window-title"), Value::from(t.clone()));
     }
     dict.insert(String::from("devices"), Value::from(choice.devices));
+    dict.insert(String::from("clipboard"), Value::from(choice.clipboard));
     let structure = StructureBuilder::new()
         .add_field(String::from(RESTORE_VENDOR))
         .add_field(RESTORE_VERSION)
@@ -173,6 +177,10 @@ fn decode_restore(value: &Value<'_>) -> Option<RestoreChoice> {
             .get("devices")
             .and_then(|v| u32::try_from(v).ok())
             .unwrap_or(0),
+        clipboard: dict
+            .get("clipboard")
+            .and_then(|v| bool::try_from(v).ok())
+            .unwrap_or(false),
     })
 }
 
@@ -373,6 +381,8 @@ impl Backend {
                     granted_devices: 0,
                     cast_session: None,
                     streams: Vec::new(),
+                    clipboard_requested: false,
+                    clipboard_enabled: false,
                 },
             );
         }
@@ -399,13 +409,14 @@ impl Backend {
                 state.arbor.stop_cast(cast);
             }
             state.close_eis(id);
+            state.remote_clipboard_enable(id, false);
             state.remote_input_source_gone(id);
         });
         Some(data)
     }
 
     async fn start(&self, handle: &str) -> fdo::Result<(u32, Results)> {
-        let (app_id, remote, sources, devices) = {
+        let (app_id, remote, sources, devices, clipboard) = {
             let shared = self.shared.lock().unwrap();
             let Some(data) = shared.sessions.get(handle) else {
                 return Err(fdo::Error::InvalidArgs(String::from("unknown session")));
@@ -418,6 +429,7 @@ impl Backend {
                 data.remote,
                 data.sources.clone(),
                 data.devices.clone(),
+                data.remote && data.clipboard_requested,
             )
         };
 
@@ -517,8 +529,9 @@ impl Backend {
                 ),
                 (true, true) => (
                     format!(
-                        "{name} wants to see your screen and use your {}",
-                        devices_text(wanted_devices)
+                        "{name} wants to see your screen and use your {}{}",
+                        devices_text(wanted_devices),
+                        if clipboard { " and clipboard" } else { "" }
                     ),
                     format!(
                         "{name} will see what you pick and can type and click as if it were \
@@ -526,7 +539,11 @@ impl Backend {
                     ),
                 ),
                 (false, _) => (
-                    format!("{name} wants to use your {}", devices_text(wanted_devices)),
+                    format!(
+                        "{name} wants to use your {}{}",
+                        devices_text(wanted_devices),
+                        if clipboard { " and clipboard" } else { "" }
+                    ),
                     format!(
                         "{name} will be able to type and click as if it were you, until the \
                          session ends."
@@ -637,10 +654,14 @@ impl Backend {
         }
         if remote {
             results.insert(String::from("devices"), OwnedValue::from(wanted_devices));
-            results.insert(String::from("clipboard_enabled"), OwnedValue::from(false));
+            results.insert(
+                String::from("clipboard_enabled"),
+                OwnedValue::from(clipboard),
+            );
         }
         if remember && persist_mode > 0 {
             target_restore.devices = wanted_devices;
+            target_restore.clipboard = clipboard;
             results.insert(
                 String::from("restore_data"),
                 encode_restore(&target_restore),
@@ -659,6 +680,11 @@ impl Backend {
         };
         data.started = true;
         data.granted_devices = wanted_devices;
+        data.clipboard_enabled = clipboard;
+        if clipboard {
+            let id = data.id;
+            let _ = self.run(move |state| state.remote_clipboard_enable(id, true));
+        }
         data.cast_session = cast_session;
         data.streams = streams
             .into_iter()
@@ -1095,6 +1121,121 @@ impl RemoteDesktopPortal {
     }
 }
 
+pub struct ClipboardPortal(Backend);
+
+impl Backend {
+    /// The input source id of a started remote-desktop session with the clipboard enabled.
+    fn clipboard_source(&self, handle: &str) -> fdo::Result<u64> {
+        let shared = self.shared.lock().unwrap();
+        let data = shared
+            .sessions
+            .get(handle)
+            .ok_or_else(|| fdo::Error::InvalidArgs(String::from("unknown session")))?;
+        if !data.clipboard_enabled {
+            return Err(fdo::Error::AccessDenied(String::from(
+                "clipboard not enabled",
+            )));
+        }
+        Ok(data.id)
+    }
+}
+
+#[interface(name = "org.freedesktop.impl.portal.Clipboard")]
+impl ClipboardPortal {
+    fn request_clipboard(
+        &self,
+        session_handle: OwnedObjectPath,
+        _options: HashMap<String, OwnedValue>,
+    ) -> fdo::Result<()> {
+        let mut shared = self.0.shared.lock().unwrap();
+        let data = shared
+            .sessions
+            .get_mut(session_handle.as_str())
+            .ok_or_else(|| fdo::Error::InvalidArgs(String::from("unknown session")))?;
+        if data.started {
+            return Err(fdo::Error::Failed(String::from("session already started")));
+        }
+        data.clipboard_requested = true;
+        Ok(())
+    }
+
+    fn set_selection(
+        &self,
+        session_handle: OwnedObjectPath,
+        options: HashMap<String, OwnedValue>,
+    ) -> fdo::Result<()> {
+        let id = self.0.clipboard_source(session_handle.as_str())?;
+        let mime_types: Vec<String> = options
+            .get("mime_types")
+            .and_then(|v| Vec::<String>::try_from(v.try_clone().ok()?).ok())
+            .unwrap_or_default();
+        self.0
+            .run(move |state| state.remote_clipboard_set(id, mime_types))
+    }
+
+    async fn selection_write(
+        &self,
+        session_handle: OwnedObjectPath,
+        serial: u32,
+    ) -> fdo::Result<zbus::zvariant::OwnedFd> {
+        let id = self.0.clipboard_source(session_handle.as_str())?;
+        let fd = self
+            .0
+            .ask(move |state, tx| {
+                let _ = tx.try_send(state.remote_clipboard_take_transfer(id, serial));
+            })
+            .await?
+            .ok_or_else(|| fdo::Error::InvalidArgs(String::from("unknown transfer")))?;
+        Ok(zbus::zvariant::OwnedFd::from(fd))
+    }
+
+    fn selection_write_done(
+        &self,
+        session_handle: OwnedObjectPath,
+        _serial: u32,
+        _success: bool,
+    ) -> fdo::Result<()> {
+        // The paste target's fd was handed over in SelectionWrite; closing it ends the paste.
+        self.0.clipboard_source(session_handle.as_str()).map(|_| ())
+    }
+
+    async fn selection_read(
+        &self,
+        session_handle: OwnedObjectPath,
+        mime_type: String,
+    ) -> fdo::Result<zbus::zvariant::OwnedFd> {
+        let id = self.0.clipboard_source(session_handle.as_str())?;
+        let fd = self
+            .0
+            .ask(move |state, tx| {
+                let _ = tx.try_send(state.remote_clipboard_read(id, mime_type));
+            })
+            .await?
+            .map_err(fdo::Error::Failed)?;
+        Ok(zbus::zvariant::OwnedFd::from(fd))
+    }
+
+    #[zbus(signal)]
+    async fn selection_owner_changed(
+        ctxt: &SignalEmitter<'_>,
+        session_handle: OwnedObjectPath,
+        options: HashMap<String, OwnedValue>,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn selection_transfer(
+        ctxt: &SignalEmitter<'_>,
+        session_handle: OwnedObjectPath,
+        mime_type: String,
+        serial: u32,
+    ) -> zbus::Result<()>;
+
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        1
+    }
+}
+
 #[interface(name = "org.freedesktop.impl.portal.Session")]
 impl CastSession {
     async fn close(
@@ -1124,6 +1265,7 @@ pub fn register(
     conn: &zbus::blocking::Connection,
     event_loop: &calloop::LoopHandle<'static, State>,
     casting: &mut crate::screencasting::Screencasting,
+    remote_clipboard: &mut crate::remote_input::RemoteClipboard,
 ) -> anyhow::Result<()> {
     let (to_arbor, from_dbus) = calloop::channel::channel::<Job>();
     event_loop
@@ -1175,6 +1317,59 @@ pub fn register(
         .spawn(future, "close stopped portal casts")
         .detach();
 
+    // Clipboard events from arbor become signals on the session's behalf.
+    let (clip_tx, clip_rx) = async_channel::unbounded::<RemoteClipboardEvent>();
+    remote_clipboard.events = Some(clip_tx);
+    let async_conn = conn.inner().clone();
+    let backend_ = backend.clone();
+    let future = async move {
+        while let Ok(event) = clip_rx.recv().await {
+            let source = match &event {
+                RemoteClipboardEvent::OwnerChanged { source, .. }
+                | RemoteClipboardEvent::Transfer { source, .. } => *source,
+            };
+            let handle = {
+                let shared = backend_.shared.lock().unwrap();
+                shared
+                    .sessions
+                    .iter()
+                    .find(|(_, d)| d.id == source)
+                    .map(|(h, _)| h.clone())
+            };
+            let Some(Ok(path)) = handle.map(OwnedObjectPath::try_from) else {
+                continue;
+            };
+            let Ok(emitter) = SignalEmitter::new(&async_conn, PATH) else {
+                continue;
+            };
+            let res = match event {
+                RemoteClipboardEvent::OwnerChanged {
+                    mime_types,
+                    is_owner,
+                    ..
+                } => {
+                    let options = HashMap::from([
+                        (String::from("mime_types"), owned(Value::from(mime_types))),
+                        (String::from("session_is_owner"), OwnedValue::from(is_owner)),
+                    ]);
+                    ClipboardPortal::selection_owner_changed(&emitter, path, options).await
+                }
+                RemoteClipboardEvent::Transfer {
+                    mime_type, serial, ..
+                } => ClipboardPortal::selection_transfer(&emitter, path, mime_type, serial).await,
+            };
+            if let Err(err) = res {
+                warn!("error emitting a Clipboard signal: {err:?}");
+            }
+        }
+    };
+    conn.inner()
+        .executor()
+        .spawn(future, "emit Clipboard signals")
+        .detach();
+
+    conn.object_server()
+        .at(PATH, ClipboardPortal(backend.clone()))?;
     conn.object_server()
         .at(PATH, ScreenCastPortal(backend.clone()))?;
     conn.object_server()
@@ -1193,6 +1388,7 @@ mod tests {
             window_app_id: None,
             window_title: None,
             devices: DEVICE_KEYBOARD,
+            clipboard: true,
         };
         let value = encode_restore(&choice);
         assert_eq!(value.value_signature().to_string(), "(suv)");
@@ -1203,6 +1399,7 @@ mod tests {
             window_app_id: Some(String::from("org.example.App")),
             window_title: Some(String::from("Doc — Example")),
             devices: 0,
+            clipboard: false,
         };
         assert_eq!(decode_restore(&encode_restore(&window)), Some(window));
     }

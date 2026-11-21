@@ -37,6 +37,11 @@ fn run_until(server: &mut Server, mut done: impl FnMut(&mut Server) -> bool) {
 #[derive(Debug)]
 enum Step {
     AnswerDialog(Keysym),
+    /// A client pastes the remote session's selection (compositor side of the paste).
+    Paste(String),
+    ExpectPasted(String),
+    /// arbor's own clipboard holds this text.
+    SetLocalSelection(String),
     ExpectPressed(Vec<u32>),
     ExpectKeymapChanged(bool),
     Done,
@@ -55,6 +60,15 @@ fn start_session(
     conn: &zbus::blocking::Connection,
     n: u32,
     restore: Option<OwnedValue>,
+) -> (ObjectPath<'static>, u32, Results) {
+    start_session_with(conn, n, restore, false)
+}
+
+fn start_session_with(
+    conn: &zbus::blocking::Connection,
+    n: u32,
+    restore: Option<OwnedValue>,
+    clipboard: bool,
 ) -> (ObjectPath<'static>, u32, Results) {
     let session =
         ObjectPath::try_from(format!("/org/freedesktop/portal/desktop/session/1_1/rd{n}")).unwrap();
@@ -91,6 +105,16 @@ fn start_session(
     .unwrap();
     let (response, _): (u32, Results) = reply.body().deserialize().unwrap();
     assert_eq!(response, 0);
+
+    if clipboard {
+        call(
+            conn,
+            "org.freedesktop.impl.portal.Clipboard",
+            "RequestClipboard",
+            &(&session, HashMap::<&str, Value>::new()),
+        )
+        .unwrap();
+    }
 
     let reply = call(
         conn,
@@ -321,6 +345,67 @@ fn portal_remote_desktop_over_dbus() {
             step(Step::ExpectPressed(if down { vec![KEY_A] } else { vec![] }))
         });
 
+        // Clipboard sharing.
+        const CLIP: &str = "org.freedesktop.impl.portal.Clipboard";
+        let clip_proxy = zbus::blocking::Proxy::new(&conn, DEST, PATH, CLIP).unwrap();
+        let mut owner_changed = clip_proxy.receive_signal("SelectionOwnerChanged").unwrap();
+        let mut transfer = clip_proxy.receive_signal("SelectionTransfer").unwrap();
+        let dialog = std::thread::spawn({
+            let steps_tx = steps_tx.clone();
+            move || steps_tx.send(Step::AnswerDialog(Keysym::Return)).unwrap()
+        });
+        let (session, response, results) = start_session_with(&conn, 4, None, true);
+        dialog.join().unwrap();
+        ack_rx.recv().unwrap();
+        assert_eq!(response, 0);
+        let enabled: bool = (&results["clipboard_enabled"]).try_into().unwrap();
+        assert!(enabled);
+        // The current selection is announced on start.
+        let msg = owner_changed.next().unwrap();
+        let (_, _options): (ObjectPath, Results) = msg.body().deserialize().unwrap();
+
+        // The remote side owns the clipboard...
+        let mut options: HashMap<&str, Value> = HashMap::new();
+        options.insert("mime_types", Value::from(vec!["text/plain;charset=utf-8"]));
+        call(&conn, CLIP, "SetSelection", &(&session, options)).unwrap();
+        let msg = owner_changed.next().unwrap();
+        let (_, options): (ObjectPath, Results) = msg.body().deserialize().unwrap();
+        let is_owner: bool = (&options["session_is_owner"]).try_into().unwrap();
+        assert!(is_owner);
+
+        // ...and a local paste is served by it.
+        steps_tx
+            .send(Step::Paste(String::from("text/plain;charset=utf-8")))
+            .unwrap();
+        ack_rx.recv().unwrap();
+        let msg = transfer.next().unwrap();
+        let (_, mime, serial): (ObjectPath, String, u32) = msg.body().deserialize().unwrap();
+        assert_eq!(mime, "text/plain;charset=utf-8");
+        let reply = call(&conn, CLIP, "SelectionWrite", &(&session, serial)).unwrap();
+        let fd: zbus::zvariant::OwnedFd = reply.body().deserialize().unwrap();
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::File::from(std::os::fd::OwnedFd::from(fd));
+            file.write_all(b"from the remote").unwrap();
+        }
+        // The reply message holds a copy of the fd; the paste ends only when every copy is closed.
+        drop(reply);
+        call(&conn, CLIP, "SelectionWriteDone", &(&session, serial, true)).unwrap();
+        step(Step::ExpectPasted(String::from("from the remote")));
+
+        // Reading arbor's clipboard.
+        step(Step::SetLocalSelection(String::from("from arbor")));
+        let reply = call(&conn, CLIP, "SelectionRead", &(&session, "text/plain")).unwrap();
+        let fd: zbus::zvariant::OwnedFd = reply.body().deserialize().unwrap();
+        let mut text = String::new();
+        {
+            use std::io::Read as _;
+            std::fs::File::from(std::os::fd::OwnedFd::from(fd))
+                .read_to_string(&mut text)
+                .unwrap();
+        }
+        assert_eq!(text, "from arbor");
+
         // Third session: Escape cancels.
         let dialog = std::thread::spawn({
             let steps_tx = steps_tx.clone();
@@ -343,6 +428,7 @@ fn portal_remote_desktop_over_dbus() {
         })
     };
     let original_keymap = keymap_text(&mut server);
+    let mut pasted: Option<std::os::fd::OwnedFd> = None;
 
     loop {
         let step = loop {
@@ -382,6 +468,41 @@ fn portal_remote_desktop_over_dbus() {
                 run_until(&mut server, |s| {
                     (keymap_text(s) != original_keymap) == changed
                 });
+            }
+            Step::Paste(mime) => {
+                use smithay::wayland::selection::data_device::current_data_device_selection_userdata;
+                use smithay::wayland::selection::{SelectionHandler as _, SelectionTarget};
+                let seat = server.state.arbor.seat.clone();
+                let data = current_data_device_selection_userdata(&seat)
+                    .expect("remote selection")
+                    .clone();
+                let (read, write) = smithay::reexports::rustix::pipe::pipe().unwrap();
+                server
+                    .state
+                    .send_selection(SelectionTarget::Clipboard, mime, write, seat, &data);
+                pasted = Some(read);
+            }
+            Step::ExpectPasted(text) => {
+                use std::io::Read as _;
+                let mut got = String::new();
+                std::fs::File::from(pasted.take().unwrap())
+                    .read_to_string(&mut got)
+                    .unwrap();
+                assert_eq!(got, text);
+            }
+            Step::SetLocalSelection(text) => {
+                let dh = server.state.arbor.display_handle.clone();
+                let seat = server.state.arbor.seat.clone();
+                let data = crate::clipboard_persist::SelectionData::single(
+                    "text/plain",
+                    std::sync::Arc::from(text.into_bytes()),
+                );
+                smithay::wayland::selection::data_device::set_data_device_selection(
+                    &dh,
+                    &seat,
+                    data.mime_types(),
+                    data,
+                );
             }
             Step::Done => break,
         }

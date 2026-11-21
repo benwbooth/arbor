@@ -346,6 +346,7 @@ pub struct Arbor {
     /// Global shortcuts that apps registered through the GlobalShortcuts portal.
     pub global_shortcuts: crate::global_shortcuts::GlobalShortcuts,
     pub remote_input: crate::remote_input::RemoteInputState,
+    pub remote_clipboard: crate::remote_input::RemoteClipboard,
     #[cfg(feature = "dbus")]
     pub eis_connections: crate::eis_server::EisConnections,
     #[cfg(feature = "dbus")]
@@ -2656,6 +2657,7 @@ impl Arbor {
             suppressed_keys: HashSet::new(),
             global_shortcuts: Default::default(),
             remote_input: Default::default(),
+            remote_clipboard: Default::default(),
             #[cfg(feature = "dbus")]
             eis_connections: Default::default(),
             #[cfg(feature = "dbus")]

@@ -289,7 +289,11 @@ impl SelectionHandler for State {
         source: Option<SelectionSource>,
         _seat: Seat<Self>,
     ) {
-        self.clipboard_persist_on_new_selection(ty, source.map(|source| source.mime_types()));
+        let mime_types = source.map(|source| source.mime_types());
+        if ty == SelectionTarget::Clipboard {
+            self.remote_clipboard_owner_changed(mime_types.clone().unwrap_or_default(), None);
+        }
+        self.clipboard_persist_on_new_selection(ty, mime_types);
     }
 
     fn send_selection(
@@ -302,6 +306,10 @@ impl SelectionHandler for State {
     ) {
         let _span = tracy_client::span!("send_selection");
 
+        if let Some(source) = user_data.remote_owner() {
+            self.remote_clipboard_transfer(source, mime_type, fd);
+            return;
+        }
         if let Some(data) = user_data.get(&mime_type) {
             write_selection(fd, data);
         }

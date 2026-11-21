@@ -160,7 +160,12 @@ impl DBusServers {
                 }
                 #[cfg(feature = "xdp-gnome-screencast")]
                 if let Err(err) =
-                    portal_casting::register(conn, &arbor.event_loop, &mut arbor.casting)
+                    portal_casting::register(
+                        conn,
+                        &arbor.event_loop,
+                        &mut arbor.casting,
+                        &mut arbor.remote_clipboard,
+                    )
                 {
                     warn!("error starting the ScreenCast/RemoteDesktop portal: {err:?}");
                 }

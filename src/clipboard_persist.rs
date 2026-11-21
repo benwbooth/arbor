@@ -44,13 +44,28 @@ const CLIPBOARD_DELAY: Duration = Duration::from_millis(20);
 /// How often to check whether the owner of a kept selection is gone.
 const PROBE_INTERVAL: Duration = Duration::from_millis(150);
 
-/// Data of a compositor-owned selection: the bytes for each offered format.
+/// Data of a compositor-owned selection: the bytes for each offered format, or (for a selection
+/// set by a remote-desktop session) the formats it offers, fetched from it on demand.
 #[derive(Debug, Clone)]
-pub struct SelectionData(Arc<Vec<(String, Arc<[u8]>)>>);
+pub struct SelectionData(Arc<Vec<(String, Arc<[u8]>)>>, Option<u64>);
 
 impl SelectionData {
     pub fn new(entries: Vec<(String, Arc<[u8]>)>) -> Self {
-        Self(Arc::new(entries))
+        Self(Arc::new(entries), None)
+    }
+
+    /// A selection owned by remote input source `source`, offering `mime_types`.
+    pub fn remote(source: u64, mime_types: Vec<String>) -> Self {
+        let empty: Arc<[u8]> = Arc::from(Vec::new());
+        Self(
+            Arc::new(mime_types.into_iter().map(|m| (m, empty.clone())).collect()),
+            Some(source),
+        )
+    }
+
+    /// The remote input source that owns this selection, if any.
+    pub fn remote_owner(&self) -> Option<u64> {
+        self.1
     }
 
     pub fn single(mime_type: &str, data: Arc<[u8]>) -> Self {
