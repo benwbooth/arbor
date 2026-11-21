@@ -1,10 +1,10 @@
-//! Types for communicating with niri via IPC.
+//! Types for communicating with arbor via IPC.
 //!
-//! After connecting to the niri socket, you can send [`Request`]s. Niri will process them one by
+//! After connecting to the arbor socket, you can send [`Request`]s. arbor will process them one by
 //! one, in order, and to each request it will respond with a single [`Reply`], which is a `Result`
 //! wrapping a [`Response`].
 //!
-//! If you send a [`Request::EventStream`], niri will *stop* reading subsequent [`Request`]s, and
+//! If you send a [`Request::EventStream`], arbor will *stop* reading subsequent [`Request`]s, and
 //! will start continuously writing compositor [`Event`]s to the socket. If you'd like to read an
 //! event stream and write more requests at the same time, you need to use two IPC sockets.
 //!
@@ -23,18 +23,19 @@
 //! it is a fairly simple helper, so if you need async, or if you're using a different language,
 //! you are encouraged to communicate with the socket manually.
 //!
-//! 1. Read the socket filesystem path from [`socket::SOCKET_PATH_ENV`] (`$NIRI_SOCKET`).
+//! 1. Read the socket filesystem path from [`socket::SOCKET_PATH_ENV`] (`$ARBOR_SOCKET`; arbor
+//!    also sets `$NIRI_SOCKET` to the same path for niri-compatible tools).
 //! 2. Connect to the socket and write a JSON-formatted [`Request`] on a single line. You can follow
 //!    up with a line break and a flush, or just flush and shutdown the write end of the socket.
-//! 3. Niri will respond with a single line JSON-formatted [`Reply`].
+//! 3. arbor will respond with a single line JSON-formatted [`Reply`].
 //! 4. You can keep writing [`Request`]s, each on a single line, and read [`Reply`]s, also each on a
 //!    separate line.
-//! 5. After you request an event stream, niri will keep responding with JSON-formatted [`Event`]s,
+//! 5. After you request an event stream, arbor will keep responding with JSON-formatted [`Event`]s,
 //!    on a single line each.
 //!
 //! ## Backwards compatibility
 //!
-//! This crate follows the niri version. It is **not** API-stable in terms of the Rust semver. In
+//! This crate follows the arbor version. It is **not** API-stable in terms of the Rust semver. In
 //! particular, expect new struct fields and enum variants to be added in patch version bumps.
 //!
 //! Use an exact version requirement to avoid breaking changes:
@@ -49,7 +50,7 @@
 //! This crate defines the following features:
 //! - `json-schema`: derives the [schemars](https://lib.rs/crates/schemars) `JsonSchema` trait for
 //!   the types.
-//! - `clap`: derives the clap CLI parsing traits for some types. Used internally by niri itself.
+//! - `clap`: derives the clap CLI parsing traits for some types. Used internally by arbor itself.
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
@@ -61,11 +62,11 @@ use serde::{Deserialize, Serialize};
 pub mod socket;
 pub mod state;
 
-/// Request from client to niri.
+/// Request from client to arbor.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub enum Request {
-    /// Request the version string for the running niri instance.
+    /// Request the version string for the running arbor instance.
     Version,
     /// Request information about connected outputs.
     Outputs,
@@ -121,7 +122,7 @@ pub enum Request {
     Casts,
 }
 
-/// Reply from niri to client.
+/// Reply from arbor to client.
 ///
 /// Every request gets one reply.
 ///
@@ -131,13 +132,13 @@ pub enum Request {
 /// * Otherwise, it will be `Reply::Ok(response)` with one of the other [`Response`] variants.
 pub type Reply = Result<Response, String>;
 
-/// Successful response from niri to client.
+/// Successful response from arbor to client.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub enum Response {
     /// A request that does not need a response was handled successfully.
     Handled,
-    /// The version string for the running niri instance.
+    /// The version string for the running arbor instance.
     Version(String),
     /// Information about connected outputs.
     ///
@@ -183,7 +184,7 @@ pub struct PickedColor {
     pub rgb: [f64; 3],
 }
 
-/// Actions that niri can perform.
+/// Actions that arbor can perform.
 // Variants in this enum should match the spelling of the ones in niri-config. Most, but not all,
 // variants from niri-config should be present here.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -192,7 +193,7 @@ pub struct PickedColor {
 #[cfg_attr(feature = "clap", command(subcommand_help_heading = "Actions"))]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub enum Action {
-    /// Exit niri.
+    /// Exit arbor.
     Quit {
         /// Skip the "Press Enter to confirm" prompt.
         #[cfg_attr(feature = "clap", arg(short, long))]
@@ -935,7 +936,7 @@ pub enum Action {
     /// Reload the config file.
     ///
     /// Can be useful for scripts changing the config file, to avoid waiting the small duration for
-    /// niri's config file watcher to notice the changes.
+    /// arbor's config file watcher to notice the changes.
     LoadConfigFile {
         /// Path of a new config file to load.
         ///
@@ -1050,7 +1051,7 @@ pub enum ColumnDisplay {
     Tabbed,
 }
 
-/// Output actions that niri can perform.
+/// Output actions that arbor can perform.
 // Variants in this enum should match the spelling of the ones in niri-config. Most thigs from
 // niri-config should be present here.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1067,7 +1068,7 @@ pub enum OutputAction {
     Mode {
         /// Mode to set, or "auto" for automatic selection.
         ///
-        /// Run `niri msg outputs` to see the available modes.
+        /// Run `arbor msg outputs` to see the available modes.
         #[cfg_attr(feature = "clap", arg())]
         mode: ModeToSet,
     },
@@ -1146,7 +1147,7 @@ pub enum OutputAction {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub enum ModeToSet {
-    /// Niri will pick the mode automatically.
+    /// arbor will pick the mode automatically.
     Automatic,
     /// Specific mode.
     Specific(ConfiguredMode),
@@ -1188,7 +1189,7 @@ pub enum VSyncPolarity {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub enum ScaleToSet {
-    /// Niri will pick the scale automatically.
+    /// arbor will pick the scale automatically.
     Automatic,
     /// Specific scale.
     Specific(f64),
@@ -1411,7 +1412,7 @@ pub struct Timestamp {
 /// Position- and size-related properties of a [`Window`].
 ///
 /// Optional properties will be unset for some windows, do not rely on them being present. Whether
-/// some optional properties are present or absent for certain window types may change across niri
+/// some optional properties are present or absent for certain window types may change across arbor
 /// releases.
 ///
 /// All sizes and positions are in *logical pixels* unless stated otherwise. Logical sizes may be
@@ -1437,14 +1438,14 @@ pub struct WindowLayout {
     pub tile_size: (f64, f64),
     /// Size of the window's visual geometry itself.
     ///
-    /// Does not include niri decorations like borders.
+    /// Does not include arbor decorations like borders.
     ///
     /// Currently, Wayland toplevel windows can only be integer-sized in logical pixels, even
     /// though it doesn't necessarily align to physical pixels.
     pub window_size: (i32, i32),
     /// Tile position within the current view of the workspace.
     ///
-    /// This is the same "workspace view" as in gradients' `relative-to` in the niri config.
+    /// This is the same "workspace view" as in gradients' `relative-to` in the arbor config.
     pub tile_pos_in_workspace_view: Option<(f64, f64)>,
     /// Location of the window's visual geometry within its tile.
     ///
@@ -1478,7 +1479,7 @@ pub struct Workspace {
     pub id: u64,
     /// Index of the workspace on its monitor.
     ///
-    /// This is the same index you can use for requests like `niri msg action focus-workspace`.
+    /// This is the same index you can use for requests like `arbor msg action focus-workspace`.
     ///
     /// This index *will change* as you move and re-order workspace. It is merely the workspace's
     /// current position on its monitor. Workspaces on different monitors can have the same index.

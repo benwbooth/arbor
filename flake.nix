@@ -1,6 +1,6 @@
 # This flake file is community maintained
 {
-  description = "Niri: A scrollable-tiling Wayland compositor.";
+  description = "arbor: a Wayland compositor with a docking layout under a zoomable camera.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -21,7 +21,7 @@
     }:
     let
       revision = self.shortRev or self.dirtyShortRev or "unknown";
-      niri-package =
+      arbor-package =
         {
           lib,
           cairo,
@@ -46,7 +46,7 @@
         }:
 
         rustPlatform.buildRustPackage {
-          pname = "niri";
+          pname = "arbor";
           version = revision;
 
           src = lib.fileset.toSource {
@@ -63,9 +63,9 @@
           };
 
           postPatch = ''
-            patchShebangs resources/niri-session
-            substituteInPlace resources/niri.service \
-              --replace-fail 'ExecStart=niri' "ExecStart=$out/bin/niri"
+            patchShebangs resources/arbor-session
+            substituteInPlace resources/arbor.service \
+              --replace-fail 'ExecStart=arbor' "ExecStart=$out/bin/arbor"
           '';
 
           cargoLock = {
@@ -124,22 +124,22 @@
 
           postInstall =
             ''
-              installShellCompletion --cmd niri \
-                --bash <($out/bin/niri completions bash) \
-                --fish <($out/bin/niri completions fish) \
-                --nushell <($out/bin/niri completions nushell) \
-                --zsh <($out/bin/niri completions zsh)
+              installShellCompletion --cmd arbor \
+                --bash <($out/bin/arbor completions bash) \
+                --fish <($out/bin/arbor completions fish) \
+                --nushell <($out/bin/arbor completions nushell) \
+                --zsh <($out/bin/arbor completions zsh)
 
-              install -Dm644 resources/niri.desktop -t $out/share/wayland-sessions
-              install -Dm644 resources/niri-portals.conf -t $out/share/xdg-desktop-portal
+              install -Dm644 resources/arbor.desktop -t $out/share/wayland-sessions
+              install -Dm644 resources/arbor-portals.conf -t $out/share/xdg-desktop-portal
             ''
             + lib.optionalString withSystemd ''
-              install -Dm755 resources/niri-session $out/bin/niri-session
+              install -Dm755 resources/arbor-session $out/bin/arbor-session
               # lib/systemd/user is where NixOS's systemd.packages looks (a
               # unit only under share/ left NixOS's drop-in as the whole
-              # niri.service, with no ExecStart, and the session died at
+              # unit, with no ExecStart, and the session died at
               # login). nixpkgs' fixup moves it to share/ and links lib/ to it.
-              install -Dm644 resources/niri{.service,-shutdown.target} -t $out/lib/systemd/user
+              install -Dm644 resources/arbor{.service,-shutdown.target} -t $out/lib/systemd/user
             '';
 
           env = {
@@ -157,14 +157,14 @@
           };
 
           passthru = {
-            providedSessions = [ "niri" ];
+            providedSessions = [ "arbor" ];
           };
 
           meta = {
-            description = "Scrollable-tiling Wayland compositor";
-            homepage = "https://github.com/niri-wm/niri";
+            description = "Wayland compositor with a docking layout under a zoomable camera";
+            homepage = "https://github.com/benwbooth/arbor";
             license = lib.licenses.gpl3Only;
-            mainProgram = "niri";
+            mainProgram = "arbor";
             platforms = lib.platforms.linux;
           };
         };
@@ -179,7 +179,7 @@
     {
       checks = forAllSystems (system: {
         # We use the debug build here to save a bit of time
-        inherit (self.packages.${system}) niri-debug;
+        inherit (self.packages.${system}) arbor-debug;
       });
 
       devShells = forAllSystems (
@@ -187,7 +187,7 @@
         let
           pkgs = nixpkgsFor.${system};
           rust-bin = rust-overlay.lib.mkRustBin { } pkgs;
-          inherit (self.packages.${system}) niri;
+          inherit (self.packages.${system}) arbor;
         in
         {
           default = pkgs.mkShell {
@@ -220,7 +220,7 @@
               pkgs.wrapGAppsHook4 # For `niri-visual-tests`
             ];
 
-            buildInputs = niri.buildInputs ++ [
+            buildInputs = arbor.buildInputs ++ [
               pkgs.libadwaita # For `niri-visual-tests`
             ];
 
@@ -230,7 +230,7 @@
               # in the package expression
               #
               # This should only be set with `CARGO_BUILD_RUSTFLAGS="$CARGO_BUILD_RUSTFLAGS -C your-flags"`
-              CARGO_BUILD_RUSTFLAGS = niri.RUSTFLAGS;
+              CARGO_BUILD_RUSTFLAGS = arbor.RUSTFLAGS;
             };
           };
         }
@@ -241,17 +241,17 @@
       packages = forAllSystems (
         system:
         let
-          niri = nixpkgsFor.${system}.callPackage niri-package { };
+          arbor = nixpkgsFor.${system}.callPackage arbor-package { };
         in
         {
-          inherit niri;
+          inherit arbor;
 
           # NOTE: This is for development purposes only
           #
           # It is primarily to help with quickly iterating on
           # changes made to the above expression - though it is
-          # also not stripped in order to better debug niri itself
-          niri-debug = niri.overrideAttrs (
+          # also not stripped in order to better debug arbor itself
+          arbor-debug = arbor.overrideAttrs (
             newAttrs: oldAttrs: {
               pname = oldAttrs.pname + "-debug";
 
@@ -262,12 +262,12 @@
             }
           );
 
-          default = niri;
+          default = arbor;
         }
       );
 
       overlays.default = final: _: {
-        niri = final.callPackage niri-package { };
+        arbor = final.callPackage arbor-package { };
       };
     };
 }

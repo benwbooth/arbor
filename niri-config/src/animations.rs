@@ -678,7 +678,7 @@ impl Animation {
                                 "argument",
                                 format!(
                                     "unexpected animation curve `{unexpected_curve}`. \
-                                    Niri only supports five animation curves: \
+                                    arbor only supports five animation curves: \
                                     `ease-out-quad`, `ease-out-cubic`, `ease-out-expo`, `linear` and `cubic-bezier`."
                                 ),
                             ));

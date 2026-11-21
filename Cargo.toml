@@ -7,11 +7,11 @@ members = [
 
 [workspace.package]
 version = "26.4.0"
-description = "A scrollable-tiling Wayland compositor"
+description = "A Wayland compositor with a docking layout under a zoomable camera"
 authors = ["Ivan Molodetskikh <yalterz@gmail.com>"]
 license = "GPL-3.0-or-later"
 edition = "2021"
-repository = "https://github.com/niri-wm/niri"
+repository = "https://github.com/benwbooth/arbor"
 rust-version = "1.85"
 
 [workspace.dependencies]
@@ -49,6 +49,12 @@ rust-version.workspace = true
 
 readme = "README.md"
 keywords = ["wayland", "compositor", "tiling", "smithay", "wm"]
+
+# The package (library crate) keeps niri's name so upstream rebases stay small; the binary is
+# arbor.
+[[bin]]
+name = "arbor"
+path = "src/main.rs"
 
 [dependencies]
 # accesskit_unix 0.18 has a regression where it doesn't work in normal configurations.
@@ -170,12 +176,12 @@ similar.opt-level = 3
 [package.metadata.generate-rpm]
 version = "26.04"
 assets = [
-    { source = "target/release/niri", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/niri-session", dest = "/usr/bin/", mode = "755" },
-    { source = "resources/niri.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
-    { source = "resources/niri-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
-    { source = "resources/niri.service", dest = "/usr/lib/systemd/user/", mode = "644" },
-    { source = "resources/niri-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "target/release/arbor", dest = "/usr/bin/", mode = "755" },
+    { source = "resources/arbor-session", dest = "/usr/bin/", mode = "755" },
+    { source = "resources/arbor.desktop", dest = "/usr/share/wayland-sessions/", mode = "644" },
+    { source = "resources/arbor-portals.conf", dest = "/usr/share/xdg-desktop-portal/", mode = "644" },
+    { source = "resources/arbor.service", dest = "/usr/lib/systemd/user/", mode = "644" },
+    { source = "resources/arbor-shutdown.target", dest = "/usr/lib/systemd/user/", mode = "644" },
 ]
 [package.metadata.generate-rpm.requires]
 alacritty = "*"
@@ -184,10 +190,10 @@ fuzzel = "*"
 [package.metadata.deb]
 depends = "alacritty, fuzzel"
 assets = [
-    ["target/release/niri", "usr/bin/", "755"],
-    ["resources/niri-session", "usr/bin/", "755"],
-    ["resources/niri.desktop", "/usr/share/wayland-sessions/", "644"],
-    ["resources/niri-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
-    ["resources/niri.service", "/usr/lib/systemd/user/", "644"],
-    ["resources/niri-shutdown.target", "/usr/lib/systemd/user/", "644"],
+    ["target/release/arbor", "usr/bin/", "755"],
+    ["resources/arbor-session", "usr/bin/", "755"],
+    ["resources/arbor.desktop", "/usr/share/wayland-sessions/", "644"],
+    ["resources/arbor-portals.conf", "/usr/share/xdg-desktop-portal/", "644"],
+    ["resources/arbor.service", "/usr/lib/systemd/user/", "644"],
+    ["resources/arbor-shutdown.target", "/usr/lib/systemd/user/", "644"],
 ]

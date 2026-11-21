@@ -26,12 +26,13 @@ use niri::utils::spawning::{
 };
 use niri::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
 use niri_config::{Config, ConfigPath};
-use niri_ipc::socket::SOCKET_PATH_ENV;
+use niri_ipc::socket::{COMPAT_SOCKET_PATH_ENV, SOCKET_PATH_ENV};
 use sd_notify::NotifyState;
 use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_FILTER: &str = "niri=debug,smithay::backend::renderer::gles=error";
+// `niri` is the library crate (most of the code), `arbor` the binary.
+const DEFAULT_LOG_FILTER: &str = "niri=debug,arbor=debug,smithay::backend::renderer::gles=error";
 
 #[cfg(feature = "profile-with-tracy-allocations")]
 #[global_allocator]
@@ -91,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Set the current desktop for xdg-desktop-portal.
-        env::set_var("XDG_CURRENT_DESKTOP", "niri");
+        env::set_var("XDG_CURRENT_DESKTOP", "arbor");
         // Ensure the session type is set to Wayland for xdg-autostart and Qt apps.
         env::set_var("XDG_SESSION_TYPE", "wayland");
     }
@@ -117,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         clap_complete::generate(
                             Nushell,
                             &mut Cli::command(),
-                            "niri",
+                            "arbor",
                             &mut io::stdout(),
                         );
                     }
@@ -126,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         clap_complete::generate(
                             generator,
                             &mut Cli::command(),
-                            "niri",
+                            "arbor",
                             &mut io::stdout(),
                         );
                     }
@@ -139,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Needs to be done before starting Tracy, so that it applies to Tracy's threads.
     niri::utils::signals::block_early().unwrap();
 
-    // Avoid starting Tracy for the `niri msg` code path since starting/stopping Tracy is a bit
+    // Avoid starting Tracy for the `arbor msg` code path since starting/stopping Tracy is a bit
     // slow.
     tracy_client::Client::start();
 
@@ -147,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load the config.
     let config_path = config_path(cli.config);
-    env::remove_var("NIRI_CONFIG");
+    env::remove_var("ARBOR_CONFIG");
     let (config_created_at, config_load_result) = config_path.load_or_create();
     let config_errored = config_load_result.config.is_err();
     let mut config = config_load_result.config.unwrap_or_else(|err| {
@@ -193,10 +194,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket_name.to_string_lossy()
     );
 
-    // Set NIRI_SOCKET for children.
+    // Set ARBOR_SOCKET for children, and NIRI_SOCKET to the same path for tools written for niri.
     if let Some(ipc) = &state.niri.ipc_server {
         let socket_path = ipc.socket_path.as_deref().unwrap();
         env::set_var(SOCKET_PATH_ENV, socket_path);
+        env::set_var(COMPAT_SOCKET_PATH_ENV, socket_path);
         info!("IPC listening on: {}", socket_path.to_string_lossy());
     }
 
@@ -233,7 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.niri.a11y.start();
     }
 
-    if env::var_os("NIRI_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
+    if env::var_os("ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
         // Notify systemd we're ready.
         if let Err(err) = sd_notify::notify(&[NotifyState::Ready]) {
             warn!("error notifying systemd: {err:?}");
@@ -280,6 +282,7 @@ fn import_environment() {
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
         SOCKET_PATH_ENV,
+        COMPAT_SOCKET_PATH_ENV,
     ]
     .join(" ");
 
@@ -325,13 +328,13 @@ fn import_environment() {
 }
 
 fn env_config_path() -> Option<PathBuf> {
-    env::var_os("NIRI_CONFIG")
+    env::var_os("ARBOR_CONFIG")
         .filter(|x| !x.is_empty())
         .map(PathBuf::from)
 }
 
 fn default_config_path() -> Option<PathBuf> {
-    let Some(dirs) = ProjectDirs::from("", "", "niri") else {
+    let Some(dirs) = ProjectDirs::from("", "", "arbor") else {
         warn!("error retrieving home directory");
         return None;
     };
@@ -342,7 +345,7 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/niri/config.kdl")
+    PathBuf::from("/etc/arbor/config.kdl")
 }
 
 fn config_path(cli_path: Option<PathBuf>) -> ConfigPath {

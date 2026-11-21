@@ -79,7 +79,7 @@ impl IpcServer {
 
         let socket_path = if let Some(wayland_socket_name) = wayland_socket_name {
             let wayland_socket_name = wayland_socket_name.to_string_lossy();
-            let socket_name = format!("niri.{wayland_socket_name}.{}.sock", process::id());
+            let socket_name = format!("arbor.{wayland_socket_name}.{}.sock", process::id());
             let mut socket_path = socket_dir();
             socket_path.push(socket_name);
 
@@ -468,7 +468,7 @@ fn validate_action(action: &Action) -> Result<(), String> {
     | Action::LoadConfigFile { path } = action
     {
         if let Some(path) = path {
-            // Relative paths are resolved against the niri compositor's working directory, which
+            // Relative paths are resolved against the compositor's working directory, which
             // is almost certainly not what you want.
             if !Path::new(path).is_absolute() {
                 return Err(format!("path must be absolute: {path}"));
