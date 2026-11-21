@@ -834,6 +834,12 @@ impl XdgActivationHandler for State {
                     mapped.set_urgent(true);
                     self.arbor.queue_redraw_all();
                 } else {
+                    // Logged: an app raising itself (e.g. right after the pointer entered it) is
+                    // otherwise hard to tell apart from arbor raising it.
+                    let app_id = window
+                        .toplevel()
+                        .map(|t| crate::utils::with_toplevel_role(t, |role| role.app_id.clone()));
+                    tracing::info!("xdg-activation: activating {app_id:?} at its own request");
                     self.arbor.layout.activate_window(&window);
                     self.arbor.layer_shell_on_demand_focus = None;
                     self.arbor.queue_redraw_all();
