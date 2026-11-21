@@ -1,0 +1,4 @@
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.arbor
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
+UseIn=arbor

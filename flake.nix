@@ -128,6 +128,7 @@
 
               install -Dm644 resources/arbor.desktop -t $out/share/wayland-sessions
               install -Dm644 resources/arbor-portals.conf -t $out/share/xdg-desktop-portal
+              install -Dm644 resources/arbor.portal -t $out/share/xdg-desktop-portal/portals
             ''
             + lib.optionalString withSystemd ''
               install -Dm755 resources/arbor-session $out/bin/arbor-session

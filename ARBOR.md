@@ -18,7 +18,7 @@ uniform names available to custom shaders.
 | --- | --- |
 | Binary | `arbor`: `arbor msg`, `arbor validate`, `arbor --session`, `arbor completions`. No `niri` binary. |
 | Session | `bin/arbor-session` (starts `arbor.service`), user units `arbor.service` and `arbor-shutdown.target`, `share/wayland-sessions/arbor.desktop` (`DesktopNames=arbor`, so `XDG_CURRENT_DESKTOP=arbor`; `arbor --session` also sets it) |
-| Portals | `share/xdg-desktop-portal/arbor-portals.conf`; on NixOS `xdg.portal.config.arbor` |
+| Portals | `share/xdg-desktop-portal/arbor-portals.conf`; on NixOS `xdg.portal.config.arbor`. arbor's own backend: `share/xdg-desktop-portal/portals/arbor.portal` (D-Bus name `org.freedesktop.impl.portal.desktop.arbor`) |
 | Config | `$XDG_CONFIG_HOME/arbor/config.kdl`, override with `--config` or `$ARBOR_CONFIG`; system-wide fallback `/etc/arbor/config.kdl`. The default config is written there on first run. |
 | IPC | `$XDG_RUNTIME_DIR/arbor.<wayland-display>.<pid>.sock`, exported as `$ARBOR_SOCKET`. `$NIRI_SOCKET` is exported with the same path so tools with niri IPC support (waybar's niri modules, Quickshell, ...) keep working; `arbor msg` reads `$ARBOR_SOCKET` first, then `$NIRI_SOCKET`. The protocol is niri's. |
 | Env | `ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY=1` skips the systemd/fd ready notification. Spawned apps get transient scopes `app-arbor-*.scope`. Build time: `ARBOR_BUILD_COMMIT` / `ARBOR_BUILD_VERSION_STRING` set the version string. |
@@ -370,6 +370,49 @@ glass {
   `ARBOR_GLASS_SHOT_DIR` writes the frames as PNGs): stripes behind a glass
   shape are displaced near the rim and untouched in the middle, at scale 1
   and 4/3.
+
+## Global shortcuts from apps
+
+Apps (Chromium/Brave, Discord, OBS, Speech Note, ...) register global
+shortcuts through the `org.freedesktop.portal.GlobalShortcuts` portal.
+arbor is the backend (`org.freedesktop.impl.portal.GlobalShortcuts`,
+version 1) since it owns the keyboard; select it in the portal config:
+
+```ini
+# arbor-portals.conf
+org.freedesktop.impl.portal.GlobalShortcuts=arbor;
+```
+
+On NixOS the module sets `xdg.portal.config.arbor."org.freedesktop.impl.portal.GlobalShortcuts" = "arbor"`
+and adds the arbor package to `xdg.portal.extraPortals` (for `arbor.portal`).
+A config that sets `xdg.portal.config.arbor` with `mkForce` must add that
+line itself.
+
+- An app's shortcut gets its *preferred trigger* (XDG format `CTRL+ALT+r`
+  or arbor syntax `Ctrl+Alt+R`) only when that parses and clashes with no
+  config bind and no other app's shortcut. Otherwise it stays unassigned
+  until you assign it. arbor shows no dialog.
+- Config binds always win: portal shortcuts are only checked when no bind
+  matched the key, not while locked, and not while a client inhibits
+  shortcuts. The key press and release go to the app as `Activated` /
+  `Deactivated` (with the key event timestamps) instead of to the focused
+  window.
+- Assignments are stored per app id in
+  `$XDG_CONFIG_HOME/arbor/global-shortcuts.json`
+  (`apps.<app id>.<shortcut id> = { description, preferred_trigger, trigger, user_cleared }`).
+  Clearing a trigger sets `user_cleared`, so the preferred trigger isn't
+  re-applied when the app starts again.
+
+| Command | Does |
+| --- | --- |
+| `arbor msg global-shortcuts` (`--json`) | List every app shortcut: app id, id, description, trigger, preferred trigger, whether the app is running |
+| `arbor msg set-global-shortcut <app-id> <id> <trigger>` | Assign a trigger (fails on a clash, naming it) |
+| `arbor msg set-global-shortcut <app-id> <id> --clear` | Remove the assignment |
+
+IPC: `Request::GlobalShortcuts` → `Response::GlobalShortcuts(Vec<GlobalShortcut>)`,
+`Request::SetGlobalShortcut { app_id, id, trigger: Option<String> }` →
+`Handled` or an error string. A change is sent to the running app as
+`ShortcutsChanged`. Unsandboxed apps can have an empty app id (use `""`).
 
 ## Configuration
 
