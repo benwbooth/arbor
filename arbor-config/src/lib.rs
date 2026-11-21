@@ -1517,11 +1517,12 @@ mod tests {
                 },
                 title_bars: TitleBars {
                     off: false,
-                    height: 28.0,
+                    light: false,
+                    height: 30.0,
                     active_color: Color {
-                        r: 0.19215687,
-                        g: 0.21176471,
-                        b: 0.23137255,
+                        r: 0.16078432,
+                        g: 0.17254902,
+                        b: 0.1882353,
                         a: 1.0,
                     },
                     inactive_color: Color {

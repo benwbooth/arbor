@@ -313,12 +313,15 @@ Noto Sans 10 and Breeze's buttons on the right (minimize, maximize, close;
 a round highlight under the pointer, red for close); top corners follow
 `geometry-corner-radius`. Drag the bar to move (and drag-to-dock);
 double-click or the maximize button toggles maximize (the icon turns into
-Breeze's restore diamond); minimize sends the window to the Dock.
+Breeze's restore diamond); minimize sends the window to the Dock. Colors are
+Breeze Dark's header colors by default; `light` switches to Breeze Light's
+(explicit colors in the same block still win).
 
 ```kdl
 layout {
     title-bars {
         // off
+        // light
         height 30
         active-color "#292c30"
         inactive-color "#202326"
