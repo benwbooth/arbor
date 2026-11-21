@@ -138,20 +138,11 @@ impl MergeWith<ClipboardPart> for Clipboard {
 
 /// Plasma-style session restore: the running apps are saved on quit and relaunched at the next
 /// start, each put back into its workspace and dock slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SessionRestore {
     pub off: bool,
     /// App ids (exact) never saved or relaunched.
     pub exclude_app_ids: Vec<String>,
-}
-
-impl Default for SessionRestore {
-    fn default() -> Self {
-        Self {
-            off: false,
-            exclude_app_ids: Vec::new(),
-        }
-    }
 }
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq, Eq)]

@@ -18,10 +18,7 @@ use crate::window::Mapped;
 
 fn target_for(mapped: &Mapped, output: Option<&smithay::output::Output>) -> ExportTarget {
     let scale = output.map_or(1., |o| o.current_scale().fractional_scale());
-    let size = mapped
-        .size()
-        .to_f64()
-        .to_physical_precise_round(scale);
+    let size = mapped.size().to_f64().to_physical_precise_round(scale);
     ExportTarget {
         window: mapped.id().get(),
         size,

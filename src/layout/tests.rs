@@ -1,6 +1,6 @@
 use std::cell::{Cell, OnceCell, RefCell};
 
-use arbor_config::utils::{Flag, MergeWith as _};
+use arbor_config::utils::Flag;
 use arbor_config::workspace::WorkspaceName;
 use arbor_config::{
     FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition, WorkspaceReference,

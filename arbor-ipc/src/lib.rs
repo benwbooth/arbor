@@ -52,6 +52,8 @@
 //!   the types.
 //! - `clap`: derives the clap CLI parsing traits for some types. Used internally by arbor itself.
 #![warn(missing_docs)]
+// The clap derive for `Action` trips this nightly-only lint (a large unoptimized stack frame).
+#![allow(unknown_lints, clippy::large_unopt_stack_frames)]
 
 use std::collections::HashMap;
 use std::str::FromStr;

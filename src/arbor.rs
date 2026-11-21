@@ -118,6 +118,7 @@ use crate::animation::Clock;
 use crate::arbor_render_elements;
 use crate::backend::tty::SurfaceDmabufFeedback;
 use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
+use crate::clipboard_persist::{ClipboardPersist, SelectionData};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_locale1::Locale1ToArbor;
@@ -152,7 +153,6 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
 use crate::protocols::toplevel_export::ToplevelExportManagerState;
-use crate::clipboard_persist::{ClipboardPersist, SelectionData};
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
@@ -3236,11 +3236,7 @@ impl Arbor {
                 .is_some()
         };
 
-        if layer_popup_under(Layer::Bottom) || layer_popup_under(Layer::Background) {
-            return true;
-        }
-
-        false
+        layer_popup_under(Layer::Bottom) || layer_popup_under(Layer::Background)
     }
 
     /// Returns the workspace under the position to be activated.
