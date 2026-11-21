@@ -398,6 +398,12 @@ pub enum Action {
     ToggleReduceMotion,
     SessionSave,
     SessionRestore,
+    MoveWindowToZone(#[knuffel(argument)] u32),
+    #[knuffel(skip)]
+    MoveWindowToZoneById {
+        id: u64,
+        zone: u32,
+    },
     SessionClear,
     CameraZoomOut,
     CameraZoomIn,
@@ -745,6 +751,10 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::ToggleReduceMotion {} => Self::ToggleReduceMotion,
             arbor_ipc::Action::SessionSave {} => Self::SessionSave,
             arbor_ipc::Action::SessionRestore {} => Self::SessionRestore,
+            arbor_ipc::Action::MoveWindowToZone { id: None, zone } => Self::MoveWindowToZone(zone),
+            arbor_ipc::Action::MoveWindowToZone { id: Some(id), zone } => {
+                Self::MoveWindowToZoneById { id, zone }
+            }
             arbor_ipc::Action::SessionClear {} => Self::SessionClear,
             arbor_ipc::Action::CameraZoomOut {} => Self::CameraZoomOut,
             arbor_ipc::Action::CameraZoomIn {} => Self::CameraZoomIn,

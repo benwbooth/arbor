@@ -3826,3 +3826,125 @@ proptest! {
         check_ops_with_options(options, ops);
     }
 }
+
+/// arbor: window zones.
+fn zones_for_output1() -> arbor_ipc::SetZones {
+    let mut zones = arbor_ipc::SetZones {
+        modifier: true,
+        ..Default::default()
+    };
+    zones.outputs.insert(
+        String::from("output1"),
+        vec![
+            [0., 0., 0.25, 1.],
+            [0.25, 0., 0.5, 1.],
+            [0.75, 0., 0.25, 1.],
+        ],
+    );
+    zones
+}
+
+fn floating_tile_rect(layout: &Layout<TestWindow>, id: usize) -> Rectangle<f64, Logical> {
+    let ws = layout.active_workspace().unwrap();
+    let (tile, pos) = ws
+        .floating()
+        .tiles_with_offsets()
+        .find(|(tile, _)| *tile.window().id() == id)
+        .expect("window should be floating");
+    Rectangle::new(pos, tile.tile_expected_or_current_size())
+}
+
+#[test]
+fn shift_drag_drops_into_zone() {
+    let mut params = TestWindowParams::new(0);
+    params.is_floating = true;
+    let mut layout = check_ops([Op::AddOutput(1), Op::AddWindow { params }]);
+    layout.set_zones(zones_for_output1());
+    let area = layout.working_areas()["output1"];
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveMoveBegin {
+                window: 0,
+                output_idx: 1,
+                px: 50.,
+                py: 50.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 0,
+                dx: 600.,
+                dy: 100.,
+                output_idx: 1,
+                px: 640.,
+                py: 300.,
+            },
+        ],
+    );
+    // Without Shift: no zone drag.
+    assert!(layout.zone_drag().is_none());
+    layout.set_zone_modifier_held(true);
+    let drag = layout.zone_drag().expect("Shift turns on zone snapping");
+    assert_eq!(drag.output, "output1");
+    assert_eq!(drag.zone, Some(1));
+
+    check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 0 }]);
+    layout.set_zone_modifier_held(false);
+    assert!(layout.zone_drag().is_none());
+
+    let rect = floating_tile_rect(&layout, 0);
+    let w = area[2];
+    assert_eq!(rect.loc.x, area[0] + (w * 0.25).round());
+    assert_eq!(rect.loc.y, area[1]);
+    assert_eq!(rect.size.w, (w * 0.5).round());
+    assert_eq!(rect.size.h, area[3].round());
+}
+
+#[test]
+fn drag_without_shift_ignores_zones() {
+    let mut params = TestWindowParams::new(0);
+    params.is_floating = true;
+    let mut layout = check_ops([Op::AddOutput(1), Op::AddWindow { params }]);
+    layout.set_zones(zones_for_output1());
+    let before = floating_tile_rect(&layout, 0);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveMoveBegin {
+                window: 0,
+                output_idx: 1,
+                px: 50.,
+                py: 50.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 0,
+                dx: 30.,
+                dy: 20.,
+                output_idx: 1,
+                px: 80.,
+                py: 70.,
+            },
+            Op::InteractiveMoveEnd { window: 0 },
+        ],
+    );
+    let after = floating_tile_rect(&layout, 0);
+    assert_eq!(after.size, before.size);
+}
+
+#[test]
+fn keyboard_snap_into_zone() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+    ]);
+    layout.set_zones(zones_for_output1());
+    let area = layout.working_areas()["output1"];
+    assert!(!layout.move_window_to_zone(None, 5));
+    assert!(layout.move_window_to_zone(None, 2));
+    check_ops_on_layout(&mut layout, [Op::Communicate(0)]);
+    let rect = floating_tile_rect(&layout, 0);
+    assert_eq!(rect.loc.x, area[0] + (area[2] * 0.75).round());
+    assert_eq!(rect.size.w, (area[2] * 0.25).round());
+}

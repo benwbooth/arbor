@@ -237,6 +237,26 @@ layout {
 5. NixOS session (`nixosModules.arbor`, done) + hearth backend on the
    (niri-compatible) IPC.
 
+## Window zones
+
+FancyZones-style snap areas for floating windows, set by the shell (hearth's
+zones picker, `~/.config/hearth/zones.json`) over IPC:
+
+- `SetZones { outputs: { "DP-1": [[x, y, w, h], ...] }, default, gap, padding, modifier }`:
+  zones as fractions of each output's working area (the output minus exclusive zones and
+  struts), with `gap` between zones and `padding` around them in logical px. Empty lists turn
+  zones off. arbor forgets them on restart; the shell resends them when its event stream
+  reconnects.
+- **Shift while dragging** a window (title bar, client move request or Mod+drag) drops it into
+  the zone under the pointer: it floats and fills the zone (docked windows undock). The insert
+  hint shows the zone. With `modifier: false`, floating-window drags snap without Shift (Shift
+  then places freely or docks), and docked windows snap with Shift.
+- `move-window-to-zone N` (1-based; the `MoveWindowToZone { id, zone }` action) does the same
+  from the keyboard; hearth binds Mod+Ctrl+1…9.
+- While a snapping drag is on, the event stream sends `ZoneDragChanged { drag: { output, area,
+  zone } }` (and `drag: null` when it ends) so the shell can draw the zones with numbers.
+  `WorkingAreas` returns each output's working area, for drawing them outside a drag.
+
 ## Colour management
 
 - `color-profile "edid"` per output (default `"srgb"`, niri's behaviour): maps

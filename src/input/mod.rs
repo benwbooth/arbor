@@ -502,6 +502,11 @@ impl State {
                     return FilterResult::Intercept(None);
                 }
 
+                // arbor: Shift switches zone snapping during a window drag.
+                if this.arbor.layout.set_zone_modifier_held(mods.shift) {
+                    this.arbor.queue_redraw_all();
+                }
+
                 // arbor: Enter on a focused icon tile frames it.
                 if pressed
                     && raw == Some(Keysym::Return)
@@ -2516,6 +2521,29 @@ impl State {
             }
             Action::SessionSave => self.session_save_now(),
             Action::SessionRestore => self.session_restore_now(),
+            Action::MoveWindowToZone(zone) => {
+                if zone > 0 && self.arbor.layout.move_window_to_zone(None, zone as usize - 1) {
+                    self.arbor.queue_redraw_all();
+                }
+            }
+            Action::MoveWindowToZoneById { id, zone } => {
+                let window = self
+                    .arbor
+                    .layout
+                    .windows()
+                    .find(|(_, m)| m.id().get() == id)
+                    .map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    if zone > 0
+                        && self
+                            .arbor
+                            .layout
+                            .move_window_to_zone(Some(&window), zone as usize - 1)
+                    {
+                        self.arbor.queue_redraw_all();
+                    }
+                }
+            }
             Action::SessionClear => self.session_clear(),
             Action::RestoreWindowById(id) => {
                 let window = self

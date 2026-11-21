@@ -154,6 +154,9 @@ pub(super) struct InsertHint {
     pub workspace: InsertWorkspace,
     pub position: InsertPosition,
     pub corner_radius: CornerRadius,
+    /// arbor: the hint's rectangle in workspace coordinates when it isn't derived from
+    /// `position` (a window zone).
+    pub area: Option<Rectangle<f64, Logical>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1152,7 +1155,9 @@ impl<W: LayoutElement> Monitor<W> {
             match hint.workspace {
                 InsertWorkspace::Existing(ws_id) => {
                     if let Some(ws) = self.workspaces.iter().find(|ws| ws.id() == ws_id) {
-                        if let Some(mut area) = ws.insert_hint_area(hint.position) {
+                        if let Some(mut area) =
+                            hint.area.or_else(|| ws.insert_hint_area(hint.position))
+                        {
                             let scale = ws.scale().fractional_scale();
                             let view_size = ws.view_size();
 

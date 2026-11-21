@@ -50,6 +50,8 @@ pub struct IpcServer {
     pub socket_path: Option<PathBuf>,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
+    /// arbor: the zone drag last sent in `Event::ZoneDragChanged`.
+    last_zone_drag: RefCell<Option<arbor_ipc::ZoneDrag>>,
 }
 
 struct ClientCtx {
@@ -111,6 +113,7 @@ impl IpcServer {
             socket_path,
             event_streams: Rc::new(RefCell::new(Vec::new())),
             event_stream_state: Rc::new(RefCell::new(EventStreamState::default())),
+            last_zone_drag: RefCell::new(None),
         })
     }
 
@@ -463,6 +466,27 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let _ = rx.recv().await;
             Response::Handled
         }
+        Request::SetZones(req) => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                state.arbor.layout.set_zones(req);
+                state.arbor.queue_redraw_all();
+                let _ = tx.send_blocking(());
+            });
+            let _ = rx.recv().await;
+            Response::Handled
+        }
+        Request::WorkingAreas => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let _ = tx.send_blocking(state.arbor.layout.working_areas());
+            });
+            let areas = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting the working areas"))?;
+            Response::WorkingAreas(areas)
+        }
         Request::Casts => {
             let state = ctx.event_stream_state.borrow();
             let casts = state.casts.casts.values().cloned().collect();
@@ -680,6 +704,21 @@ impl State {
         self.ipc_refresh_workspaces();
         self.ipc_refresh_windows();
         self.ipc_refresh_overview();
+        self.ipc_refresh_zone_drag();
+    }
+
+    /// arbor: tells the event stream when a zone-snapping drag starts, changes zone or ends.
+    fn ipc_refresh_zone_drag(&mut self) {
+        let Some(server) = &self.arbor.ipc_server else {
+            return;
+        };
+        let drag = self.arbor.layout.zone_drag();
+        let mut last = server.last_zone_drag.borrow_mut();
+        if *last == drag {
+            return;
+        }
+        *last = drag.clone();
+        server.send_event(Event::ZoneDragChanged { drag });
     }
 
     fn ipc_refresh_workspaces(&mut self) {

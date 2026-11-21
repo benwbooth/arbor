@@ -1066,6 +1066,21 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.move_to(idx, pos, animate);
     }
 
+    /// arbor: moves `id` to `rect.loc` and asks it for the size that makes its tile `rect.size`
+    /// (window zones).
+    pub fn place_window(&mut self, id: &W::Id, rect: Rectangle<f64, Logical>) {
+        let Some(idx) = self.idx_of(id) else {
+            return;
+        };
+        let tile = &mut self.tiles[idx];
+        tile.floating_preset_width_idx = None;
+        tile.floating_preset_height_idx = None;
+        let size = super::zone_ops::zone_window_size(tile, rect.size);
+        tile.floating_window_size = Some(size);
+        tile.window_mut().request_size_once(size, true);
+        self.move_to(idx, rect.loc, true);
+    }
+
     pub fn center_window(&mut self, id: Option<&W::Id>) {
         let Some(id) = id.or(self.active_window_id.as_ref()).cloned() else {
             return;

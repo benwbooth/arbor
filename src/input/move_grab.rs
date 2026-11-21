@@ -159,6 +159,10 @@ impl MoveGrab {
                 };
                 let output = output.clone();
 
+                // arbor: Shift snaps into window zones.
+                let shift = data.arbor.seat.get_keyboard().unwrap().modifier_state().shift;
+                data.arbor.layout.set_zone_modifier_held(shift);
+
                 // Interactive move always uses absolute delta since the window must remain pinned
                 // to the cursor even when it's clamped to monitor bounds.
                 let ongoing = data.arbor.layout.interactive_move_update(

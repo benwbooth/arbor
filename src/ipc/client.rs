@@ -542,6 +542,9 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                         let description = parts.join(" and ");
                         println!("Screenshot captured: {description}");
                     }
+                    Event::ZoneDragChanged { drag } => {
+                        println!("Zone drag changed: {drag:?}");
+                    }
                     Event::CastsChanged { casts } => {
                         println!("Casts changed: {casts:?}");
                     }

@@ -89,6 +89,7 @@ pub mod tab_indicator;
 pub mod tile;
 pub mod title_bar;
 pub mod workspace;
+mod zone_ops;
 
 #[cfg(test)]
 mod tests;
@@ -379,6 +380,50 @@ pub struct Layout<W: LayoutElement> {
     overview_progress: Option<OverviewProgress>,
     /// Configurable properties of the layout.
     options: Rc<Options>,
+    /// arbor: window zones set over IPC (hearth's FancyZones).
+    zones: arbor_ipc::SetZones,
+    /// arbor: whether Shift is held, for zone snapping during an interactive move.
+    zone_modifier_held: bool,
+}
+
+/// arbor: the zone under the pointer of an interactive move, if the move snaps into zones:
+/// (zone index, zone rectangle in workspace coordinates).
+fn zone_drop(
+    zones: &arbor_ipc::SetZones,
+    modifier_held: bool,
+    is_floating: bool,
+    output_name: &str,
+    working_area: Rectangle<f64, Logical>,
+    pos_within_workspace: Point<f64, Logical>,
+) -> Option<(usize, Rectangle<f64, Logical>)> {
+    if !zone_drag_active(zones, modifier_held, is_floating) {
+        return None;
+    }
+    let area = [
+        working_area.loc.x,
+        working_area.loc.y,
+        working_area.size.w,
+        working_area.size.h,
+    ];
+    zones
+        .rects(output_name, area)
+        .into_iter()
+        .map(|r| Rectangle::new(Point::from((r[0], r[1])), Size::from((r[2], r[3]))))
+        .enumerate()
+        .find(|(_, r)| r.contains(pos_within_workspace))
+}
+
+/// arbor: whether an interactive move snaps into zones (Shift, or floating drags when zones
+/// don't need the modifier).
+fn zone_drag_active(zones: &arbor_ipc::SetZones, modifier_held: bool, is_floating: bool) -> bool {
+    if zones.is_empty() {
+        return false;
+    }
+    if zones.modifier {
+        modifier_held
+    } else {
+        modifier_held != is_floating
+    }
 }
 
 #[derive(Debug)]
@@ -711,6 +756,8 @@ impl<W: LayoutElement> Layout<W> {
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
+            zones: arbor_ipc::SetZones::default(),
+            zone_modifier_held: false,
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -736,6 +783,8 @@ impl<W: LayoutElement> Layout<W> {
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
+            zones: arbor_ipc::SetZones::default(),
+            zone_modifier_held: false,
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -2766,6 +2815,8 @@ impl<W: LayoutElement> Layout<W> {
 
         let _span = tracy_client::span!("Layout::update_insert_hint::update");
 
+        let zones = self.zones.clone();
+        let zone_modifier_held = self.zone_modifier_held;
         if let Some(mon) = self.monitor_for_output_mut(&move_.output) {
             let zoom = mon.overview_zoom();
             let (insert_ws, geo) = mon.insert_position(move_.pointer_pos_within_output);
@@ -2778,7 +2829,19 @@ impl<W: LayoutElement> Layout<W> {
                         .unwrap();
                     let pos_within_workspace =
                         (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
-                    let position = ws.drop_position(pos_within_workspace, move_.is_floating);
+                    let zone = zone_drop(
+                        &zones,
+                        zone_modifier_held,
+                        move_.is_floating,
+                        &move_.output.name(),
+                        ws.working_area(),
+                        pos_within_workspace,
+                    );
+                    let position = if zone.is_some() {
+                        InsertPosition::Floating
+                    } else {
+                        ws.drop_position(pos_within_workspace, move_.is_floating)
+                    };
 
                     let border_width = move_.tile.effective_border_width().unwrap_or(0.);
                     let corner_radius = move_
@@ -2790,6 +2853,7 @@ impl<W: LayoutElement> Layout<W> {
                         workspace: insert_ws,
                         position,
                         corner_radius,
+                        area: zone.map(|(_, rect)| rect),
                     });
                 }
                 InsertWorkspace::NewAt(_) => {
@@ -2802,6 +2866,7 @@ impl<W: LayoutElement> Layout<W> {
                         workspace: insert_ws,
                         position,
                         corner_radius: CornerRadius::default(),
+                        area: None,
                     });
                 }
             }
@@ -3946,6 +4011,7 @@ impl<W: LayoutElement> Layout<W> {
                 active_monitor_idx,
                 ..
             } => {
+                let mut zone_rect = None;
                 let (mon, insert_ws, position, offset, zoom) =
                     if let Some(mon) = monitors.iter_mut().find(|mon| mon.output == move_.output) {
                         let zoom = mon.overview_zoom();
@@ -3962,8 +4028,20 @@ impl<W: LayoutElement> Layout<W> {
                                 let pos_within_workspace =
                                     (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
                                 let ws = &mut mon.workspaces[ws_idx];
-                                let position =
-                                    ws.drop_position(pos_within_workspace, move_.is_floating);
+                                zone_rect = zone_drop(
+                                    &self.zones,
+                                    self.zone_modifier_held,
+                                    move_.is_floating,
+                                    &move_.output.name(),
+                                    ws.working_area(),
+                                    pos_within_workspace,
+                                )
+                                .map(|(_, rect)| rect);
+                                let position = if zone_rect.is_some() {
+                                    InsertPosition::Floating
+                                } else {
+                                    ws.drop_position(pos_within_workspace, move_.is_floating)
+                                };
 
                                 (position, Some(geo.loc))
                             }
@@ -4078,6 +4156,14 @@ impl<W: LayoutElement> Layout<W> {
                         // took place during the move.
                         if let Some(size) = tile.window().expected_size() {
                             tile.floating_window_size = Some(size);
+                        }
+
+                        // arbor: dropped into a zone: fill it.
+                        if let Some(rect) = zone_rect {
+                            let ws = &mon.workspaces[ws_idx];
+                            tile.floating_pos = Some(ws.floating_logical_to_size_frac(rect.loc));
+                            tile.floating_window_size =
+                                Some(zone_ops::zone_window_size(&tile, rect.size));
                         }
 
                         let ws_id = mon.workspaces[ws_idx].id();

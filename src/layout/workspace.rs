@@ -1422,6 +1422,12 @@ impl<W: LayoutElement> Workspace<W> {
         };
     }
 
+    /// arbor: puts floating `id` at `rect` (tile geometry, workspace coordinates) and asks it to
+    /// fill it (window zones).
+    pub fn place_floating_window(&mut self, id: &W::Id, rect: Rectangle<f64, Logical>) {
+        self.floating.place_window(id, rect);
+    }
+
     pub fn move_floating_window(
         &mut self,
         id: Option<&W::Id>,

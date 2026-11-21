@@ -152,6 +152,76 @@ pub enum Request {
         /// format (`CTRL+ALT+r`); `None` clears the assignment.
         trigger: Option<String>,
     },
+    /// arbor: set the window zones (FancyZones-style snap areas) of every output.
+    ///
+    /// Dragging a window while holding Shift (see [`SetZones::modifier`]) drops it into the
+    /// zone under the pointer as a floating window filling that zone, and
+    /// [`Action::MoveWindowToZone`] does the same from the keyboard. While such a drag is on,
+    /// the event stream sends [`Event::ZoneDragChanged`] so that a shell can draw the zones.
+    /// Empty zone lists turn zones off. Replies [`Response::Handled`].
+    SetZones(SetZones),
+    /// arbor: the working area (the output minus panels' exclusive zones and struts) of every
+    /// output's active workspace. Replies [`Response::WorkingAreas`].
+    WorkingAreas,
+}
+
+/// Window zones, see [`Request::SetZones`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct SetZones {
+    /// Zones per output (connector) name, each `[x, y, width, height]` as fractions (0..1) of
+    /// the output's working area.
+    pub outputs: HashMap<String, Vec<[f64; 4]>>,
+    /// Zones for outputs not listed in `outputs`.
+    pub default: Vec<[f64; 4]>,
+    /// Gap between zones, in logical px.
+    pub gap: f64,
+    /// Space between the zones and the working area's edges, in logical px.
+    pub padding: f64,
+    /// Drags snap into zones only while Shift is held. When false, dragging a floating window
+    /// always snaps (Shift then places it freely or docks it), and docked windows snap while
+    /// Shift is held.
+    pub modifier: bool,
+}
+
+impl SetZones {
+    /// The zone rectangles of `output` within `area` (`[x, y, width, height]`).
+    pub fn rects(&self, output: &str, area: [f64; 4]) -> Vec<[f64; 4]> {
+        let zones = self.outputs.get(output).unwrap_or(&self.default);
+        let pad = self.padding.max(0.);
+        let gap = self.gap.max(0.);
+        let uw = area[2] - pad * 2.;
+        let uh = area[3] - pad * 2.;
+        zones
+            .iter()
+            .map(|z| {
+                let x = (area[0] + pad + uw * z[0] + gap / 2.).round();
+                let y = (area[1] + pad + uh * z[1] + gap / 2.).round();
+                let w = (uw * z[2] - gap).round().max(1.);
+                let h = (uh * z[3] - gap).round().max(1.);
+                [x, y, w, h]
+            })
+            .collect()
+    }
+
+    /// Whether any output has zones.
+    pub fn is_empty(&self) -> bool {
+        self.default.is_empty() && self.outputs.values().all(Vec::is_empty)
+    }
+}
+
+/// A window drag that snaps into zones, see [`Event::ZoneDragChanged`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct ZoneDrag {
+    /// Output (connector) name under the pointer.
+    pub output: String,
+    /// That output's working area `[x, y, width, height]`, output-local logical px; the zones
+    /// of [`SetZones`] are fractions of it.
+    pub area: [f64; 4],
+    /// The zone under the pointer (index into that output's zone list), if any.
+    pub zone: Option<u32>,
 }
 
 /// Liquid-glass shapes for one layer-shell surface (or its pop-ups), see [`Request::SetGlass`].
@@ -366,6 +436,8 @@ pub enum Response {
     GlobalShortcuts(Vec<GlobalShortcut>),
     /// Number of shortcuts imported by [`Request::ImportKdeShortcuts`].
     ImportedKdeShortcuts(u32),
+    /// Working area `[x, y, width, height]` (output-local logical px) per output name.
+    WorkingAreas(HashMap<String, [f64; 4]>),
 }
 
 /// A global shortcut registered by an app through the GlobalShortcuts portal.
@@ -1198,6 +1270,18 @@ pub enum Action {
     SessionSave {},
     /// Relaunch the apps of the saved session and put them back in place.
     SessionRestore {},
+    /// Move a window into a zone (see [`Request::SetZones`]) of its output: it floats and fills
+    /// the zone (arbor).
+    MoveWindowToZone {
+        /// Id of the window to move.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+        /// Zone number, 1-based.
+        #[cfg_attr(feature = "clap", arg())]
+        zone: u32,
+    },
     /// Delete the saved session.
     SessionClear {},
     /// Zoom the camera out one level: show the parent of the focused window's node, ultimately
@@ -1994,6 +2078,12 @@ pub enum Event {
     OverviewOpenedOrClosed {
         /// The new state of the overview.
         is_open: bool,
+    },
+    /// arbor: a window drag that snaps into zones started, moved to another zone, or ended
+    /// (`drag` is `None`). See [`Request::SetZones`].
+    ZoneDragChanged {
+        /// The drag, or `None` when there is none (any more).
+        drag: Option<ZoneDrag>,
     },
     /// The configuration was reloaded.
     ///
