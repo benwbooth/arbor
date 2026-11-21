@@ -239,6 +239,10 @@
         {
           inherit arbor;
 
+          # RDP server for the arbor session: hypr-rdp (MuNeNICK/hypr-rdp)
+          # patched to run without Hyprland IPC; see nix/arbor-rdp.nix.
+          arbor-rdp = nixpkgsFor.${system}.callPackage ./nix/arbor-rdp.nix { };
+
           # NOTE: This is for development purposes only
           #
           # It is primarily to help with quickly iterating on
@@ -261,6 +265,7 @@
 
       overlays.default = final: _: {
         arbor = final.callPackage arbor-package { };
+        arbor-rdp = final.callPackage ./nix/arbor-rdp.nix { };
       };
 
       nixosModules.arbor = import ./nix/module.nix self;

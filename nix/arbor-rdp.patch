@@ -1,0 +1,704 @@
+diff --git a/src/audio/pipewire.rs b/src/audio/pipewire.rs
+index dc5ce26..ead060c 100644
+--- a/src/audio/pipewire.rs
++++ b/src/audio/pipewire.rs
+@@ -64,7 +64,7 @@ fn run_capture_inner(
+         *pw::keys::MEDIA_CATEGORY => "Capture",
+         *pw::keys::MEDIA_ROLE => "Screen",
+         *pw::keys::NODE_NAME => "hypr-rdp-audio",
+-        *pw::keys::APP_NAME => "hypr-rdp",
++        *pw::keys::APP_NAME => "arbor-rdp",
+         "stream.capture.sink" => "true",
+     };
+ 
+diff --git a/src/capture/mod.rs b/src/capture/mod.rs
+index 58fc131..c480caf 100644
+--- a/src/capture/mod.rs
++++ b/src/capture/mod.rs
+@@ -552,6 +552,23 @@ impl HyprDisplay {
+         // client subscribes to display updates. This keeps idle memory bounded.
+         let (output_name, headless_guard) = if let Some(ref name) = output {
+             (name.clone(), None)
++        } else if !crate::hyprland::is_hyprland() {
++            let available = crate::hyprland::monitors()
++                .ok()
++                .and_then(|monitors| {
++                    let names: Vec<String> = monitors
++                        .as_array()?
++                        .iter()
++                        .filter_map(|m| m["name"].as_str().map(str::to_owned))
++                        .collect();
++                    Some(names.join(", "))
++                })
++                .unwrap_or_default();
++            anyhow::bail!(
++                "no output configured: {} (outputs available: {})",
++                crate::hyprland::HEADLESS_UNAVAILABLE,
++                available
++            );
+         } else {
+             let stale = wayland::list_stale_headless_outputs().unwrap_or_default();
+             if let Some(existing) = stale.into_iter().next() {
+diff --git a/src/capture/wayland/wlr.rs b/src/capture/wayland/wlr.rs
+index 33e8c3a..9ecdb9d 100644
+--- a/src/capture/wayland/wlr.rs
++++ b/src/capture/wayland/wlr.rs
+@@ -225,7 +225,14 @@ pub(super) fn capture_loop_wlr(
+     while !state.frame_ready && !state.frame_failed {
+         poll_dispatch(event_queue, state, POLL_TIMEOUT_MS)?;
+         if !buffer_sent && state.buffer_width > 0 {
+-            frame.copy_with_damage(buffers[cap_idx]);
++            // arbor (like niri) completes copy_with_damage only on the next
++            // output redraw, which an idle screen never does: take the first
++            // frame with a plain copy, rendered right away.
++            if crate::hyprland::is_hyprland() {
++                frame.copy_with_damage(buffers[cap_idx]);
++            } else {
++                frame.copy(buffers[cap_idx]);
++            }
+             conn.flush().context("Wayland flush failed")?;
+             buffer_sent = true;
+             wait_started = Instant::now();
+@@ -247,6 +254,8 @@ pub(super) fn capture_loop_wlr(
+     }
+ 
+     let mut failed_streak = 0u32;
++    // arbor only: take the next frame with a plain (immediate) copy.
++    let mut plain_copy_next = false;
+     // A frame the pacer skipped, retained so its damage still reaches the
+     // client if the screen then goes quiet (the buffer stays valid for the
+     // whole wait: the next capture writes into the other buffer).
+@@ -403,7 +412,12 @@ pub(super) fn capture_loop_wlr(
+                     frame.destroy();
+                     return Err(BufferParametersChanged.into());
+                 }
+-                frame.copy_with_damage(buffers[cap_idx]);
++                if plain_copy_next {
++                    frame.copy(buffers[cap_idx]);
++                    plain_copy_next = false;
++                } else {
++                    frame.copy_with_damage(buffers[cap_idx]);
++                }
+                 conn.flush().context("Wayland flush failed")?;
+                 buffer_sent = true;
+                 wait_started = Instant::now();
+@@ -412,11 +426,24 @@ pub(super) fn capture_loop_wlr(
+                 break;
+             }
+             if wlr_frame_wait_stalled(wait_started, Instant::now()) {
+-                tracing::warn!(
+-                    buffer_sent,
+-                    timeout_ms = WLR_FRAME_STALL_TIMEOUT.as_millis(),
+-                    "WLR frame stalled; restarting screencopy frame"
+-                );
++                if crate::hyprland::is_hyprland() {
++                    tracing::warn!(
++                        buffer_sent,
++                        timeout_ms = WLR_FRAME_STALL_TIMEOUT.as_millis(),
++                        "WLR frame stalled; restarting screencopy frame"
++                    );
++                } else {
++                    // Expected on arbor whenever the screen is idle (no
++                    // damage, no redraw). Refresh with a plain copy: a frame
++                    // taken before the client's graphics channel was ready
++                    // would otherwise leave it blank until something moves.
++                    tracing::debug!(
++                        buffer_sent,
++                        timeout_ms = WLR_FRAME_STALL_TIMEOUT.as_millis(),
++                        "WLR frame idle; restarting screencopy frame"
++                    );
++                    plain_copy_next = true;
++                }
+                 frame.destroy();
+                 frame = start_wlr_frame(conn, state, qh, output, screencopy_mgr)?;
+                 buffer_sent = false;
+diff --git a/src/config.rs b/src/config.rs
+index c41e0cf..d97e816 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -69,7 +69,7 @@ fn resolve_file_transfer_mode(
+ }
+ 
+ #[derive(Parser, Debug)]
+-#[command(name = "hypr-rdp", version, about = "Native RDP server for Hyprland")]
++#[command(name = "arbor-rdp", version, about = "RDP server for arbor (and Hyprland), based on hypr-rdp")]
+ struct Args {
+     /// Address to bind the RDP server
+     #[arg(short, long)]
+@@ -184,7 +184,7 @@ struct Args {
+     #[arg(long)]
+     file_transfer_max_entries: Option<usize>,
+ 
+-    /// Path to config file [default: ~/.config/hypr-rdp/config.toml]
++    /// Path to config file [default: ~/.config/arbor-rdp/config.toml]
+     #[arg(long)]
+     config: Option<String>,
+ }
+@@ -232,7 +232,7 @@ impl ConfigFile {
+                 (
+                     PathBuf::from(home)
+                         .join(".config")
+-                        .join("hypr-rdp")
++                        .join("arbor-rdp")
+                         .join("config.toml"),
+                     false,
+                 )
+@@ -335,7 +335,7 @@ fn resolve_authentication(args: &mut Args, config: &mut ConfigFile) -> anyhow::R
+                     && config.password_file.is_none(),
+                 "auth-mode pam cannot be combined with username, domain, password or password-file"
+             );
+-            let service = service.unwrap_or_else(|| "hypr-rdp".into());
++            let service = service.unwrap_or_else(|| "arbor-rdp".into());
+             anyhow::ensure!(
+                 crate::server::auth::valid_pam_service(&service),
+                 "invalid PAM service name"
+@@ -1585,7 +1585,7 @@ mod pam_config_tests {
+         assert_eq!(
+             resolve(&["hypr-rdp", "--auth-mode", "pam"], "").unwrap(),
+             AuthConfig::Pam {
+-                service: "hypr-rdp".into()
++                service: "arbor-rdp".into()
+             }
+         );
+         assert!(matches!(
+diff --git a/src/hyprland.rs b/src/hyprland.rs
+index 0371c2e..cd7c139 100644
+--- a/src/hyprland.rs
++++ b/src/hyprland.rs
+@@ -22,8 +22,31 @@ struct InstanceCandidate {
+     wayland_display: String,
+ }
+ 
+-pub(crate) fn initialize() -> Result<String> {
+-    instance_signature()
++/// Message for every Hyprland-only operation (the headless virtual screen).
++pub(crate) const HEADLESS_UNAVAILABLE: &str = "the virtual (headless) screen mode needs Hyprland IPC, \
++     which is not available here (HYPRLAND_INSTANCE_SIGNATURE is not set); set `output` in the \
++     config (e.g. output = \"DP-1\") to mirror a physical screen instead";
++
++/// Whether this process talks to Hyprland over its IPC sockets.
++///
++/// Without HYPRLAND_INSTANCE_SIGNATURE (arbor, or any other compositor with
++/// the wlr protocols) Hyprland IPC is skipped entirely: outputs come from
++/// wl_output + xdg-output, the keyboard layout from the seat keymap, and the
++/// headless virtual-screen mode is unavailable.
++pub(crate) fn is_hyprland() -> bool {
++    std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok_and(|value| !value.is_empty())
++}
++
++/// Select the Hyprland instance, or `None` when not running under Hyprland.
++pub(crate) fn initialize() -> Result<Option<String>> {
++    if !is_hyprland() {
++        tracing::info!(
++            "HYPRLAND_INSTANCE_SIGNATURE is not set; using standard Wayland protocols \
++             (wl_output/xdg-output) for outputs, Hyprland IPC disabled"
++        );
++        return Ok(None);
++    }
++    instance_signature().map(Some)
+ }
+ 
+ fn instance_signature() -> Result<String> {
+@@ -198,18 +221,27 @@ fn send_action(cmd: &str) -> Result<()> {
+ 
+ /// Query monitors as JSON value (array).
+ pub fn monitors() -> Result<serde_json::Value> {
++    if !is_hyprland() {
++        return crate::wayland_outputs::monitors();
++    }
+     let response = send_command("j/monitors")?;
+     serde_json::from_str(&response).context("failed to parse Hyprland monitors JSON")
+ }
+ 
+ /// Query input devices as JSON value (object with a "keyboards" array).
+ pub fn devices() -> Result<serde_json::Value> {
++    if !is_hyprland() {
++        bail!("not running under Hyprland");
++    }
+     let response = send_command("j/devices")?;
+     serde_json::from_str(&response).context("failed to parse Hyprland devices JSON")
+ }
+ 
+ /// Query a Hyprland option string value.
+ pub fn option_string(option: &str) -> Result<Option<String>> {
++    if !is_hyprland() {
++        return Ok(None);
++    }
+     let response = send_command(&format!("j/getoption {}", option))?;
+     option_string_from_response(&response)
+         .with_context(|| format!("failed to parse Hyprland option {}", option))
+@@ -228,6 +260,9 @@ fn option_string_from_response(response: &str) -> Result<Option<String>> {
+ 
+ /// Create a headless output with the requested name.
+ pub fn output_create_headless(name: &str) -> Result<()> {
++    if !is_hyprland() {
++        bail!(HEADLESS_UNAVAILABLE);
++    }
+     send_action(&format!("output create headless {}", name))
+ }
+ 
+@@ -241,6 +276,9 @@ pub fn output_create_headless(name: &str) -> Result<()> {
+ /// A rejected Lua rule can also have applied some fields, so fallback is not a
+ /// rollback.
+ pub fn keyword_monitor(rule: &str) -> Result<()> {
++    if !is_hyprland() {
++        bail!(HEADLESS_UNAVAILABLE);
++    }
+     let response = send_command(&format!("eval {}", monitor_rule_to_lua(rule)?))?;
+     if response.trim() == "ok" {
+         return Ok(());
+@@ -312,6 +350,9 @@ fn lua_string(value: &str) -> Result<String> {
+ 
+ /// Remove a named output.
+ pub fn output_remove(name: &str) -> Result<()> {
++    if !is_hyprland() {
++        bail!(HEADLESS_UNAVAILABLE);
++    }
+     send_action(&format!("output remove {}", name))
+ }
+ 
+@@ -327,6 +368,9 @@ pub struct EventStream {
+ 
+ impl EventStream {
+     pub fn connect() -> Result<Self> {
++        if !is_hyprland() {
++            bail!("Hyprland event socket unavailable: not running under Hyprland");
++        }
+         let path = instance_socket_path(EVENT_SOCKET)?;
+         let sock = UnixStream::connect(&path)
+             .with_context(|| format!("failed to connect to Hyprland event socket: {}", path))?;
+diff --git a/src/input/layout.rs b/src/input/layout.rs
+index 1758849..91a6a3f 100644
+--- a/src/input/layout.rs
++++ b/src/input/layout.rs
+@@ -531,3 +531,11 @@ mod tests {
+         assert_eq!(snapshot.geometry_generation, 0);
+     }
+ }
++
++#[cfg(test)]
++pub(crate) fn layout_from_monitors_for_test(
++    monitors: &Value,
++    output_name: &str,
++) -> Result<(u32, u32, u32, u32, u32, u32)> {
++    layout_from_monitors(monitors, output_name)
++}
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index fa063d4..5014b9e 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -15,5 +15,7 @@ pub enum KeyboardLayoutPolicy {
+ pub(crate) use layout::OutputLayoutSnapshot;
+ pub(crate) use layout::PreparedOutputLayout;
+ pub use layout::SharedOutputLayout;
++#[cfg(test)]
++pub(crate) use layout::layout_from_monitors_for_test;
+ pub(crate) use rdp::RdpInputSessionSink;
+ pub use wayland::HyprInputHandler;
+diff --git a/src/input/wayland.rs b/src/input/wayland.rs
+index 4db7484..c055fbb 100644
+--- a/src/input/wayland.rs
++++ b/src/input/wayland.rs
+@@ -509,7 +509,11 @@ impl HyprInputHandler {
+ 
+         // Hyprland does not send wl_keyboard.modifiers to this surfaceless
+         // client, so external layout switches come from Hyprland IPC instead.
+-        let layout_listener = if keyboard_layout_policy == KeyboardLayoutPolicy::Compositor {
++        // Elsewhere (arbor) there is no layout event source; the seat keymap
++        // loaded above is used as-is.
++        let layout_listener = if keyboard_layout_policy == KeyboardLayoutPolicy::Compositor
++            && hyprland::is_hyprland()
++        {
+             Some(spawn_layout_listener(input_commands.as_ref().clone())?)
+         } else {
+             None
+@@ -1359,6 +1363,44 @@ mod tests {
+         (flush, layout_reads.get())
+     }
+ 
++    #[test]
++    fn fractional_scale_output_maps_absolute_motion_in_physical_extents() {
++        // arbor DP-1: 5120x2160 physical at scale 4/3 (3840x1620 logical),
++        // viewed by a client at the logical size. Extents are the physical
++        // output size; the compositor scales x/x_extent onto the bound
++        // output's logical rectangle, so the ratio is all that matters.
++        let sink = RecordingPointerSink::default();
++        let mut h = 0;
++        let mut v = 0;
++        for (x, y) in [(1920u16, 810u16), (0, 0), (3839, 1619)] {
++            emit_mouse_event(
++                &sink,
++                || Some(layout_snapshot((5120, 2160), (3840, 1620))),
++                1,
++                MouseEvent::Move { x, y },
++                &mut h,
++                &mut v,
++            );
++        }
++        let moves: Vec<_> = sink
++            .0
++            .borrow()
++            .iter()
++            .filter_map(|request| match request {
++                RecordedPointerRequest::MotionAbsolute(_, x, y, w, h) => Some((*x, *y, *w, *h)),
++                _ => None,
++            })
++            .collect();
++        assert_eq!(moves.len(), 3);
++        for (_, _, w, h) in &moves {
++            assert_eq!((*w, *h), (5120, 2160));
++        }
++        assert_eq!((moves[0].0, moves[0].1), (2560, 1080));
++        assert_eq!((moves[1].0, moves[1].1), (0, 0));
++        assert!(moves[2].0 < 5120 && moves[2].0 >= 5118, "{:?}", moves[2]);
++        assert!(moves[2].1 < 2160 && moves[2].1 >= 2158, "{:?}", moves[2]);
++    }
++
+     #[test]
+     fn button_press_places_the_pointer_at_the_position_the_click_carried() {
+         let sink = RecordingPointerSink::default();
+diff --git a/src/main.rs b/src/main.rs
+index 338d49e..77893e2 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -7,6 +7,7 @@ mod egfx;
+ mod hyprland;
+ mod input;
+ mod server;
++mod wayland_outputs;
+ 
+ use anyhow::Result;
+ use tracing_subscriber::EnvFilter;
+diff --git a/src/server/mod.rs b/src/server/mod.rs
+index 738a74d..d54c402 100644
+--- a/src/server/mod.rs
++++ b/src/server/mod.rs
+@@ -103,7 +103,7 @@ pub async fn setup(config: RuntimeConfig) -> Result<ServerContext> {
+     );
+     let sound_factory = sound_factory_for_audio_mode(audio_mode);
+     let session_hooks =
+-        session_hooks_from_config(on_session_start, on_session_end, Some(hyprland_instance));
++        session_hooks_from_config(on_session_start, on_session_end, hyprland_instance);
+ 
+     let builder = RdpServer::builder().with_addr(bind);
+ 
+diff --git a/src/server/tls.rs b/src/server/tls.rs
+index 40f221f..7eb130c 100644
+--- a/src/server/tls.rs
++++ b/src/server/tls.rs
+@@ -22,7 +22,7 @@ pub(super) fn resolve_tls_paths(cert: Option<&str>, key: Option<&str>) -> Result
+ /// Auto-generate a self-signed TLS certificate and persist it.
+ fn auto_generate_tls() -> Result<(PathBuf, PathBuf)> {
+     let home = std::env::var("HOME").context("HOME not set")?;
+-    let config_dir = PathBuf::from(home).join(".config").join("hypr-rdp");
++    let config_dir = PathBuf::from(home).join(".config").join("arbor-rdp");
+     auto_generate_tls_in(&config_dir)
+ }
+ 
+diff --git a/src/wayland_outputs.rs b/src/wayland_outputs.rs
+new file mode 100644
+index 0000000..0f623ef
+--- /dev/null
++++ b/src/wayland_outputs.rs
+@@ -0,0 +1,301 @@
++//! Output enumeration over standard Wayland protocols (wl_output v4 +
++//! xdg-output), for compositors without Hyprland IPC such as arbor.
++//!
++//! The result has the shape of Hyprland's `j/monitors` so the existing
++//! callers work unchanged: `name`, `x`/`y` (logical position), `width`/
++//! `height` (current mode in physical pixels) and `scale`.
++
++use anyhow::{Context, Result};
++use serde_json::{json, Value};
++use wayland_client::globals::{registry_queue_init, GlobalListContents};
++use wayland_client::protocol::{wl_output, wl_registry};
++use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle, WEnum};
++use wayland_protocols::xdg::xdg_output::zv1::client::{
++    zxdg_output_manager_v1::ZxdgOutputManagerV1, zxdg_output_v1, zxdg_output_v1::ZxdgOutputV1,
++};
++
++#[derive(Clone, Debug, Default, PartialEq)]
++pub(crate) struct OutputInfo {
++    pub(crate) name: Option<String>,
++    /// Current mode, physical pixels, untransformed.
++    pub(crate) mode: Option<(i32, i32)>,
++    pub(crate) rotated: bool,
++    pub(crate) integer_scale: i32,
++    pub(crate) logical_position: Option<(i32, i32)>,
++    pub(crate) logical_size: Option<(i32, i32)>,
++}
++
++#[derive(Default)]
++struct State {
++    outputs: Vec<OutputInfo>,
++}
++
++impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
++    fn event(
++        _: &mut Self,
++        _: &wl_registry::WlRegistry,
++        _: wl_registry::Event,
++        _: &GlobalListContents,
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}
++
++impl Dispatch<wl_output::WlOutput, usize> for State {
++    fn event(
++        state: &mut Self,
++        _: &wl_output::WlOutput,
++        event: wl_output::Event,
++        index: &usize,
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        let Some(info) = state.outputs.get_mut(*index) else {
++            return;
++        };
++        match event {
++            wl_output::Event::Geometry { transform, .. } => {
++                info.rotated = matches!(
++                    transform,
++                    WEnum::Value(
++                        wl_output::Transform::_90
++                            | wl_output::Transform::_270
++                            | wl_output::Transform::Flipped90
++                            | wl_output::Transform::Flipped270
++                    )
++                );
++            }
++            wl_output::Event::Mode {
++                flags,
++                width,
++                height,
++                ..
++            } => {
++                if let WEnum::Value(flags) = flags {
++                    if flags.contains(wl_output::Mode::Current) {
++                        info.mode = Some((width, height));
++                    }
++                }
++            }
++            wl_output::Event::Scale { factor } => info.integer_scale = factor,
++            wl_output::Event::Name { name } => info.name = Some(name),
++            _ => {}
++        }
++    }
++}
++
++impl Dispatch<ZxdgOutputManagerV1, ()> for State {
++    fn event(
++        _: &mut Self,
++        _: &ZxdgOutputManagerV1,
++        _: <ZxdgOutputManagerV1 as wayland_client::Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}
++
++impl Dispatch<ZxdgOutputV1, usize> for State {
++    fn event(
++        state: &mut Self,
++        _: &ZxdgOutputV1,
++        event: zxdg_output_v1::Event,
++        index: &usize,
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        let Some(info) = state.outputs.get_mut(*index) else {
++            return;
++        };
++        match event {
++            zxdg_output_v1::Event::LogicalPosition { x, y } => {
++                info.logical_position = Some((x, y));
++            }
++            zxdg_output_v1::Event::LogicalSize { width, height } => {
++                info.logical_size = Some((width, height));
++            }
++            // wl_output v4 already names the output; xdg-output v2 is the
++            // fallback for older wl_output binds.
++            zxdg_output_v1::Event::Name { name } => {
++                info.name.get_or_insert(name);
++            }
++            _ => {}
++        }
++    }
++}
++
++/// Query the compositor's outputs in Hyprland `j/monitors` shape.
++pub(crate) fn monitors() -> Result<Value> {
++    let conn = Connection::connect_to_env().context("failed to connect to Wayland display")?;
++    let (globals, mut queue) =
++        registry_queue_init::<State>(&conn).context("failed to read Wayland globals")?;
++    let qh = queue.handle();
++    let mut state = State::default();
++
++    let output_globals: Vec<(u32, u32)> = globals.contents().with_list(|list| {
++        list.iter()
++            .filter(|global| global.interface == "wl_output")
++            .map(|global| (global.name, global.version))
++            .collect()
++    });
++    let registry = globals.registry();
++    let mut wl_outputs = Vec::with_capacity(output_globals.len());
++    for (index, (name, version)) in output_globals.into_iter().enumerate() {
++        state.outputs.push(OutputInfo::default());
++        wl_outputs.push(registry.bind::<wl_output::WlOutput, _, _>(
++            name,
++            version.min(4),
++            &qh,
++            index,
++        ));
++    }
++
++    let xdg_manager = globals
++        .bind::<ZxdgOutputManagerV1, _, _>(&qh, 1..=3, ())
++        .ok();
++    let xdg_outputs: Vec<ZxdgOutputV1> = match &xdg_manager {
++        Some(manager) => wl_outputs
++            .iter()
++            .enumerate()
++            .map(|(index, output)| manager.get_xdg_output(output, &qh, index))
++            .collect(),
++        None => Vec::new(),
++    };
++
++    queue
++        .roundtrip(&mut state)
++        .context("Wayland roundtrip for outputs failed")?;
++    queue
++        .roundtrip(&mut state)
++        .context("Wayland roundtrip for outputs failed")?;
++
++    for xdg_output in xdg_outputs {
++        xdg_output.destroy();
++    }
++    if let Some(manager) = xdg_manager {
++        manager.destroy();
++    }
++    for output in wl_outputs {
++        if output.version() >= 3 {
++            output.release();
++        }
++    }
++    let _ = conn.flush();
++
++    Ok(monitors_json(&state.outputs))
++}
++
++/// Convert enumerated outputs into Hyprland's monitor JSON shape. Outputs
++/// without a name or current mode are skipped.
++pub(crate) fn monitors_json(outputs: &[OutputInfo]) -> Value {
++    Value::Array(
++        outputs
++            .iter()
++            .filter_map(|info| {
++                let name = info.name.as_ref()?;
++                let (width, height) = info.mode?;
++                let (x, y) = info.logical_position.unwrap_or((0, 0));
++                // Fractional scale is physical width over logical width
++                // (in the output's transformed orientation); wl_output's
++                // integer scale is only the rounded-up hint.
++                let transformed_width = if info.rotated { height } else { width };
++                let scale = match info.logical_size {
++                    Some((logical_w, _)) if logical_w > 0 => {
++                        f64::from(transformed_width) / f64::from(logical_w)
++                    }
++                    _ => f64::from(info.integer_scale.max(1)),
++                };
++                Some(json!({
++                    "name": name,
++                    "x": x,
++                    "y": y,
++                    "width": width,
++                    "height": height,
++                    "scale": scale,
++                }))
++            })
++            .collect(),
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn dp1() -> OutputInfo {
++        // The arbor desktop: 5120x2160 panel at scale 4/3 (3840x1620 logical).
++        OutputInfo {
++            name: Some("DP-1".into()),
++            mode: Some((5120, 2160)),
++            rotated: false,
++            integer_scale: 2,
++            logical_position: Some((0, 0)),
++            logical_size: Some((3840, 1620)),
++        }
++    }
++
++    #[test]
++    fn fractional_scale_comes_from_logical_size() {
++        let monitors = monitors_json(&[dp1()]);
++        let m = &monitors[0];
++        assert_eq!(m["name"], "DP-1");
++        assert_eq!(m["width"], 5120);
++        assert_eq!(m["height"], 2160);
++        assert_eq!(m["x"], 0);
++        let scale = m["scale"].as_f64().unwrap();
++        assert!((scale - 4.0 / 3.0).abs() < 1e-9, "scale {scale}");
++    }
++
++    #[test]
++    fn unnamed_or_modeless_outputs_are_skipped_and_integer_scale_is_fallback() {
++        let unnamed = OutputInfo {
++            name: None,
++            ..dp1()
++        };
++        let modeless = OutputInfo {
++            name: Some("HDMI-A-1".into()),
++            mode: None,
++            ..dp1()
++        };
++        let no_xdg = OutputInfo {
++            name: Some("eDP-1".into()),
++            mode: Some((2880, 1800)),
++            rotated: false,
++            integer_scale: 2,
++            logical_position: None,
++            logical_size: None,
++        };
++        let monitors = monitors_json(&[unnamed, modeless, no_xdg]);
++        let arr = monitors.as_array().unwrap();
++        assert_eq!(arr.len(), 1);
++        assert_eq!(arr[0]["name"], "eDP-1");
++        assert_eq!(arr[0]["scale"].as_f64(), Some(2.0));
++    }
++
++    #[test]
++    fn rotated_output_scale_uses_transformed_width() {
++        let rotated = OutputInfo {
++            name: Some("DP-2".into()),
++            mode: Some((3840, 2160)),
++            rotated: true,
++            integer_scale: 2,
++            logical_position: Some((3840, 0)),
++            logical_size: Some((1080, 1920)),
++        };
++        let monitors = monitors_json(&[rotated]);
++        assert_eq!(monitors[0]["scale"].as_f64(), Some(2.0));
++        assert_eq!(monitors[0]["x"], 3840);
++    }
++
++    #[test]
++    fn arbor_output_feeds_the_input_layout_in_physical_pixels() {
++        // The virtual pointer is bound to the output and its absolute extents
++        // are the output's physical size; the compositor maps x/x_extent onto
++        // the output's logical rectangle, so scale 4/3 needs no correction.
++        let monitors = monitors_json(&[dp1()]);
++        let layout = crate::input::layout_from_monitors_for_test(&monitors, "DP-1").unwrap();
++        assert_eq!(layout, (5120, 2160, 5120, 2160, 0, 0));
++    }
++}
