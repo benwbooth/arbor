@@ -125,6 +125,10 @@ pub(super) struct ExposeUi<Id> {
     /// Outline elements (GPU-drawn, so they resize with the animation for free), reused across
     /// frames to keep their ids stable for damage tracking.
     outlines: RefCell<Vec<BorderRenderElement>>,
+    /// The texture last shown in each workspace thumbnail's place (by workspace index). While a
+    /// thumbnail's new look (hovered, a window moved...) is still being drawn, the old one stays
+    /// on screen instead of the thumbnail blinking out for a frame or two.
+    shown_thumbs: RefCell<HashMap<usize, TexKey>>,
     dim: RefCell<SolidColorBuffer>,
 }
 
@@ -137,6 +141,7 @@ impl<Id> Default for ExposeUi<Id> {
             in_flight: RefCell::new(HashSet::new()),
             drawn: Arc::new(Mutex::new(Vec::new())),
             outlines: RefCell::new(Vec::new()),
+            shown_thumbs: RefCell::new(HashMap::new()),
             dim: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
         }
     }
@@ -545,9 +550,22 @@ impl<W: LayoutElement> Monitor<W> {
                 hover_thumb == Some(idx) || drop_target == Some(idx),
                 idx + 1 == self.workspaces.len(),
             );
-            if let Some(elem) =
-                self.expose_texture(ctx.renderer, TexKey::Thumb(key), rect.loc, alpha)
-            {
+            let key = TexKey::Thumb(key);
+            let ready = self.expose_texture(ctx.renderer, key.clone(), rect.loc, alpha);
+            let mut shown = self.expose.shown_thumbs.borrow_mut();
+            let elem = match ready {
+                Some(elem) => {
+                    shown.insert(idx, key);
+                    Some(elem)
+                }
+                // Not drawn yet: the previous look stands in (and stays cached meanwhile).
+                None => shown
+                    .get(&idx)
+                    .filter(|old| self.expose.textures.borrow().contains_key(*old))
+                    .cloned()
+                    .and_then(|old| self.expose_texture(ctx.renderer, old, rect.loc, alpha)),
+            };
+            if let Some(elem) = elem {
                 push(tex_elem(elem));
             }
         }
