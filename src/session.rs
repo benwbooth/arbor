@@ -899,6 +899,7 @@ impl State {
             Timer::from_duration(Duration::from_millis(100)),
             move |_, _, state| {
                 state.restart_save();
+                crate::utils::xwayland::satellite::stop_for_restart();
                 crate::supervisor::request_reload(path.as_deref());
                 state.arbor.stop_signal.stop();
                 TimeoutAction::Drop

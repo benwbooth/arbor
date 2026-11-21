@@ -3,6 +3,7 @@ use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 
 use calloop::channel::Sender;
@@ -112,7 +113,9 @@ fn test_ondemand(path: &str) -> bool {
         }
     };
 
-    let status = match child.wait() {
+    let status = child.wait();
+    RUNNING_PID.store(0, Ordering::SeqCst);
+    let status = match status {
         Ok(status) => status,
         Err(err) => {
             warn!("error waiting for xwayland-satellite, disabling integration: {err}");
@@ -267,6 +270,26 @@ fn spawn(path: String, xwl: &Satellite) {
     }
 }
 
+/// Pid of the running xwayland-satellite, 0 if none.
+static RUNNING_PID: AtomicI32 = AtomicI32::new(0);
+
+/// Ends xwayland-satellite before arbor exits for an in-place restart (supervisor.rs): it can't
+/// outlive the compositor, and losing the Wayland connection mid-write made it panic. The X11
+/// sockets stay with the supervisor, so the next compositor starts a new one on demand.
+pub fn stop_for_restart() {
+    let pid = RUNNING_PID.load(Ordering::SeqCst);
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: plain kill() of our child.
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    // A moment to exit while the Wayland connection is still up.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    while RUNNING_PID.load(Ordering::SeqCst) == pid && std::time::Instant::now() < deadline {
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn spawn_and_wait(
     path: &Path,
     mut process: Command,
@@ -314,6 +337,7 @@ fn spawn_and_wait(
     // The process spawned, we can drop our fds.
     drop(abstract_fd);
     drop(unix_fd);
+    RUNNING_PID.store(child.id() as i32, Ordering::SeqCst);
 
     let status = match child.wait() {
         Ok(status) => status,

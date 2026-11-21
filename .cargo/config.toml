@@ -1,0 +1,22 @@
+# Link libEGL and libwayland-client so that dlopen() finds them at run time
+# (the same flags as the Nix package's RUSTFLAGS). The dev shell's
+# CARGO_BUILD_RUSTFLAGS isn't enough: target rustflags in a user's
+# ~/.cargo/config.toml (e.g. for mold) take precedence over build rustflags,
+# and the build then panics with NoWaylandLib outside `nix develop`. Target
+# rustflags from several config files are joined, so this adds to those.
+# (RUSTFLAGS in the environment, as in the Nix build, overrides this file.)
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--push-state,--no-as-needed",
+    "-C", "link-arg=-lEGL",
+    "-C", "link-arg=-lwayland-client",
+    "-C", "link-arg=-Wl,--pop-state",
+]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-Wl,--push-state,--no-as-needed",
+    "-C", "link-arg=-lEGL",
+    "-C", "link-arg=-lwayland-client",
+    "-C", "link-arg=-Wl,--pop-state",
+]
