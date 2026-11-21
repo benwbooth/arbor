@@ -421,8 +421,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let window_size = self.window_size();
         let radius = self
-            .window
-            .geometry_corner_radius()
+            .window_corner_radius()
             .fit_to(window_size.w as f32, window_size.h as f32);
         self.rounded_corner_damage.set_corner_radius(radius);
     }
@@ -774,6 +773,22 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     /// arbor: height of the title bar outside fullscreen (0 when the window has none).
+    /// arbor: the corner radius the window's own surface is clipped to. Under a title bar its top
+    /// corners are square: the title bar above rounds the tile's top corners, and rounding the
+    /// window again showed a second pair of corners just below the title bar's.
+    fn window_corner_radius(&self) -> CornerRadius {
+        let radius = self.window.geometry_corner_radius();
+        if self.title_bar_height() > 0. {
+            CornerRadius {
+                top_left: 0.,
+                top_right: 0.,
+                ..radius
+            }
+        } else {
+            radius
+        }
+    }
+
     pub fn title_bar_height_nonfullscreen(&self) -> f64 {
         if self.has_title_bar {
             round_logical_in_physical_max1(self.scale, self.options.layout.title_bars.height)
@@ -1173,8 +1188,7 @@ impl<W: LayoutElement> Tile<W> {
         // that submit a full-sized buffer before acking the fullscreen state (Firefox).
         let clip_to_geometry = fullscreen_progress < 1. && rules.clip_to_geometry == Some(true);
         let radius = self
-            .window
-            .geometry_corner_radius()
+            .window_corner_radius()
             .scaled_by(1. - expanded_progress as f32);
 
         // Popups go on top, whether it's resize or not.
