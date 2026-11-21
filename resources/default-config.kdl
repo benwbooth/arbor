@@ -1,11 +1,10 @@
 // This config is in the KDL format: https://kdl.dev
 // "/-" comments out the following node.
-// Check the wiki for a full description of the configuration:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Introduction.md
+// ARBOR.md in the arbor repository describes the layout and every option:
+// https://github.com/benwbooth/arbor/blob/main/ARBOR.md
+// "arbor validate" checks this file without starting the compositor.
 
 // Input device configuration.
-// Find the full list of options on the wiki:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Input.md
 input {
     keyboard {
         xkb {
@@ -65,15 +64,12 @@ input {
     // warp-mouse-to-focus
 
     // Focus windows and outputs automatically when moving the mouse into them.
-    // Setting max-scroll-amount="0%" makes it work only on windows already fully on screen.
-    // focus-follows-mouse max-scroll-amount="0%"
+    // focus-follows-mouse
 }
 
 // You can configure outputs by their name, which you can find
 // by running `arbor msg outputs` while inside a arbor instance.
 // The built-in laptop monitor is usually called "eDP-1".
-// Find more information on the wiki:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Outputs.md
 // Remember to uncomment the node by removing "/-"!
 /-output "eDP-1" {
     // Uncomment this line to disable this output.
@@ -107,8 +103,6 @@ input {
 }
 
 // Settings that influence how windows are positioned and sized.
-// Find more information on the wiki:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Layout.md
 layout {
     // Set gaps around windows in logical pixels.
     gaps 16
@@ -129,7 +123,7 @@ layout {
     // You can also customize the heights that "switch-preset-window-height" (Mod+Ctrl+Shift+R) toggles between.
     // preset-window-heights { }
 
-    // You can change the default width of the new windows.
+    // You can change the default width of new floating windows.
     default-column-width { proportion 0.5; }
     // If you leave the brackets empty, the windows themselves will decide their initial width.
     // default-column-width {}
@@ -172,7 +166,7 @@ layout {
         // The angle is the same as in linear-gradient, and is optional,
         // defaulting to 180 (top-to-bottom gradient).
         // You can use any CSS linear-gradient tool on the web to set these up.
-        // Changing the color space is also supported, check the wiki for more info.
+        // Changing the color space is also supported, e.g. in="oklch longer hue".
         //
         // active-gradient from="#80c8ff" to="#c7ff7f" angle=45
 
@@ -286,8 +280,6 @@ screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
 // screenshot-path null
 
 // Animation settings.
-// The wiki explains how to configure individual animations:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Animations.md
 animations {
     // Uncomment to turn off all animations.
     // off
@@ -297,8 +289,6 @@ animations {
 }
 
 // Window rules let you adjust behavior for individual windows.
-// Find more information on the wiki:
-// https://github.com/benwbooth/arbor/blob/main/docs/wiki/Configuration:-Window-Rules.md
 
 // Work around WezTerm's initial configure bug
 // by setting an empty default-column-width.
@@ -413,8 +403,8 @@ binds {
     Mod+Ctrl+K     { move-window-up; }
     Mod+Ctrl+L     { move-column-right; }
 
-    // Alternative commands that move across workspaces when reaching
-    // the first or last window in a column.
+    // Alternative commands that move across workspaces when there is
+    // no docked window further in that direction.
     // Mod+J     { focus-window-or-workspace-down; }
     // Mod+K     { focus-window-or-workspace-up; }
     // Mod+Ctrl+J     { move-window-down-or-to-workspace-down; }
@@ -532,15 +522,14 @@ binds {
     // Switches focus between the current and the previous workspace.
     // Mod+Tab { focus-workspace-previous; }
 
-    // The following binds move the focused window in and out of a column.
-    // If the window is alone, they will consume it into the nearby column to the side.
-    // If the window is already in a column, they will expel it out.
+    // Stack the focused docked window below its neighbour on that side,
+    // or, if it is already in a vertical stack, move it out beside the stack.
     Mod+BracketLeft  { consume-or-expel-window-left; }
     Mod+BracketRight { consume-or-expel-window-right; }
 
-    // Consume one window from the right to the bottom of the focused column.
+    // Stack the right neighbour below the focused window.
     Mod+Comma  { consume-window-into-column; }
-    // Expel the bottom window from the focused column to the right.
+    // Move the focused window out of its vertical stack, to the right.
     Mod+Period { expel-window-from-column; }
 
     // Cycle through widths set in preset-column-widths.

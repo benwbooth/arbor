@@ -14,8 +14,8 @@ A Wayland compositor with a **nested docking layout under a zoomable camera**.
   decorated apps, the KDE appmenu protocol for a global menu bar, per-output
   EDID colour correction and HDR for SDR content.
 
-See [ARBOR.md](ARBOR.md) for the design, the full feature list and the
-config options.
+See [ARBOR.md](ARBOR.md) for the design, the full feature list, a config
+and actions guide, and a map of the code.
 
 ## Names
 
@@ -59,7 +59,8 @@ nix build .#arbor
 
 ## Credits
 
-arbor is a fork of [niri](https://github.com/YaLTeR/niri) by Ivan
-Molodetskikh and contributors, and keeps its IPC protocol, most of its
-config format and its wiki (`docs/wiki`, which still describes upstream's
-scrollable-tiling layout). Licensed GPL-3.0-or-later, like upstream.
+arbor is derived from [niri](https://github.com/YaLTeR/niri) by Ivan
+Molodetskikh and contributors (forked at v26.04; it is now developed
+independently and no longer tracks upstream). It keeps niri's IPC protocol
+and most of its config format, and the copyright notices of the code it
+inherited. Licensed GPL-3.0-or-later, like niri; see [LICENSE](LICENSE).

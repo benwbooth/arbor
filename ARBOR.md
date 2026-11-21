@@ -1,27 +1,27 @@
 # arbor
 
-A fork of [niri](https://github.com/YaLTeR/niri) (v26.04) that replaces
-scrollable tiling with a **nested docking layout under a zoomable camera**.
-It's an original window manager built around docking, nesting, and zooming.
-
-Upstream is the `upstream` remote. Rebase `main` onto new niri tags; keep
-arbor changes in new files where possible so rebases stay small.
+A Wayland compositor with a **nested docking layout under a zoomable
+camera**: an original window manager built around docking, nesting and
+zooming. It started as a fork of [niri](https://github.com/YaLTeR/niri)
+(v26.04) by Ivan Molodetskikh and contributors and is now developed on its
+own: it no longer follows upstream, and niri's scrollable tiling is gone.
+It keeps niri's IPC protocol and most of its config format.
 
 ## Names
 
-arbor is fully rebranded for users and other programs; only internal names
-(the `niri` package/library crate, `arbor-config`, `arbor-ipc`, `niri::` paths,
-source file names, tracing targets, shader uniform names) stay niri's so
-rebases stay small.
+The crates are `arbor` (compositor binary and library), `arbor-config` and
+`arbor-ipc`. Names that other programs rely on stay niri's: the
+`$NIRI_SOCKET` export (below), the IPC protocol itself, and the `niri_*`
+uniform names available to custom shaders.
 
 | What | Name |
 | --- | --- |
-| Binary | `arbor` (the Cargo package is still `niri`; `[[bin]] name = "arbor"`). `arbor msg`, `arbor validate`, `arbor --session`, `arbor completions`. No `niri` binary. |
+| Binary | `arbor`: `arbor msg`, `arbor validate`, `arbor --session`, `arbor completions`. No `niri` binary. |
 | Session | `bin/arbor-session` (starts `arbor.service`), user units `arbor.service` and `arbor-shutdown.target`, `share/wayland-sessions/arbor.desktop` (`DesktopNames=arbor`, so `XDG_CURRENT_DESKTOP=arbor`; `arbor --session` also sets it) |
 | Portals | `share/xdg-desktop-portal/arbor-portals.conf`; on NixOS `xdg.portal.config.arbor` |
 | Config | `$XDG_CONFIG_HOME/arbor/config.kdl`, override with `--config` or `$ARBOR_CONFIG`; system-wide fallback `/etc/arbor/config.kdl`. The default config is written there on first run. |
 | IPC | `$XDG_RUNTIME_DIR/arbor.<wayland-display>.<pid>.sock`, exported as `$ARBOR_SOCKET`. `$NIRI_SOCKET` is exported with the same path so tools with niri IPC support (waybar's niri modules, Quickshell, ...) keep working; `arbor msg` reads `$ARBOR_SOCKET` first, then `$NIRI_SOCKET`. The protocol is niri's. |
-| Env | `ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY=1` skips the systemd/fd ready notification. Spawned apps get transient scopes `app-arbor-*.scope`. |
+| Env | `ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY=1` skips the systemd/fd ready notification. Spawned apps get transient scopes `app-arbor-*.scope`. Build time: `ARBOR_BUILD_COMMIT` / `ARBOR_BUILD_VERSION_STRING` set the version string. |
 | Nix | `packages.<system>.arbor` (= `default`, plus `arbor-debug`), `overlays.default` adds `pkgs.arbor`, `nixosModules.arbor` (= `default`) provides `programs.arbor = { enable; package; useNautilus; }` |
 
 D-Bus names that clients depend on (`org.gnome.Mutter.*`,
@@ -40,14 +40,14 @@ set the Secret portal yourself) and `xdg.portal.config.niri` with
 
 ## Model
 
-- A workspace holds a **dock tree** plus niri's existing floating space
+- A workspace holds a **dock tree** plus a floating space
   (the "Desktop": windows float freely there).
 - Dock tree nodes are `Split { axis, children, fractions }` or `Leaf(Tile)`.
   Children of a split never overlap; dividers sit in the gaps.
 - **Nothing moves until you dock something.** New windows open floating
   (on the Desktop) unless a window rule says `open-docked`.
 - **Docking by drag:** drag a window by its title bar (client-side move
-  requests work in niri) over:
+  requests work too) over:
   - the edge band of a docked window: it docks beside that window
     (splitting it along that axis, or joining the parent split when the
     axes match);
@@ -101,10 +101,9 @@ Control and KDE's Overview instead of niri's zoomed-out workspace strip:
 | Click empty space, Escape, or the overview key again | Leave the overview |
 
 IPC (`OverviewState`, `OverviewOpenedOrClosed`) and the action names are
-niri's, so shells and binds keep working. Workspaces no longer zoom out
-(`compute_overview_zoom` is 1); the `overview { zoom }` setting has no
-effect. Touch: tapping a window or empty space works; dragging by touch
-still uses niri's interactive move (full size).
+niri's, so shells and binds keep working. Workspaces never zoom out (the
+`overview { zoom }` setting is gone). Touch: tapping a window or empty space works; dragging by touch
+still uses the plain interactive move (full size).
 
 ## Camera (milestone 2)
 
@@ -256,12 +255,74 @@ window-rule {
 With title bars on, the decoration globals are offered to clients even
 without `prefer-no-csd`, so that Qt stops drawing its own bar.
 
+## Configuration
+
+The config is KDL (`$XDG_CONFIG_HOME/arbor/config.kdl`); arbor writes a
+commented default there on first run (`resources/default-config.kdl` in this
+repo) and reloads the file live when it changes. `arbor validate [-c FILE]`
+checks a config without starting anything. `include "other.kdl"` (and
+`include optional=true "..."`) splices in other files.
+
+Top-level sections, mostly as in niri:
+
+| Section | What |
+| --- | --- |
+| `input` | keyboard (xkb, repeat, numlock), touchpad, mouse, trackpoint, tablet, touch; `focus-follows-mouse`, `warp-mouse-to-focus`, `workspace-auto-back-and-forth`, `mod-key` |
+| `output "NAME"` | `mode`, `scale`, `transform`, `position`, `variable-refresh-rate`, `off`; arbor: `color-profile`, `hdr { ... }` (see Colour management) |
+| `layout` | `gaps`, `struts`, `focus-ring`, `border`, `shadow`, `tab-indicator` (tab groups), `insert-hint` (drag-to-dock preview), `preset-column-widths` / `preset-window-heights` (what `switch-preset-*` cycles through), `default-column-width` (new floating windows), `background-color`, `empty-workspace-above-first`; arbor: `camera { ... }`, `title-bars { ... }` |
+| `window-rule` | `match` / `exclude` on app-id, title, state; `open-floating`, arbor's `open-docked`, `open-maximized`, `open-fullscreen`, `open-on-output` / `open-on-workspace`, sizes, `geometry-corner-radius`, `clip-to-geometry`, `opacity`, `block-out-from`, `title-bar false`, ... |
+| `layer-rule` | the same idea for layer-shell surfaces (panels, wallpapers) |
+| `binds` | key, mouse button, wheel and touchpad-scroll binds to actions (below) |
+| `animations`, `gestures` (hot corners, DnD workspace switch), `overview`, `cursor`, `environment`, `spawn-at-startup` / `spawn-sh-at-startup`, `workspace "name"`, `screenshot-path`, `hotkey-overlay`, `clipboard`, `prefer-no-csd`, `xwayland-satellite`, `debug` | as in niri |
+
+Actions (for `binds` and `arbor msg action ...`):
+
+- **Docked windows, by direction:** `focus-column-left/right`,
+  `focus-window-up/down` (and the `-or-monitor-*`, `-or-workspace-*`
+  variants), `move-column-left/right`, `move-window-up/down`: focus or move
+  through the dock tree. `consume-or-expel-window-left/right` stack a window
+  below its neighbour or move it out of a vertical stack;
+  `consume-window-into-column`, `expel-window-from-column` likewise.
+  `swap-window-left/right`, `focus-column-first/last`, `focus-column N`
+  (Nth leaf in tree order).
+- **Sizes:** `set-column-width` / `set-window-width` and
+  `set-window-height` (`"+5%"`, `"-10"`, `"50%"`, ...) move the dividers
+  around the window; `switch-preset-*` cycle the presets;
+  `reset-window-height` equalizes a vertical stack;
+  `maximize-window-to-edges`, `fullscreen-window`,
+  `toggle-windowed-fullscreen`.
+- **Docking and floating:** `toggle-window-floating` (dock beside the last
+  focused docked window, or float), `move-window-to-floating` /
+  `move-window-to-tiling`, `focus-floating` / `focus-tiling` /
+  `switch-focus-between-floating-and-tiling`, `center-window` /
+  `center-column` (floating windows).
+- **arbor:** `minimize-window`, `restore-window`, `focus-tab-next/prev`,
+  `camera-zoom-out/in`, `camera-show-all`, `camera-frame-window`,
+  `camera-pan-left/right/up/down`, `camera-back/forward`.
+- **Workspaces, monitors, overview, screenshots, misc:** as in niri
+  (`focus-workspace`, `move-window-to-workspace`, `move-column-to-monitor-*`,
+  `toggle-overview`, `screenshot`, `spawn`, `quit`, ...). `arbor msg action
+  --help` lists every action.
+
+Removed with niri's scrolling layout (configs using them fail to load):
+the actions `focus-window-in-column`, `move-column-to-first/last/index`,
+`toggle-column-tabbed-display`, `set-column-display`,
+`center-visible-columns`, `maximize-column`,
+`expand-column-to-available-width`; the options
+`layout { center-focused-column; always-center-single-column;
+default-column-display }`, the `default-column-display` window rule,
+`gestures { dnd-edge-view-scroll }` and `overview { zoom }`.
+`focus-follows-mouse max-scroll-amount=...` still parses but has no effect.
+
 ## Code map
 
 - `src/layout/dock.rs`: DockSpace (tree, layout, render positions, hit
   testing, interactive move/resize targets).
-- `src/layout/arbor.rs`, `src/layout/workspace_arbor.rs`: arbor methods
-  on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
+- `src/layout/dock_ops.rs`, `src/layout/workspace_dock.rs`: dock-tree
+  operations on `Layout` / `Workspace` (minimize, restore, tabs, title bars,
+  camera).
+- `src/layout/sizing.rs`: column widths, working area and toplevel bounds
+  shared by the dock tree and the floating space.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
   `arbor-config/src/title_bar.rs`: server-side title bars.
 - `src/layout/icon_tile.rs`: icon tiles.
@@ -274,8 +335,11 @@ without `prefer-no-csd`, so that Qt stops drawing its own bar.
 - `src/layout/camera.rs`: camera math (framing, panning, history);
   `src/input/camera.rs`: pinch and zoomed clicks.
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
-- `src/layout/workspace.rs`: holds `DockSpace` where niri held
-  `ScrollingSpace`.
+- `src/layout/workspace.rs`: a workspace: the `DockSpace` (`dock`) and the
+  `FloatingSpace` (the Desktop).
+- `src/arbor.rs`: compositor state (`State`, `Arbor`); `src/input/`: input
+  handling and bind dispatch; `arbor-config/`: config parsing;
+  `arbor-ipc/`: IPC types.
 - `src/protocols/kde_appmenu.rs`: server side of `org_kde_kwin_appmenu`.
   The menu's DBus address shows up as `app_menu` on IPC windows
   (`WindowOpenedOrChanged` fires when it changes). Qt only exports its menu
