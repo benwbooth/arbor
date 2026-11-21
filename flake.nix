@@ -135,7 +135,11 @@
             ''
             + lib.optionalString withSystemd ''
               install -Dm755 resources/niri-session $out/bin/niri-session
-              install -Dm644 resources/niri{.service,-shutdown.target} -t $out/share/systemd/user
+              # lib/systemd/user is where NixOS's systemd.packages looks (a
+              # unit only under share/ left NixOS's drop-in as the whole
+              # niri.service, with no ExecStart, and the session died at
+              # login). nixpkgs' fixup moves it to share/ and links lib/ to it.
+              install -Dm644 resources/niri{.service,-shutdown.target} -t $out/lib/systemd/user
             '';
 
           env = {
