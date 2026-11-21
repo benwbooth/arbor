@@ -151,6 +151,7 @@ use crate::protocols::kde_appmenu::KdeAppmenuManagerState;
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
+use crate::protocols::toplevel_export::ToplevelExportManagerState;
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
@@ -283,6 +284,7 @@ pub struct Arbor {
     pub foreign_toplevel_state: ForeignToplevelManagerState,
     pub ext_workspace_state: ExtWorkspaceManagerState,
     pub screencopy_state: ScreencopyManagerState,
+    pub toplevel_export_state: ToplevelExportManagerState,
     pub output_management_state: OutputManagementManagerState,
     pub viewporter_state: ViewporterState,
     pub background_effect_state: BackgroundEffectState,
@@ -2367,6 +2369,8 @@ impl Arbor {
         output_management_state.on_config_changed(config_.outputs.clone());
         let screencopy_state =
             ScreencopyManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
+        let toplevel_export_state =
+            ToplevelExportManagerState::new::<State, _>(&display_handle, client_is_unrestricted);
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let background_effect_state = BackgroundEffectState::new::<State>(&display_handle);
         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
@@ -2554,6 +2558,7 @@ impl Arbor {
             ext_workspace_state,
             output_management_state,
             screencopy_state,
+            toplevel_export_state,
             viewporter_state,
             background_effect_state,
             xdg_foreign_state,
@@ -4836,6 +4841,7 @@ impl Arbor {
             }
 
             self.render_for_screencopy_with_damage(renderer, output);
+            self.render_pending_toplevel_exports(renderer);
         });
     }
 

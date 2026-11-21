@@ -260,6 +260,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols-plasma",
+ "wayland-protocols-wlr",
  "wayland-scanner",
  "wayland-server",
  "xcursor",

@@ -298,6 +298,24 @@ pub fn render_to_dmabuf(
     Ok(res.sync)
 }
 
+/// Renders `elements` (front to back as given, so pass them reversed from render order) into a
+/// dmabuf, clearing it first.
+pub fn render_elements_to_dmabuf(
+    renderer: &mut GlesRenderer,
+    mut dmabuf: Dmabuf,
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+    elements: impl Iterator<Item = impl RenderElement<GlesRenderer>>,
+) -> anyhow::Result<SyncPoint> {
+    let _span = tracy_client::span!();
+    ensure!(
+        dmabuf.width() == size.w as u32 && dmabuf.height() == size.h as u32,
+        "invalid buffer size"
+    );
+    let mut target = renderer.bind(&mut dmabuf).context("error binding dmabuf")?;
+    render_elements(renderer, &mut target, size, scale, Transform::Normal, elements)
+}
+
 pub fn render_to_shm(
     renderer: &mut GlesRenderer,
     damage_tracker: &mut OutputDamageTracker,

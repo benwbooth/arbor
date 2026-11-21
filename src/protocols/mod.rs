@@ -5,6 +5,7 @@ pub mod kde_appmenu;
 pub mod mutter_x11_interop;
 pub mod output_management;
 pub mod screencopy;
+pub mod toplevel_export;
 pub mod virtual_pointer;
 
 pub mod raw;
