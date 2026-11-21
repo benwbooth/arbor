@@ -7,6 +7,37 @@ It's an original window manager built around docking, nesting, and zooming.
 Upstream is the `upstream` remote. Rebase `main` onto new niri tags; keep
 arbor changes in new files where possible so rebases stay small.
 
+## Names
+
+arbor is fully rebranded for users and other programs; only internal names
+(the `niri` package/library crate, `niri-config`, `niri-ipc`, `niri::` paths,
+source file names, tracing targets, shader uniform names) stay niri's so
+rebases stay small.
+
+| What | Name |
+| --- | --- |
+| Binary | `arbor` (the Cargo package is still `niri`; `[[bin]] name = "arbor"`). `arbor msg`, `arbor validate`, `arbor --session`, `arbor completions`. No `niri` binary. |
+| Session | `bin/arbor-session` (starts `arbor.service`), user units `arbor.service` and `arbor-shutdown.target`, `share/wayland-sessions/arbor.desktop` (`DesktopNames=arbor`, so `XDG_CURRENT_DESKTOP=arbor`; `arbor --session` also sets it) |
+| Portals | `share/xdg-desktop-portal/arbor-portals.conf`; on NixOS `xdg.portal.config.arbor` |
+| Config | `$XDG_CONFIG_HOME/arbor/config.kdl`, override with `--config` or `$ARBOR_CONFIG`; system-wide fallback `/etc/arbor/config.kdl`. The default config is written there on first run. |
+| IPC | `$XDG_RUNTIME_DIR/arbor.<wayland-display>.<pid>.sock`, exported as `$ARBOR_SOCKET`. `$NIRI_SOCKET` is exported with the same path so tools with niri IPC support (waybar's niri modules, Quickshell, ...) keep working; `arbor msg` reads `$ARBOR_SOCKET` first, then `$NIRI_SOCKET`. The protocol is niri's. |
+| Env | `ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY=1` skips the systemd/fd ready notification. Spawned apps get transient scopes `app-arbor-*.scope`. |
+| Nix | `packages.<system>.arbor` (= `default`, plus `arbor-debug`), `overlays.default` adds `pkgs.arbor`, `nixosModules.arbor` (= `default`) provides `programs.arbor = { enable; package; useNautilus; }` |
+
+D-Bus names that clients depend on (`org.gnome.Mutter.*`,
+`org.gnome.Shell.*`) and Wayland protocol names are unchanged.
+
+There is no fallback to niri's config location. To move an old config:
+
+```sh
+mkdir -p ~/.config/arbor && mv ~/.config/niri/config.kdl ~/.config/arbor/
+```
+
+(plus any files it `include`s). On NixOS replace `programs.niri` with
+`programs.arbor` from this flake's module (it does not enable GNOME Keyring;
+set the Secret portal yourself) and `xdg.portal.config.niri` with
+`xdg.portal.config.arbor`.
+
 ## Model
 
 - A workspace holds a **dock tree** plus niri's existing floating space
@@ -165,7 +196,8 @@ layout {
    - [x] resting ~400 ms over the middle of a docked window arms the tab
      drop (floating and docked drags)
 4. KDE appmenu protocol for hearth's global menu bar.
-5. NixOS session + hearth backend for niri IPC.
+5. NixOS session (`nixosModules.arbor`, done) + hearth backend on the
+   (niri-compatible) IPC.
 
 ## Colour management
 
