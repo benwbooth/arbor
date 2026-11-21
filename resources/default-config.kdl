@@ -288,6 +288,24 @@ animations {
     // slowdown 3.0
 }
 
+// Liquid glass: shells (like hearth) register glass shapes under their panels, menus and dock
+// over IPC; arbor draws what is behind them refracted through a lens, blurred and tinted.
+// These are the defaults every shape starts from (see ARBOR.md, "Liquid glass").
+glass {
+    // off
+    // strength 1.0          // scales everything below at once (0..1)
+    // refraction 0.8        // bending at the rim (0..1)
+    // bezel 0               // width of the bending band in px; 0 = the corner radius
+    // dispersion 0.12       // colour fringes where it bends (0..1)
+    // blur-radius 8         // regular glass (menus, dock)
+    // clear-blur-radius 1   // clear glass (over media)
+    // saturation 1.6
+    // clear-saturation 1.3
+    // rim 0.7               // specular highlight on the rim (0..1)
+    // tint "#ffffff0c"
+    // clear-tint "#00000014"
+}
+
 // Window rules let you adjust behavior for individual windows.
 
 // Work around WezTerm's initial configure bug

@@ -11,6 +11,7 @@ pub mod cursor;
 #[cfg(feature = "dbus")]
 pub mod dbus;
 pub mod frame_clock;
+pub mod glass;
 pub mod handlers;
 pub mod input;
 pub mod ipc;

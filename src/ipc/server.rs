@@ -451,6 +451,17 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let is_open = state.overview.is_open;
             Response::OverviewState(Overview { is_open })
         }
+        Request::SetGlass(req) => {
+            req.validate()?;
+
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                state.arbor.set_glass(req);
+                let _ = tx.send_blocking(());
+            });
+            let _ = rx.recv().await;
+            Response::Handled
+        }
         Request::Casts => {
             let state = ctx.event_stream_state.borrow();
             let casts = state.casts.casts.values().cloned().collect();

@@ -49,6 +49,32 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
+        Msg::Glass {
+            namespace,
+            output,
+            popup,
+            key,
+            shapes,
+            variant,
+            strength,
+            blur_radius,
+        } => Request::SetGlass(arbor_ipc::SetGlass {
+            namespace: namespace.clone(),
+            output: output.clone(),
+            popup: *popup,
+            key: key.clone(),
+            surface_size: None,
+            shapes: shapes
+                .iter()
+                .cloned()
+                .map(|mut s| {
+                    s.params.variant = *variant;
+                    s.params.strength = *strength;
+                    s.params.blur_radius = *blur_radius;
+                    s
+                })
+                .collect(),
+        }),
     };
 
     let mut socket = Socket::connect().context("error connecting to the arbor socket")?;
@@ -317,7 +343,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("No color was picked.");
             }
         }
-        Msg::Action { .. } => {
+        Msg::Action { .. } | Msg::Glass { .. } => {
             let Response::Handled = response else {
                 bail!("unexpected response: expected Handled, got {response:?}");
             };

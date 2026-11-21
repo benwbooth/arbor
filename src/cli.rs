@@ -110,6 +110,36 @@ pub enum Msg {
     OverviewState,
     /// List screencasts.
     Casts,
+    /// Set liquid glass shapes under a layer-shell surface (for testing; shells use IPC).
+    ///
+    /// Each --shape is X,Y,WIDTH,HEIGHT[,RADIUS] in the surface's logical coordinates. Without
+    /// --shape the target's shapes are cleared.
+    Glass {
+        /// Layer-shell namespace of the surface (see `arbor msg layers`).
+        #[arg(long)]
+        namespace: String,
+        /// Only the surface on this output.
+        #[arg(long)]
+        output: Option<String>,
+        /// Target the surface's pop-ups instead.
+        #[arg(long)]
+        popup: bool,
+        /// Key to keep several shape lists per namespace apart.
+        #[arg(long, default_value = "")]
+        key: String,
+        /// A shape: X,Y,WIDTH,HEIGHT[,RADIUS]. Repeat for several.
+        #[arg(long = "shape")]
+        shapes: Vec<arbor_ipc::GlassShape>,
+        /// Variant for every shape: regular or clear.
+        #[arg(long)]
+        variant: Option<arbor_ipc::GlassVariant>,
+        /// Strength 0..1 for every shape.
+        #[arg(long)]
+        strength: Option<f64>,
+        /// Blur radius (logical px) for every shape.
+        #[arg(long)]
+        blur_radius: Option<f64>,
+    },
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]

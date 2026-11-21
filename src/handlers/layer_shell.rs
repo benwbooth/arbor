@@ -60,11 +60,12 @@ impl WlrLayerShellHandler for State {
             }) {
             map.unmap_layer(&layer);
             self.arbor.mapped_layer_surfaces.remove(&layer);
-            Some(output)
+            Some((output, layer.namespace().to_owned()))
         } else {
             None
         };
-        if let Some(output) = output {
+        if let Some((output, namespace)) = output {
+            self.arbor.glass_surface_gone(&namespace, &output.name());
             self.arbor.output_resized(&output);
         }
     }
@@ -111,6 +112,8 @@ impl State {
         let layer = map
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
             .unwrap();
+        // arbor: set when this commit unmapped the surface, for its glass shapes.
+        let mut unmapped_namespace = None;
 
         if is_mapped(surface) {
             let was_unmapped = self.arbor.unmapped_layer_surfaces.remove(surface);
@@ -186,6 +189,7 @@ impl State {
                 // A mapped surface got unmapped via a null commit. Now it needs to do a new
                 // initial commit again.
                 self.arbor.unmapped_layer_surfaces.insert(surface.clone());
+                unmapped_namespace = Some(layer.namespace().to_owned());
             } else {
                 // An unmapped surface remains unmapped. If we haven't sent an initial configure
                 // yet, we should do so.
@@ -213,6 +217,13 @@ impl State {
         }
 
         drop(map);
+
+        // arbor: liquid glass follows layer surfaces mapping, unmapping and resizing.
+        if let Some(namespace) = unmapped_namespace {
+            self.arbor.glass_surface_gone(&namespace, &output.name());
+        } else if !self.arbor.glass.is_empty() {
+            self.arbor.refresh_glass();
+        }
 
         // This will call queue_redraw() inside.
         self.arbor.output_resized(&output);

@@ -10,8 +10,10 @@ use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 use super::ResolvedLayerRules;
 use crate::animation::Clock;
 use crate::arbor_render_elements;
+use crate::glass::{snap_rect, GlassInstance, PopupGlass};
 use crate::layout::shadow::Shadow;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
+use crate::render_helpers::glass::GlassElement;
 use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -45,6 +47,15 @@ pub struct MappedLayer {
     /// The blur config, passed for background effect rendering.
     blur_config: arbor_config::Blur,
 
+    /// Liquid glass defaults.
+    glass_config: arbor_config::Glass,
+
+    /// Liquid glass shapes under this surface (surface-local), set by `Arbor::refresh_glass()`.
+    glass: Vec<GlassInstance>,
+
+    /// Liquid glass shapes for this surface's pop-ups.
+    popup_glass: Vec<PopupGlass>,
+
     /// The view size for the layer surface's output.
     view_size: Size<f64, Logical>,
 
@@ -61,6 +72,7 @@ arbor_render_elements! {
         SolidColor = SolidColorRenderElement,
         Shadow = ShadowRenderElement,
         BackgroundEffect = BackgroundEffectElement,
+        Glass = GlassElement,
     }
 }
 
@@ -89,6 +101,9 @@ impl MappedLayer {
             scale,
             shadow: Shadow::new(shadow_config),
             blur_config: config.blur,
+            glass_config: config.glass,
+            glass: Vec::new(),
+            popup_glass: Vec::new(),
             clock,
         }
     }
@@ -101,6 +116,73 @@ impl MappedLayer {
         self.shadow.update_config(shadow_config);
 
         self.blur_config = config.blur;
+        self.glass_config = config.glass;
+    }
+
+    /// Replaces the glass shapes; returns whether they changed.
+    pub fn set_glass(&mut self, glass: Vec<GlassInstance>, popup_glass: Vec<PopupGlass>) -> bool {
+        let same = |a: &GlassInstance, b: &GlassInstance| {
+            a.id == b.id && a.commit == b.commit && a.rect == b.rect
+        };
+        let unchanged = self.glass.len() == glass.len()
+            && self.glass.iter().zip(&glass).all(|(a, b)| same(a, b))
+            && self.popup_glass.len() == popup_glass.len()
+            && self.popup_glass.iter().zip(&popup_glass).all(|(a, b)| {
+                a.surface_size == b.surface_size
+                    && a.shapes.len() == b.shapes.len()
+                    && a.shapes.iter().zip(&b.shapes).all(|(a, b)| same(a, b))
+            });
+        self.glass = glass;
+        self.popup_glass = popup_glass;
+        !unchanged
+    }
+
+    /// Whether this surface draws liquid glass under itself (which replaces its layer-rule
+    /// background effect and shadow).
+    pub fn has_glass(&self) -> bool {
+        !self.glass_config.off
+            && !self.glass.is_empty()
+            && self.surface.layer() != Layer::Background
+    }
+
+    /// Glass shapes for a pop-up of this surface with the given surface size.
+    fn glass_for_popup(&self, size: (f64, f64), popup_count: usize) -> Vec<&GlassInstance> {
+        if self.glass_config.off || self.popup_glass.is_empty() {
+            return Vec::new();
+        }
+        self.popup_glass
+            .iter()
+            .filter(|g| {
+                // With one pop-up open, it gets every pop-up entry (its size may lag behind).
+                popup_count == 1
+                    || g.surface_size
+                        .is_none_or(|(w, h)| (w - size.0).abs() <= 1. && (h - size.1).abs() <= 1.)
+            })
+            .flat_map(|g| g.shapes.iter())
+            .collect()
+    }
+
+    fn push_glass<R: ArborRenderer>(
+        &self,
+        shapes: &mut dyn Iterator<Item = &GlassInstance>,
+        surface_loc: Point<f64, Logical>,
+        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
+    ) {
+        for g in shapes {
+            let mut rect = g.rect;
+            rect.loc += surface_loc;
+            let geometry = snap_rect(rect, self.scale);
+            if geometry.is_empty() {
+                continue;
+            }
+            let radius = crate::glass::clamp_radius(g.radius, geometry.size);
+            let look =
+                self.glass_config
+                    .resolve(&g.params, (geometry.size.w, geometry.size.h), radius);
+            let elem =
+                GlassElement::new(g.id.clone(), g.commit, geometry, radius, look, self.scale);
+            push(elem.into());
+        }
     }
 
     pub fn update_shaders(&mut self) {
@@ -230,6 +312,13 @@ impl MappedLayer {
         }
 
         let location = location.to_physical_precise_round(scale).to_logical(scale);
+
+        // Liquid glass replaces the rectangular background effect and shadow.
+        if self.has_glass() && !should_block_out {
+            self.push_glass(&mut self.glass.iter(), location, push);
+            return;
+        }
+
         self.shadow
             .render(ctx.renderer, location, &mut |elem| push(elem.into()));
 
@@ -275,6 +364,11 @@ impl MappedLayer {
         let xray_pos = xray_pos.offset(bob_offset);
 
         let surface = self.surface.wl_surface();
+        let popup_count = if self.popup_glass.is_empty() {
+            0
+        } else {
+            PopupManager::popups_for_surface(surface).count()
+        };
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
             let popup_rules = match popup {
                 PopupKind::Xdg(_) => self.rules.popups,
@@ -296,6 +390,15 @@ impl MappedLayer {
                 Kind::ScanoutCandidate,
                 &mut |elem| push(elem.into()),
             );
+
+            if popup_count > 0 && self.surface.layer() != Layer::Background {
+                let size = popup_geo.size.to_f64();
+                let glass = self.glass_for_popup((size.w, size.h), popup_count);
+                if !glass.is_empty() {
+                    self.push_glass(&mut glass.into_iter(), surface_loc, push);
+                    continue;
+                }
+            }
 
             let geometry = Rectangle::new(location + offset.to_f64(), popup_geo.size.to_f64());
             let surface_off = popup_geo.loc.upscale(-1).to_f64();

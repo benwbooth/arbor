@@ -244,6 +244,8 @@ pub struct Arbor {
 
     /// Extra data for mapped layer surfaces.
     pub mapped_layer_surfaces: HashMap<LayerSurface, MappedLayer>,
+    /// arbor: liquid glass shapes registered over IPC.
+    pub glass: crate::glass::GlassRegistry,
 
     // Cached root surface for every surface, so that we can access it in destroyed() where the
     // normal get_parent() is cleared out.
@@ -2530,6 +2532,7 @@ impl Arbor {
             unmapped_windows: HashMap::new(),
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
+            glass: crate::glass::GlassRegistry::default(),
             root_surface: HashMap::new(),
             dmabuf_pre_commit_hook: HashMap::new(),
             blocker_cleared_tx,
@@ -4536,6 +4539,105 @@ impl Arbor {
         for buf in &xray.backdrop {
             buf.borrow_mut().elements().clear();
         }
+    }
+
+    /// arbor: applies a `SetGlass` IPC request.
+    pub fn set_glass(&mut self, req: arbor_ipc::SetGlass) {
+        if self.glass.set(req) {
+            self.refresh_glass();
+        }
+    }
+
+    /// arbor: re-resolves the registered glass shapes to the mapped layer surfaces (after the
+    /// registry or the layer surfaces changed) and redraws outputs whose glass changed.
+    pub fn refresh_glass(&mut self) {
+        let _span = tracy_client::span!("Arbor::refresh_glass");
+
+        let outputs: Vec<Output> = self.global_space.outputs().cloned().collect();
+        let mut redraw = Vec::new();
+        for output in outputs {
+            let name = output.name();
+            // (surface, namespace, logical size) of every mapped layer surface on this output.
+            let layers: Vec<(LayerSurface, String, (f64, f64))> = {
+                let map = layer_map_for_output(&output);
+                map.layers()
+                    .filter(|l| self.mapped_layer_surfaces.contains_key(*l))
+                    .map(|l| {
+                        let size = map
+                            .layer_geometry(l)
+                            .map(|g| (g.size.w as f64, g.size.h as f64))
+                            .unwrap_or_default();
+                        (l.clone(), l.namespace().to_owned(), size)
+                    })
+                    .collect()
+            };
+
+            let mut assigned: Vec<(Vec<_>, Vec<_>)> = vec![(Vec::new(), Vec::new()); layers.len()];
+            for entry in self.glass.entries() {
+                let t = &entry.target;
+                if !t.applies_to_output(&name) {
+                    continue;
+                }
+                let candidates: Vec<usize> = (0..layers.len())
+                    .filter(|&i| layers[i].1 == t.namespace)
+                    .collect();
+                if t.popup {
+                    // The size picks between pop-ups at render time.
+                    for &i in &candidates {
+                        assigned[i].1.push(crate::glass::PopupGlass {
+                            surface_size: entry.surface_size,
+                            shapes: crate::glass::instances(entry),
+                        });
+                    }
+                } else {
+                    let sizes: Vec<_> = candidates.iter().map(|&i| layers[i].2).collect();
+                    for k in crate::glass::pick_targets(entry.surface_size, &sizes) {
+                        assigned[candidates[k]]
+                            .0
+                            .extend(crate::glass::instances(entry));
+                    }
+                }
+            }
+
+            let mut changed = false;
+            for ((surface, _, _), (glass, popup_glass)) in layers.iter().zip(assigned) {
+                if let Some(mapped) = self.mapped_layer_surfaces.get_mut(surface) {
+                    changed |= mapped.set_glass(glass, popup_glass);
+                }
+            }
+            if changed {
+                redraw.push(output);
+            }
+        }
+        for output in redraw {
+            self.queue_redraw(&output);
+        }
+    }
+
+    /// arbor: forgets glass entries whose target surface (`namespace` on `output`) unmapped and
+    /// that no other mapped layer surface matches.
+    pub fn glass_surface_gone(&mut self, namespace: &str, output: &str) {
+        if self.glass.is_empty() {
+            return;
+        }
+        let mapped: Vec<(String, String)> = self
+            .global_space
+            .outputs()
+            .flat_map(|o| {
+                let map = layer_map_for_output(o);
+                let name = o.name();
+                map.layers()
+                    .filter(|l| self.mapped_layer_surfaces.contains_key(*l))
+                    .map(|l| (l.namespace().to_owned(), name.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.glass.surface_gone(namespace, output, |ns, out| {
+            mapped
+                .iter()
+                .any(|(n, o)| n == ns && out.is_none_or(|out| out == o))
+        });
+        self.refresh_glass();
     }
 
     /// Checks if any background layer surface has `block_out_from` set.

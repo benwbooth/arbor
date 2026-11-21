@@ -6,6 +6,7 @@ mod server;
 
 mod expose;
 mod floating;
+mod glass;
 mod kde_appmenu;
 mod layer_shell;
 mod remove_output;
