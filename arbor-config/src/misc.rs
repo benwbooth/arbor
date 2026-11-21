@@ -211,6 +211,30 @@ impl MergeWith<AccessibilityPart> for Accessibility {
     }
 }
 
+/// Settings for arbor's own xdg-desktop-portal backend (`arbor.portal`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Portal {
+    /// Wallpaper portal: command that sets the desktop wallpaper; the image path is appended.
+    pub wallpaper_command: Option<Vec<String>>,
+    /// Wallpaper portal: command that sets the lock screen wallpaper; the image path is
+    /// appended.
+    pub lockscreen_wallpaper_command: Option<Vec<String>>,
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, PartialEq, Eq)]
+pub struct PortalPart {
+    #[knuffel(child, unwrap(arguments))]
+    pub wallpaper_command: Option<Vec<String>>,
+    #[knuffel(child, unwrap(arguments))]
+    pub lockscreen_wallpaper_command: Option<Vec<String>>,
+}
+
+impl MergeWith<PortalPart> for Portal {
+    fn merge_with(&mut self, part: &PortalPart) {
+        merge_clone_opt!((self, part), wallpaper_command, lockscreen_wallpaper_command);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Overview {
     pub backdrop_color: Color,

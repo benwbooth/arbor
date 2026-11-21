@@ -13,6 +13,7 @@ pub mod kglobalaccel;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
 pub mod portal_global_shortcuts;
+pub mod portal_wallpaper;
 
 #[cfg(feature = "xdp-gnome-screencast")]
 pub mod mutter_screen_cast;
@@ -142,6 +143,13 @@ impl DBusServers {
 
             dbus.conn_global_shortcuts =
                 portal_global_shortcuts::start(&arbor.event_loop, &mut arbor.global_shortcuts);
+            // The rest of arbor's portal backend lives on the same connection.
+            if let Some(conn) = &dbus.conn_global_shortcuts {
+                if let Err(err) = portal_wallpaper::register(conn, &arbor.event_loop) {
+                    warn!("error starting the Wallpaper portal: {err:?}");
+                }
+            }
+
             dbus.conn_kglobalaccel =
                 kglobalaccel::start(&arbor.event_loop, &mut arbor.global_shortcuts);
 

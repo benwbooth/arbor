@@ -94,6 +94,7 @@ pub struct Config {
     pub overview: Overview,
     pub environment: Environment,
     pub xwayland_satellite: XwaylandSatellite,
+    pub portal: Portal,
     pub window_rules: Vec<WindowRule>,
     pub layer_rules: Vec<LayerRule>,
     pub binds: Binds,
@@ -213,6 +214,7 @@ where
                 "gestures" => m_merge!(gestures),
                 "overview" => m_merge!(overview),
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
+                "portal" => m_merge!(portal),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
 
