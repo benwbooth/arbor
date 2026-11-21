@@ -489,6 +489,9 @@ pub fn get_credentials_for_client(dh: &DisplayHandle, client: &Client) -> Option
     if data.credentials_unknown {
         return None;
     }
+    if let Some(credentials) = data.credentials {
+        return Some(credentials);
+    }
 
     client.get_credentials(dh).ok()
 }

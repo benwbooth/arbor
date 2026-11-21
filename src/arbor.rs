@@ -110,6 +110,7 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::wayland::xdg_foreign::XdgForeignState;
+use wayland_backend::server::Credentials;
 use wayland_server::protocol::wl_output::WlOutput;
 
 #[cfg(feature = "dbus")]
@@ -2559,8 +2560,44 @@ impl Arbor {
         let inherited_socket = create_wayland_socket
             .then(crate::supervisor::take_wayland)
             .flatten();
+        let proxy_clients = create_wayland_socket
+            .then(crate::supervisor::take_proxy_clients)
+            .flatten();
         let mut held_listener = None;
-        let socket_name = if let Some((listener, name)) = inherited_socket {
+        let socket_name = if let Some((chan, name)) = proxy_clients {
+            // The supervisor proxies the Wayland socket (wl_proxy) and hands us each connection
+            // with the app's credentials.
+            let source = Generic::new(chan, Interest::READ, Mode::Level);
+            let token = event_loop
+                .insert_source(source, |_, chan, state| {
+                    loop {
+                        match crate::wl_proxy::recv_client(std::os::fd::AsFd::as_fd(&**chan)) {
+                            Ok(Some((client, creds))) => state.arbor.insert_client(NewClient {
+                                client,
+                                restricted: false,
+                                credentials_unknown: false,
+                                credentials: Some(Credentials {
+                                    pid: creds.pid,
+                                    uid: creds.uid,
+                                    gid: creds.gid,
+                                }),
+                            }),
+                            Ok(None) => break,
+                            Err(err) => {
+                                warn!("error reading the supervisor's clients channel: {err:?}");
+                                return Ok(PostAction::Remove);
+                            }
+                        }
+                    }
+                    Ok(PostAction::Continue)
+                })
+                .unwrap();
+            if crate::supervisor::start_kind().is_restart() {
+                event_loop.disable(&token).unwrap();
+                held_listener = Some((token, Instant::now()));
+            }
+            Some(name)
+        } else if let Some((listener, name)) = inherited_socket {
             // The supervisor's socket (supervisor.rs): the same name across restarts.
             let source = Generic::new(listener, Interest::READ, Mode::Level);
             let token = event_loop
@@ -2571,6 +2608,7 @@ impl Arbor {
                                 client,
                                 restricted: false,
                                 credentials_unknown: false,
+                                credentials: None,
                             }),
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                             Err(e) => return Err(e),
@@ -2597,6 +2635,7 @@ impl Arbor {
                             client,
                             restricted: false,
                             credentials_unknown: false,
+                            credentials: None,
                         });
                     })
                     .unwrap();
@@ -2828,6 +2867,7 @@ impl Arbor {
             client,
             restricted,
             credentials_unknown,
+            credentials,
         } = client;
 
         let config = self.config.borrow();
@@ -2839,6 +2879,7 @@ impl Arbor {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
+            credentials,
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -6832,6 +6873,8 @@ pub struct NewClient {
     pub client: UnixStream,
     pub restricted: bool,
     pub credentials_unknown: bool,
+    /// The app's credentials when the socket's own are someone else's (the supervisor's proxy).
+    pub credentials: Option<Credentials>,
 }
 
 pub struct ClientState {
@@ -6842,6 +6885,8 @@ pub struct ClientState {
     pub restricted: bool,
     /// We cannot retrieve this client's socket credentials.
     pub credentials_unknown: bool,
+    /// The app's real credentials, when the socket is the supervisor's proxy.
+    pub credentials: Option<Credentials>,
 }
 
 impl ClientData for ClientState {

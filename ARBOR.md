@@ -837,7 +837,23 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   devloop (home-services `apps/arbor.conf`) swaps the session onto each new
   build.
 
-Code: `src/supervisor.rs`, the restart half of `src/session.rs`.
+- **Wayland proxy (stage 0 of the design below):** the supervisor accepts
+  the apps' Wayland connections itself and forwards each one to the
+  compositor (`src/wl_proxy/`). Each new connection goes to the compositor
+  over a "clients channel" (a `SOCK_SEQPACKET` pair per compositor process)
+  together with the app's pid/uid/gid, so window pids, session restore and
+  portals still see the real app and not the supervisor. Each app gets its
+  own thread, which forwards bytes and fds as they arrive and decodes every
+  message on the side, keeping the object table later stages need. A
+  decoding gap is logged ("lost track of the protocol") and doesn't affect
+  the connection. When a compositor goes away its connections still end,
+  as before. Cost: about 16 µs added to a roundtrip (release build, nested:
+  36 µs against 20 µs direct). `ARBOR_NO_PROXY=1` hands the socket to the
+  compositor as before. The supervisor and the compositor must both have
+  the proxy, but a new compositor still works under an older supervisor.
+
+Code: `src/supervisor.rs`, `src/wl_proxy/`, the restart half of
+`src/session.rs`.
 
 ### Design: swaps and crashes that apps don't notice (planned, not built)
 
@@ -935,8 +951,8 @@ compositor take restored objects as they are:
 - *X11:* xwayland-satellite becomes the supervisor's child and connects
   through the proxy like any other client. It and Xwayland survive with
   their X clients.
-- *Robustness:* the proxy is the part that must never fail. It runs as one
-  epoll thread. A panic is caught per client and drops only that client.
+- *Robustness:* the proxy is the part that must never fail. It runs one
+  thread per app (stage 0). A panic is caught per client and drops only that client.
   Nothing in it depends on GPU, input or config. A protocol error from the
   new compositor during replay also drops only that client; the fallback is
   today's relaunch.
@@ -951,7 +967,7 @@ binary in a test profile, a GTK app and foot surviving `reload-binary`):
 
 | # | Stage | Rough size |
 |---|-------|-----------|
-| 0 | Pass-through proxy: wire codec, fd handling, id tables, credentials over `arbor_restore_v1`. Nothing survives yet; checks speed and correctness for every app. | ~2.5k lines |
+| 0 | **Done.** Pass-through proxy: wire codec, fd passing, object table, real credentials (sent over the clients channel instead of `arbor_restore_v1`). Nothing survives yet. Verified nested: foot, zenity (GTK4), Konsole, Brave, xwayland-satellite and the portals through it, with no decoding gaps; reload and crash restart behave as before. | ~1k lines |
 | 1 | Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations; window tokens. foot and GTK survive. | ~3k |
 | 2 | What Electron/Chromium uses: text-input, pointer constraints/relative, presentation, idle-inhibit, primary selection, data device (selection kept), xdg-activation. Brave and the Claude app survive. | ~2k |
 | 3 | xwayland-satellite under the supervisor; layer-shell (hearth stops restarting itself); a crash restart uses the same path. | ~1.5k |

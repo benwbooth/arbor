@@ -58,6 +58,7 @@ const ENV_IPC_PATH: &str = "ARBOR_SUPERVISED_IPC_PATH";
 const ENV_X11_DISPLAY: &str = "ARBOR_SUPERVISED_X11_DISPLAY";
 const ENV_X11_UNIX_FD: &str = "ARBOR_SUPERVISED_X11_UNIX_FD";
 const ENV_X11_ABSTRACT_FD: &str = "ARBOR_SUPERVISED_X11_ABSTRACT_FD";
+const ENV_CLIENTS_FD: &str = "ARBOR_SUPERVISED_CLIENTS_FD";
 const ENV_START: &str = "ARBOR_SUPERVISED_START";
 const ENV_STATE: &str = "ARBOR_SUPERVISED_STATE";
 
@@ -90,6 +91,9 @@ impl StartKind {
 #[derive(Debug, Default)]
 pub struct Inherited {
     pub wayland: Option<(UnixListener, OsString)>,
+    /// With the supervisor's Wayland proxy (`wl_proxy`): the channel new connections arrive on,
+    /// and the Wayland socket's name.
+    pub proxy_clients: Option<(OwnedFd, OsString)>,
     pub ipc: Option<(UnixListener, PathBuf)>,
     pub x11: Option<InheritedX11>,
 }
@@ -168,7 +172,9 @@ pub fn take_from_env() {
 
     let mut inherited = Inherited::default();
     let wayland_name = env_take(ENV_WAYLAND_NAME);
-    if let (Some(fd), Some(name)) = (env_fd(ENV_WAYLAND_FD), wayland_name) {
+    if let (Some(fd), Some(name)) = (env_fd(ENV_CLIENTS_FD), wayland_name.clone()) {
+        inherited.proxy_clients = Some((fd, name));
+    } else if let (Some(fd), Some(name)) = (env_fd(ENV_WAYLAND_FD), wayland_name) {
         let listener = UnixListener::from(fd);
         let _ = listener.set_nonblocking(true);
         inherited.wayland = Some((listener, name));
@@ -201,6 +207,11 @@ pub fn take_from_env() {
 /// The inherited Wayland listening socket and its name.
 pub fn take_wayland() -> Option<(UnixListener, OsString)> {
     INHERITED.lock().unwrap().as_mut()?.wayland.take()
+}
+
+/// The supervisor's clients channel (it proxies the Wayland socket) and the socket's name.
+pub fn take_proxy_clients() -> Option<(OwnedFd, OsString)> {
+    INHERITED.lock().unwrap().as_mut()?.proxy_clients.take()
 }
 
 /// The inherited IPC listening socket and its path.
@@ -353,11 +364,14 @@ struct Supervisor {
     msgs_tx: std::sync::mpsc::Sender<(u64, Msg)>,
     generation: u64,
     notified_systemd: bool,
+    /// The Wayland proxy, unless `ARBOR_NO_PROXY=1`.
+    hub: Option<std::sync::Arc<crate::wl_proxy::Hub>>,
 }
 
 impl Supervisor {
-    /// Starts a compositor; returns it and the read end's reader thread generation.
-    fn spawn(&mut self, binary: &Binary, start: StartKind) -> io::Result<Child> {
+    /// Starts a compositor; with the proxy, also returns the supervisor's end of its clients
+    /// channel.
+    fn spawn(&mut self, binary: &Binary, start: StartKind) -> io::Result<(Child, Option<OwnedFd>)> {
         let (read, write) = smithay::reexports::rustix::pipe::pipe_with(
             smithay::reexports::rustix::pipe::PipeFlags::CLOEXEC,
         )?;
@@ -385,21 +399,26 @@ impl Supervisor {
             })?;
 
         let s = &self.sockets;
-        let mut fds: Vec<RawFd> = vec![
-            write.as_raw_fd(),
-            s.wayland.as_fd().as_raw_fd(),
-            s.ipc.as_raw_fd(),
-        ];
+        let mut fds: Vec<RawFd> = vec![write.as_raw_fd(), s.ipc.as_raw_fd()];
         let mut cmd = Command::new(format!("/proc/self/fd/{}", binary.file.as_raw_fd()));
         cmd.arg0(&binary.path)
             .args(&self.args)
             .env(ENV_CONTROL, write.as_raw_fd().to_string())
-            .env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string())
             .env(ENV_WAYLAND_NAME, &s.wayland_name)
             .env(ENV_IPC_FD, s.ipc.as_raw_fd().to_string())
             .env(ENV_IPC_PATH, &s.ipc_path)
             .env(ENV_START, start.as_str())
             .env(ENV_STATE, &self.state_path);
+        let mut clients = None;
+        if self.hub.is_some() {
+            let (ours, theirs) = crate::wl_proxy::seqpacket_pair()?;
+            cmd.env(ENV_CLIENTS_FD, theirs.as_raw_fd().to_string());
+            fds.push(theirs.as_raw_fd());
+            clients = Some((ours, theirs));
+        } else {
+            cmd.env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string());
+            fds.push(s.wayland.as_fd().as_raw_fd());
+        }
         if let Some(x11) = &s.x11 {
             cmd.env(ENV_X11_DISPLAY, &x11.display_name)
                 .env(ENV_X11_UNIX_FD, x11.unix_fd.as_raw_fd().to_string());
@@ -425,7 +444,7 @@ impl Supervisor {
         );
         let child = cmd.spawn();
         drop(write);
-        child
+        Ok((child?, clients.map(|(ours, _theirs)| ours)))
     }
 
     fn drain(&mut self, generation: u64, locked: &mut bool, reload: &mut Option<PathBuf>) {
@@ -494,7 +513,25 @@ pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
         msgs_tx,
         generation: 0,
         notified_systemd: false,
+        hub: None,
     };
+
+    if env::var_os("ARBOR_NO_PROXY").is_some_and(|v| !v.is_empty() && v != "0") {
+        info!("supervisor: ARBOR_NO_PROXY set; the compositor accepts Wayland clients itself");
+    } else {
+        let hub = std::sync::Arc::new(crate::wl_proxy::Hub::default());
+        let started = sup
+            .sockets
+            .wayland
+            .as_fd()
+            .try_clone_to_owned()
+            .map(UnixListener::from)
+            .and_then(|l| crate::wl_proxy::start(l, hub.clone()));
+        match started {
+            Ok(()) => sup.hub = Some(hub),
+            Err(err) => warn!("supervisor: error starting the Wayland proxy: {err:?}"),
+        }
+    }
 
     let mut start = StartKind::First;
     // The binary to go back to if this one fails right after a reload.
@@ -504,7 +541,12 @@ pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
     let code = loop {
         let started = Instant::now();
         let mut child = match sup.spawn(&current, start) {
-            Ok(child) => child,
+            Ok((child, clients)) => {
+                if let Some(hub) = &sup.hub {
+                    hub.set(clients);
+                }
+                child
+            }
             Err(err) => {
                 warn!(
                     "supervisor: error starting {}: {err:?}",
@@ -544,6 +586,9 @@ pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
             }
         };
         CHILD_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+        if let Some(hub) = &sup.hub {
+            hub.set(None);
+        }
         // The pipe's reader thread gets EOF with the child gone; give it a moment to deliver.
         thread::sleep(Duration::from_millis(20));
         sup.drain(generation, &mut locked, &mut reload);

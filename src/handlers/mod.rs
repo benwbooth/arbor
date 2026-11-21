@@ -516,6 +516,7 @@ impl SecurityContextHandler for State {
                     client,
                     restricted: true,
                     credentials_unknown: false,
+                    credentials: None,
                 });
             })
             .unwrap();

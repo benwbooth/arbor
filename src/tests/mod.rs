@@ -24,4 +24,5 @@ mod session;
 mod toplevel_export;
 mod virtual_keyboard;
 mod window_opening;
+mod wl_proxy;
 mod zoom;

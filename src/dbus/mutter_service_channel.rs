@@ -27,6 +27,7 @@ impl ServiceChannel {
             restricted: false,
             // FIXME: maybe you can get the PID from D-Bus somehow?
             credentials_unknown: true,
+            credentials: None,
         };
         if let Err(err) = self.to_arbor.send(client) {
             warn!("error sending message to the compositor: {err:?}");
