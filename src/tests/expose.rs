@@ -120,7 +120,7 @@ fn pixel(pixels: &[u8], x: usize, y: usize) -> [u8; 4] {
 #[test]
 #[ignore = "needs a GPU/EGL; run with --ignored"]
 fn expose_renders_and_hits() {
-    let mut config = niri_config::Config::default();
+    let mut config = arbor_config::Config::default();
     config.hotkey_overlay.skip_at_startup = true;
     let mut f = Fixture::with_config(config);
     f.niri_state().backend.headless().add_renderer().unwrap();

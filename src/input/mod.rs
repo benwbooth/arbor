@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
 use input::event::gesture::GestureEventCoordinates as _;
-use niri_config::{
+use arbor_config::{
     Action, Bind, Binds, Config, Key, ModKey, Modifiers, MruDirection, SwitchBinds, Trigger,
 };
-use niri_ipc::LayoutSwitchTarget;
+use arbor_ipc::LayoutSwitchTarget;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
     GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _,
@@ -4644,7 +4644,7 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
     })
 }
 
-pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::Device) {
+pub fn apply_libinput_settings(config: &arbor_config::Input, device: &mut input::Device) {
     // According to Mutter code, this setting is specific to touchpads.
     let is_touchpad = device.config_tap_finger_count() > 0;
     if is_touchpad {
@@ -4685,7 +4685,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == niri_config::ScrollMethod::OnButtonDown {
+            if method == arbor_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -4763,7 +4763,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == niri_config::ScrollMethod::OnButtonDown {
+            if method == arbor_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -4810,7 +4810,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == niri_config::ScrollMethod::OnButtonDown {
+            if method == arbor_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }
@@ -4857,7 +4857,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         if let Some(method) = c.scroll_method {
             let _ = device.config_scroll_set_method(method.into());
 
-            if method == niri_config::ScrollMethod::OnButtonDown {
+            if method == arbor_config::ScrollMethod::OnButtonDown {
                 if let Some(button) = c.scroll_button {
                     let _ = device.config_scroll_set_button(button);
                 }

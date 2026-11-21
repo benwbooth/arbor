@@ -1,7 +1,7 @@
 use client::ClientId;
 use insta::assert_snapshot;
-use niri_config::Config;
-use niri_ipc::SizeChange;
+use arbor_config::Config;
+use arbor_ipc::SizeChange;
 use smithay::utils::Point;
 use wayland_client::protocol::wl_surface::WlSurface;
 
@@ -16,7 +16,7 @@ fn set_up_with_config(mut config: Config) -> (Fixture, ClientId, WlSurface) {
     // arbor: windows open floating by default; these tests start from a docked window.
     config.window_rules.insert(
         0,
-        niri_config::WindowRule {
+        arbor_config::WindowRule {
             open_docked: Some(true),
             ..Default::default()
         },

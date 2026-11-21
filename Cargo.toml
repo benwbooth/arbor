@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "niri-config",
-    "niri-ipc",
+    "arbor-config",
+    "arbor-ipc",
 ]
 
 [workspace.package]
@@ -37,7 +37,7 @@ rev = "ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef"
 # path = "../smithay/smithay-drm-extras"
 
 [package]
-name = "niri"
+name = "arbor"
 version.workspace = true
 description.workspace = true
 authors.workspace = true
@@ -49,16 +49,10 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["wayland", "compositor", "tiling", "smithay", "wm"]
 
-# The package (library crate) keeps niri's name so upstream rebases stay small; the binary is
-# arbor.
-[[bin]]
-name = "arbor"
-path = "src/main.rs"
-
 [dependencies]
 # accesskit_unix 0.18 has a regression where it doesn't work in normal configurations.
 # accesskit 0.21 is its correct dependent version.
-# https://github.com/niri-wm/niri/issues/3594
+# (niri issue 3594)
 accesskit = { version = "0.21", optional = true }
 accesskit_unix = { version = "0.17", optional = true }
 anyhow.workspace = true
@@ -83,8 +77,8 @@ keyframe = { version = "1.1.1", default-features = false }
 libc = "0.2.185"
 libdisplay-info = "0.3.0"
 log = { version = "0.4.29", features = ["max_level_trace", "release_max_level_debug"] }
-niri-config = { version = "26.4.0", path = "niri-config" }
-niri-ipc = { version = "26.4.0", path = "niri-ipc", features = ["clap"] }
+arbor-config = { version = "26.4.0", path = "arbor-config" }
+arbor-ipc = { version = "26.4.0", path = "arbor-ipc", features = ["clap"] }
 ordered-float = "5.3.0"
 pango = { version = "0.21.5", features = ["v1_44"] }
 pangocairo = "0.21.5"
@@ -162,7 +156,7 @@ debug = "line-tables-only"
 overflow-checks = true
 lto = "thin"
 
-[profile.release.package.niri-config]
+[profile.release.package.arbor-config]
 # knuffel with chomsky generates a metric ton of debuginfo.
 debug = false
 

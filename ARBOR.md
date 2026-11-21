@@ -10,7 +10,7 @@ arbor changes in new files where possible so rebases stay small.
 ## Names
 
 arbor is fully rebranded for users and other programs; only internal names
-(the `niri` package/library crate, `niri-config`, `niri-ipc`, `niri::` paths,
+(the `niri` package/library crate, `arbor-config`, `arbor-ipc`, `niri::` paths,
 source file names, tracing targets, shader uniform names) stay niri's so
 rebases stay small.
 
@@ -263,7 +263,7 @@ without `prefer-no-csd`, so that Qt stops drawing its own bar.
 - `src/layout/arbor.rs`, `src/layout/workspace_arbor.rs`: arbor methods
   on `Layout` / `Workspace` (minimize, restore), kept out of upstream files.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
-  `niri-config/src/title_bar.rs`: server-side title bars.
+  `arbor-config/src/title_bar.rs`: server-side title bars.
 - `src/layout/icon_tile.rs`: icon tiles.
 - `src/layout/expose.rs`: overview layout math (unit tested) and `Layout`
   entry points; `src/layout/monitor_expose.rs` (included from

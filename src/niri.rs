@@ -13,8 +13,8 @@ use std::{env, mem, thread};
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDecorationsMode;
 use anyhow::{bail, ensure, Context};
 use calloop::futures::Scheduler;
-use niri_config::debug::PreviewRender;
-use niri_config::{
+use arbor_config::debug::PreviewRender;
+use arbor_config::{
     Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
@@ -200,7 +200,7 @@ pub struct Niri {
     /// This does not include transient output config changes done via IPC. It is only used when
     /// reloading the config from disk to determine if the output configuration should be reloaded
     /// (and transient changes dropped).
-    pub config_file_output_config: niri_config::Outputs,
+    pub config_file_output_config: arbor_config::Outputs,
 
     pub config_file_watcher: Option<Watcher>,
 
@@ -403,7 +403,7 @@ pub struct Niri {
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
-    pub pick_color: Option<async_channel::Sender<Option<niri_ipc::PickedColor>>>,
+    pub pick_color: Option<async_channel::Sender<Option<arbor_ipc::PickedColor>>>,
 
     pub debug_draw_opaque_regions: bool,
     pub debug_draw_damage: bool,
@@ -610,24 +610,24 @@ impl CastTarget {
         matches!(self, CastTarget::Output { output, .. } if output == weak)
     }
 
-    pub fn matches(&self, ipc: &niri_ipc::CastTarget) -> bool {
+    pub fn matches(&self, ipc: &arbor_ipc::CastTarget) -> bool {
         use CastTarget::*;
         match (self, ipc) {
-            (Nothing, niri_ipc::CastTarget::Nothing {}) => true,
-            (Output { name, .. }, niri_ipc::CastTarget::Output { name: ipc_name }) => {
+            (Nothing, arbor_ipc::CastTarget::Nothing {}) => true,
+            (Output { name, .. }, arbor_ipc::CastTarget::Output { name: ipc_name }) => {
                 name == ipc_name
             }
-            (Window { id }, niri_ipc::CastTarget::Window { id: ipc_id }) => id == ipc_id,
+            (Window { id }, arbor_ipc::CastTarget::Window { id: ipc_id }) => id == ipc_id,
             _ => false,
         }
     }
 
-    pub fn make_ipc(&self) -> niri_ipc::CastTarget {
+    pub fn make_ipc(&self) -> arbor_ipc::CastTarget {
         use CastTarget::*;
         match self {
-            Nothing => niri_ipc::CastTarget::Nothing {},
-            Output { name, .. } => niri_ipc::CastTarget::Output { name: name.clone() },
-            Window { id } => niri_ipc::CastTarget::Window { id: *id },
+            Nothing => arbor_ipc::CastTarget::Nothing {},
+            Output { name, .. } => arbor_ipc::CastTarget::Output { name: name.clone() },
+            Window { id } => arbor_ipc::CastTarget::Window { id: *id },
         }
     }
 }
@@ -1823,7 +1823,7 @@ impl State {
 
     pub fn modify_output_config<F>(&mut self, name: &str, fun: F)
     where
-        F: FnOnce(&mut niri_config::Output),
+        F: FnOnce(&mut arbor_config::Output),
     {
         // Try hard to find the output config section corresponding to the output set by the
         // user. Since if we add a new section and some existing section also matches the
@@ -1853,7 +1853,7 @@ impl State {
         let config = if let Some(config) = config.outputs.find_mut(match_name) {
             config
         } else {
-            config.outputs.0.push(niri_config::Output {
+            config.outputs.0.push(arbor_config::Output {
                 // Save name as set by the user.
                 name: String::from(name),
                 ..Default::default()
@@ -1864,25 +1864,25 @@ impl State {
         fun(config);
     }
 
-    pub fn apply_transient_output_config(&mut self, name: &str, action: niri_ipc::OutputAction) {
+    pub fn apply_transient_output_config(&mut self, name: &str, action: arbor_ipc::OutputAction) {
         self.modify_output_config(name, move |config| match action {
-            niri_ipc::OutputAction::Off => config.off = true,
-            niri_ipc::OutputAction::On => config.off = false,
-            niri_ipc::OutputAction::Mode { mode } => {
+            arbor_ipc::OutputAction::Off => config.off = true,
+            arbor_ipc::OutputAction::On => config.off = false,
+            arbor_ipc::OutputAction::Mode { mode } => {
                 config.mode = match mode {
-                    niri_ipc::ModeToSet::Automatic => None,
-                    niri_ipc::ModeToSet::Specific(mode) => Some(niri_config::output::Mode {
+                    arbor_ipc::ModeToSet::Automatic => None,
+                    arbor_ipc::ModeToSet::Specific(mode) => Some(arbor_config::output::Mode {
                         custom: false,
                         mode,
                     }),
                 };
                 config.modeline = None;
             }
-            niri_ipc::OutputAction::CustomMode { mode } => {
-                config.mode = Some(niri_config::output::Mode { custom: true, mode });
+            arbor_ipc::OutputAction::CustomMode { mode } => {
+                config.mode = Some(arbor_config::output::Mode { custom: true, mode });
                 config.modeline = None;
             }
-            niri_ipc::OutputAction::Modeline {
+            arbor_ipc::OutputAction::Modeline {
                 clock,
                 hdisplay,
                 hsync_start,
@@ -1896,7 +1896,7 @@ impl State {
                 vsync_polarity,
             } => {
                 // Do not reset config.mode to None since it's used as a fallback.
-                config.modeline = Some(niri_config::output::Modeline {
+                config.modeline = Some(arbor_config::output::Modeline {
                     clock,
                     hdisplay,
                     hsync_start,
@@ -1910,25 +1910,25 @@ impl State {
                     vsync_polarity,
                 })
             }
-            niri_ipc::OutputAction::Scale { scale } => {
+            arbor_ipc::OutputAction::Scale { scale } => {
                 config.scale = match scale {
-                    niri_ipc::ScaleToSet::Automatic => None,
-                    niri_ipc::ScaleToSet::Specific(scale) => Some(FloatOrInt(scale)),
+                    arbor_ipc::ScaleToSet::Automatic => None,
+                    arbor_ipc::ScaleToSet::Specific(scale) => Some(FloatOrInt(scale)),
                 }
             }
-            niri_ipc::OutputAction::Transform { transform } => config.transform = transform,
-            niri_ipc::OutputAction::Position { position } => {
+            arbor_ipc::OutputAction::Transform { transform } => config.transform = transform,
+            arbor_ipc::OutputAction::Position { position } => {
                 config.position = match position {
-                    niri_ipc::PositionToSet::Automatic => None,
-                    niri_ipc::PositionToSet::Specific(position) => Some(niri_config::Position {
+                    arbor_ipc::PositionToSet::Automatic => None,
+                    arbor_ipc::PositionToSet::Specific(position) => Some(arbor_config::Position {
                         x: position.x,
                         y: position.y,
                     }),
                 }
             }
-            niri_ipc::OutputAction::Vrr { vrr } => {
+            arbor_ipc::OutputAction::Vrr { vrr } => {
                 config.variable_refresh_rate = if vrr.vrr {
-                    Some(niri_config::Vrr {
+                    Some(arbor_config::Vrr {
                         on_demand: vrr.on_demand,
                     })
                 } else {
@@ -2009,7 +2009,7 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
-    pub fn handle_pick_color(&mut self, tx: async_channel::Sender<Option<niri_ipc::PickedColor>>) {
+    pub fn handle_pick_color(&mut self, tx: async_channel::Sender<Option<arbor_ipc::PickedColor>>) {
         let pointer = self.niri.seat.get_pointer().unwrap();
         let start_data = PointerGrabStartData {
             focus: None,
@@ -2716,7 +2716,7 @@ impl Niri {
             output: Output,
             name: OutputName,
             position: Option<Point<i32, Logical>>,
-            config: Option<niri_config::Position>,
+            config: Option<arbor_config::Position>,
         }
 
         let config = self.config.borrow();

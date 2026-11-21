@@ -1,6 +1,6 @@
 //! Sizes and areas shared by the dock tree and the floating space.
 
-use niri_config::{PresetSize, Struts};
+use arbor_config::{PresetSize, Struts};
 use smithay::utils::{Logical, Rectangle, Size};
 
 /// Width of a column.
@@ -62,7 +62,7 @@ pub(super) fn compute_working_area(
 }
 
 pub(super) fn compute_toplevel_bounds(
-    border_config: niri_config::Border,
+    border_config: arbor_config::Border,
     working_area_size: Size<f64, Logical>,
     extra_size: Size<f64, Logical>,
     gaps: f64,
@@ -81,7 +81,7 @@ pub(super) fn compute_toplevel_bounds(
 
 #[cfg(test)]
 mod tests {
-    use niri_config::FloatOrInt;
+    use arbor_config::FloatOrInt;
 
     use super::*;
     use crate::utils::round_logical_in_physical;

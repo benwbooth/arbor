@@ -15,24 +15,24 @@ use clap::{CommandFactory, Parser};
 use clap_complete::Shell;
 use clap_complete_nushell::Nushell;
 use directories::ProjectDirs;
-use niri::cli::{Cli, CompletionShell, Sub};
+use arbor::cli::{Cli, CompletionShell, Sub};
 #[cfg(feature = "dbus")]
-use niri::dbus;
-use niri::ipc::client::handle_msg;
-use niri::niri::State;
-use niri::utils::spawning::{
+use arbor::dbus;
+use arbor::ipc::client::handle_msg;
+use arbor::niri::State;
+use arbor::utils::spawning::{
     spawn, spawn_sh, store_and_increase_nofile_rlimit, CHILD_DISPLAY, CHILD_ENV,
     REMOVE_ENV_RUST_BACKTRACE, REMOVE_ENV_RUST_LIB_BACKTRACE,
 };
-use niri::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
-use niri_config::{Config, ConfigPath};
-use niri_ipc::socket::{COMPAT_SOCKET_PATH_ENV, SOCKET_PATH_ENV};
+use arbor::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
+use arbor_config::{Config, ConfigPath};
+use arbor_ipc::socket::{COMPAT_SOCKET_PATH_ENV, SOCKET_PATH_ENV};
 use sd_notify::NotifyState;
 use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
 
 // `niri` is the library crate (most of the code), `arbor` the binary.
-const DEFAULT_LOG_FILTER: &str = "niri=debug,arbor=debug,smithay::backend::renderer::gles=error";
+const DEFAULT_LOG_FILTER: &str = "arbor=debug,smithay::backend::renderer::gles=error";
 
 #[cfg(feature = "profile-with-tracy-allocations")]
 #[global_allocator]
@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Needs to be done before starting Tracy, so that it applies to Tracy's threads.
-    niri::utils::signals::block_early().unwrap();
+    arbor::utils::signals::block_early().unwrap();
 
     // Avoid starting Tracy for the `arbor msg` code path since starting/stopping Tracy is a bit
     // slow.
@@ -167,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop = EventLoop::<State>::try_new().unwrap();
 
     // Handle Ctrl+C and other signals.
-    niri::utils::signals::listen(&event_loop.handle());
+    arbor::utils::signals::listen(&event_loop.handle());
 
     // Create the compositor.
     let display = Display::new().unwrap();

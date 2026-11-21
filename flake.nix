@@ -50,8 +50,8 @@
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
-              ./niri-config
-              ./niri-ipc
+              ./arbor-config
+              ./arbor-ipc
               ./resources
               ./src
               ./Cargo.toml
@@ -149,7 +149,7 @@
                 "-Wl,--pop-state"
               ]
             );
-            NIRI_BUILD_COMMIT = revision;
+            ARBOR_BUILD_COMMIT = revision;
           };
 
           passthru = {

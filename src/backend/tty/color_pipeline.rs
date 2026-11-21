@@ -15,7 +15,7 @@ use std::os::fd::AsFd as _;
 
 use anyhow::{ensure, Context as _};
 use bytemuck::cast_slice;
-use niri_config::output::{ColorProfile, Hdr};
+use arbor_config::output::{ColorProfile, Hdr};
 use smithay::backend::drm::DrmDevice;
 use smithay::reexports::drm::control::atomic::AtomicModeReq;
 use smithay::reexports::drm::control::{crtc, property, AtomicCommitFlags, Device as _};

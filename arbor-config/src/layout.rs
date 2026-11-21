@@ -1,5 +1,5 @@
 use knuffel::errors::DecodeError;
-use niri_ipc::SizeChange;
+use arbor_ipc::SizeChange;
 
 use crate::appearance::{
     Border, FocusRing, InsertHint, Shadow, TabIndicator, DEFAULT_BACKGROUND_COLOR,

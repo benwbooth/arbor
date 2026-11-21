@@ -14,9 +14,9 @@ use std::iter::zip;
 use std::rc::Rc;
 use std::time::Duration;
 
-use niri_config::utils::MergeWith as _;
-use niri_config::PresetSize;
-use niri_ipc::{SizeChange, WindowLayout};
+use arbor_config::utils::MergeWith as _;
+use arbor_config::PresetSize;
+use arbor_ipc::{SizeChange, WindowLayout};
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
@@ -2595,7 +2595,7 @@ impl<W: LayoutElement> DockSpace<W> {
         activate: bool,
         _width: ColumnWidth,
         _is_full_width: bool,
-        _anim_config: Option<niri_config::Animation>,
+        _anim_config: Option<arbor_config::Animation>,
     ) {
         let dock = self.default_insert();
         self.add_tile_docked(tile, dock, activate);

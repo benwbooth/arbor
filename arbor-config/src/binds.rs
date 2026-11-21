@@ -6,7 +6,7 @@ use std::time::Duration;
 use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
-use niri_ipc::{
+use arbor_ipc::{
     LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
 };
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
@@ -401,30 +401,30 @@ pub enum Action {
     CameraForward,
 }
 
-impl From<niri_ipc::Action> for Action {
-    fn from(value: niri_ipc::Action) -> Self {
+impl From<arbor_ipc::Action> for Action {
+    fn from(value: arbor_ipc::Action) -> Self {
         match value {
-            niri_ipc::Action::Quit { skip_confirmation } => Self::Quit(skip_confirmation),
-            niri_ipc::Action::PowerOffMonitors {} => Self::PowerOffMonitors,
-            niri_ipc::Action::PowerOnMonitors {} => Self::PowerOnMonitors,
-            niri_ipc::Action::Spawn { command } => Self::Spawn(command),
-            niri_ipc::Action::SpawnSh { command } => Self::SpawnSh(command),
-            niri_ipc::Action::DoScreenTransition { delay_ms } => Self::DoScreenTransition(delay_ms),
-            niri_ipc::Action::Screenshot { show_pointer, path } => {
+            arbor_ipc::Action::Quit { skip_confirmation } => Self::Quit(skip_confirmation),
+            arbor_ipc::Action::PowerOffMonitors {} => Self::PowerOffMonitors,
+            arbor_ipc::Action::PowerOnMonitors {} => Self::PowerOnMonitors,
+            arbor_ipc::Action::Spawn { command } => Self::Spawn(command),
+            arbor_ipc::Action::SpawnSh { command } => Self::SpawnSh(command),
+            arbor_ipc::Action::DoScreenTransition { delay_ms } => Self::DoScreenTransition(delay_ms),
+            arbor_ipc::Action::Screenshot { show_pointer, path } => {
                 Self::Screenshot(show_pointer, path)
             }
-            niri_ipc::Action::ScreenshotScreen {
+            arbor_ipc::Action::ScreenshotScreen {
                 write_to_disk,
                 show_pointer,
                 path,
             } => Self::ScreenshotScreen(write_to_disk, show_pointer, path),
-            niri_ipc::Action::ScreenshotWindow {
+            arbor_ipc::Action::ScreenshotWindow {
                 id: None,
                 write_to_disk,
                 show_pointer,
                 path,
             } => Self::ScreenshotWindow(write_to_disk, show_pointer, path),
-            niri_ipc::Action::ScreenshotWindow {
+            arbor_ipc::Action::ScreenshotWindow {
                 id: Some(id),
                 write_to_disk,
                 show_pointer,
@@ -435,95 +435,95 @@ impl From<niri_ipc::Action> for Action {
                 show_pointer,
                 path,
             },
-            niri_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
+            arbor_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
             }
-            niri_ipc::Action::CloseWindow { id: None } => Self::CloseWindow,
-            niri_ipc::Action::CloseWindow { id: Some(id) } => Self::CloseWindowById(id),
-            niri_ipc::Action::FullscreenWindow { id: None } => Self::FullscreenWindow,
-            niri_ipc::Action::FullscreenWindow { id: Some(id) } => Self::FullscreenWindowById(id),
-            niri_ipc::Action::ToggleWindowedFullscreen { id: None } => {
+            arbor_ipc::Action::CloseWindow { id: None } => Self::CloseWindow,
+            arbor_ipc::Action::CloseWindow { id: Some(id) } => Self::CloseWindowById(id),
+            arbor_ipc::Action::FullscreenWindow { id: None } => Self::FullscreenWindow,
+            arbor_ipc::Action::FullscreenWindow { id: Some(id) } => Self::FullscreenWindowById(id),
+            arbor_ipc::Action::ToggleWindowedFullscreen { id: None } => {
                 Self::ToggleWindowedFullscreen
             }
-            niri_ipc::Action::ToggleWindowedFullscreen { id: Some(id) } => {
+            arbor_ipc::Action::ToggleWindowedFullscreen { id: Some(id) } => {
                 Self::ToggleWindowedFullscreenById(id)
             }
-            niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
-            niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
-            niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
-            niri_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
-            niri_ipc::Action::FocusColumnFirst {} => Self::FocusColumnFirst,
-            niri_ipc::Action::FocusColumnLast {} => Self::FocusColumnLast,
-            niri_ipc::Action::FocusColumnRightOrFirst {} => Self::FocusColumnRightOrFirst,
-            niri_ipc::Action::FocusColumnLeftOrLast {} => Self::FocusColumnLeftOrLast,
-            niri_ipc::Action::FocusColumn { index } => Self::FocusColumn(index),
-            niri_ipc::Action::FocusWindowOrMonitorUp {} => Self::FocusWindowOrMonitorUp,
-            niri_ipc::Action::FocusWindowOrMonitorDown {} => Self::FocusWindowOrMonitorDown,
-            niri_ipc::Action::FocusColumnOrMonitorLeft {} => Self::FocusColumnOrMonitorLeft,
-            niri_ipc::Action::FocusColumnOrMonitorRight {} => Self::FocusColumnOrMonitorRight,
-            niri_ipc::Action::FocusWindowDown {} => Self::FocusWindowDown,
-            niri_ipc::Action::FocusWindowUp {} => Self::FocusWindowUp,
-            niri_ipc::Action::FocusWindowDownOrColumnLeft {} => Self::FocusWindowDownOrColumnLeft,
-            niri_ipc::Action::FocusWindowDownOrColumnRight {} => Self::FocusWindowDownOrColumnRight,
-            niri_ipc::Action::FocusWindowUpOrColumnLeft {} => Self::FocusWindowUpOrColumnLeft,
-            niri_ipc::Action::FocusWindowUpOrColumnRight {} => Self::FocusWindowUpOrColumnRight,
-            niri_ipc::Action::FocusWindowOrWorkspaceDown {} => Self::FocusWindowOrWorkspaceDown,
-            niri_ipc::Action::FocusWindowOrWorkspaceUp {} => Self::FocusWindowOrWorkspaceUp,
-            niri_ipc::Action::FocusWindowTop {} => Self::FocusWindowTop,
-            niri_ipc::Action::FocusWindowBottom {} => Self::FocusWindowBottom,
-            niri_ipc::Action::FocusWindowDownOrTop {} => Self::FocusWindowDownOrTop,
-            niri_ipc::Action::FocusWindowUpOrBottom {} => Self::FocusWindowUpOrBottom,
-            niri_ipc::Action::MoveColumnLeft {} => Self::MoveColumnLeft,
-            niri_ipc::Action::MoveColumnRight {} => Self::MoveColumnRight,
-            niri_ipc::Action::MoveColumnLeftOrToMonitorLeft {} => {
+            arbor_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
+            arbor_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
+            arbor_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
+            arbor_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
+            arbor_ipc::Action::FocusColumnFirst {} => Self::FocusColumnFirst,
+            arbor_ipc::Action::FocusColumnLast {} => Self::FocusColumnLast,
+            arbor_ipc::Action::FocusColumnRightOrFirst {} => Self::FocusColumnRightOrFirst,
+            arbor_ipc::Action::FocusColumnLeftOrLast {} => Self::FocusColumnLeftOrLast,
+            arbor_ipc::Action::FocusColumn { index } => Self::FocusColumn(index),
+            arbor_ipc::Action::FocusWindowOrMonitorUp {} => Self::FocusWindowOrMonitorUp,
+            arbor_ipc::Action::FocusWindowOrMonitorDown {} => Self::FocusWindowOrMonitorDown,
+            arbor_ipc::Action::FocusColumnOrMonitorLeft {} => Self::FocusColumnOrMonitorLeft,
+            arbor_ipc::Action::FocusColumnOrMonitorRight {} => Self::FocusColumnOrMonitorRight,
+            arbor_ipc::Action::FocusWindowDown {} => Self::FocusWindowDown,
+            arbor_ipc::Action::FocusWindowUp {} => Self::FocusWindowUp,
+            arbor_ipc::Action::FocusWindowDownOrColumnLeft {} => Self::FocusWindowDownOrColumnLeft,
+            arbor_ipc::Action::FocusWindowDownOrColumnRight {} => Self::FocusWindowDownOrColumnRight,
+            arbor_ipc::Action::FocusWindowUpOrColumnLeft {} => Self::FocusWindowUpOrColumnLeft,
+            arbor_ipc::Action::FocusWindowUpOrColumnRight {} => Self::FocusWindowUpOrColumnRight,
+            arbor_ipc::Action::FocusWindowOrWorkspaceDown {} => Self::FocusWindowOrWorkspaceDown,
+            arbor_ipc::Action::FocusWindowOrWorkspaceUp {} => Self::FocusWindowOrWorkspaceUp,
+            arbor_ipc::Action::FocusWindowTop {} => Self::FocusWindowTop,
+            arbor_ipc::Action::FocusWindowBottom {} => Self::FocusWindowBottom,
+            arbor_ipc::Action::FocusWindowDownOrTop {} => Self::FocusWindowDownOrTop,
+            arbor_ipc::Action::FocusWindowUpOrBottom {} => Self::FocusWindowUpOrBottom,
+            arbor_ipc::Action::MoveColumnLeft {} => Self::MoveColumnLeft,
+            arbor_ipc::Action::MoveColumnRight {} => Self::MoveColumnRight,
+            arbor_ipc::Action::MoveColumnLeftOrToMonitorLeft {} => {
                 Self::MoveColumnLeftOrToMonitorLeft
             }
-            niri_ipc::Action::MoveColumnRightOrToMonitorRight {} => {
+            arbor_ipc::Action::MoveColumnRightOrToMonitorRight {} => {
                 Self::MoveColumnRightOrToMonitorRight
             }
-            niri_ipc::Action::MoveWindowDown {} => Self::MoveWindowDown,
-            niri_ipc::Action::MoveWindowUp {} => Self::MoveWindowUp,
-            niri_ipc::Action::MoveWindowDownOrToWorkspaceDown {} => {
+            arbor_ipc::Action::MoveWindowDown {} => Self::MoveWindowDown,
+            arbor_ipc::Action::MoveWindowUp {} => Self::MoveWindowUp,
+            arbor_ipc::Action::MoveWindowDownOrToWorkspaceDown {} => {
                 Self::MoveWindowDownOrToWorkspaceDown
             }
-            niri_ipc::Action::MoveWindowUpOrToWorkspaceUp {} => Self::MoveWindowUpOrToWorkspaceUp,
-            niri_ipc::Action::ConsumeOrExpelWindowLeft { id: None } => {
+            arbor_ipc::Action::MoveWindowUpOrToWorkspaceUp {} => Self::MoveWindowUpOrToWorkspaceUp,
+            arbor_ipc::Action::ConsumeOrExpelWindowLeft { id: None } => {
                 Self::ConsumeOrExpelWindowLeft
             }
-            niri_ipc::Action::ConsumeOrExpelWindowLeft { id: Some(id) } => {
+            arbor_ipc::Action::ConsumeOrExpelWindowLeft { id: Some(id) } => {
                 Self::ConsumeOrExpelWindowLeftById(id)
             }
-            niri_ipc::Action::ConsumeOrExpelWindowRight { id: None } => {
+            arbor_ipc::Action::ConsumeOrExpelWindowRight { id: None } => {
                 Self::ConsumeOrExpelWindowRight
             }
-            niri_ipc::Action::ConsumeOrExpelWindowRight { id: Some(id) } => {
+            arbor_ipc::Action::ConsumeOrExpelWindowRight { id: Some(id) } => {
                 Self::ConsumeOrExpelWindowRightById(id)
             }
-            niri_ipc::Action::ConsumeWindowIntoColumn {} => Self::ConsumeWindowIntoColumn,
-            niri_ipc::Action::ExpelWindowFromColumn {} => Self::ExpelWindowFromColumn,
-            niri_ipc::Action::SwapWindowRight {} => Self::SwapWindowRight,
-            niri_ipc::Action::SwapWindowLeft {} => Self::SwapWindowLeft,
-            niri_ipc::Action::CenterColumn {} => Self::CenterColumn,
-            niri_ipc::Action::CenterWindow { id: None } => Self::CenterWindow,
-            niri_ipc::Action::CenterWindow { id: Some(id) } => Self::CenterWindowById(id),
-            niri_ipc::Action::FocusWorkspaceDown {} => Self::FocusWorkspaceDown,
-            niri_ipc::Action::FocusWorkspaceUp {} => Self::FocusWorkspaceUp,
-            niri_ipc::Action::FocusWorkspace { reference } => {
+            arbor_ipc::Action::ConsumeWindowIntoColumn {} => Self::ConsumeWindowIntoColumn,
+            arbor_ipc::Action::ExpelWindowFromColumn {} => Self::ExpelWindowFromColumn,
+            arbor_ipc::Action::SwapWindowRight {} => Self::SwapWindowRight,
+            arbor_ipc::Action::SwapWindowLeft {} => Self::SwapWindowLeft,
+            arbor_ipc::Action::CenterColumn {} => Self::CenterColumn,
+            arbor_ipc::Action::CenterWindow { id: None } => Self::CenterWindow,
+            arbor_ipc::Action::CenterWindow { id: Some(id) } => Self::CenterWindowById(id),
+            arbor_ipc::Action::FocusWorkspaceDown {} => Self::FocusWorkspaceDown,
+            arbor_ipc::Action::FocusWorkspaceUp {} => Self::FocusWorkspaceUp,
+            arbor_ipc::Action::FocusWorkspace { reference } => {
                 Self::FocusWorkspace(WorkspaceReference::from(reference))
             }
-            niri_ipc::Action::FocusWorkspacePrevious {} => Self::FocusWorkspacePrevious,
-            niri_ipc::Action::MoveWindowToWorkspaceDown { focus } => {
+            arbor_ipc::Action::FocusWorkspacePrevious {} => Self::FocusWorkspacePrevious,
+            arbor_ipc::Action::MoveWindowToWorkspaceDown { focus } => {
                 Self::MoveWindowToWorkspaceDown(focus)
             }
-            niri_ipc::Action::MoveWindowToWorkspaceUp { focus } => {
+            arbor_ipc::Action::MoveWindowToWorkspaceUp { focus } => {
                 Self::MoveWindowToWorkspaceUp(focus)
             }
-            niri_ipc::Action::MoveWindowToWorkspace {
+            arbor_ipc::Action::MoveWindowToWorkspace {
                 window_id: None,
                 reference,
                 focus,
             } => Self::MoveWindowToWorkspace(WorkspaceReference::from(reference), focus),
-            niri_ipc::Action::MoveWindowToWorkspace {
+            arbor_ipc::Action::MoveWindowToWorkspace {
                 window_id: Some(window_id),
                 reference,
                 focus,
@@ -532,191 +532,191 @@ impl From<niri_ipc::Action> for Action {
                 reference: WorkspaceReference::from(reference),
                 focus,
             },
-            niri_ipc::Action::MoveColumnToWorkspaceDown { focus } => {
+            arbor_ipc::Action::MoveColumnToWorkspaceDown { focus } => {
                 Self::MoveColumnToWorkspaceDown(focus)
             }
-            niri_ipc::Action::MoveColumnToWorkspaceUp { focus } => {
+            arbor_ipc::Action::MoveColumnToWorkspaceUp { focus } => {
                 Self::MoveColumnToWorkspaceUp(focus)
             }
-            niri_ipc::Action::MoveColumnToWorkspace { reference, focus } => {
+            arbor_ipc::Action::MoveColumnToWorkspace { reference, focus } => {
                 Self::MoveColumnToWorkspace(WorkspaceReference::from(reference), focus)
             }
-            niri_ipc::Action::MoveWorkspaceDown {} => Self::MoveWorkspaceDown,
-            niri_ipc::Action::MoveWorkspaceUp {} => Self::MoveWorkspaceUp,
-            niri_ipc::Action::SetWorkspaceName {
+            arbor_ipc::Action::MoveWorkspaceDown {} => Self::MoveWorkspaceDown,
+            arbor_ipc::Action::MoveWorkspaceUp {} => Self::MoveWorkspaceUp,
+            arbor_ipc::Action::SetWorkspaceName {
                 name,
                 workspace: None,
             } => Self::SetWorkspaceName(name),
-            niri_ipc::Action::SetWorkspaceName {
+            arbor_ipc::Action::SetWorkspaceName {
                 name,
                 workspace: Some(reference),
             } => Self::SetWorkspaceNameByRef {
                 name,
                 reference: WorkspaceReference::from(reference),
             },
-            niri_ipc::Action::UnsetWorkspaceName { reference: None } => Self::UnsetWorkspaceName,
-            niri_ipc::Action::UnsetWorkspaceName {
+            arbor_ipc::Action::UnsetWorkspaceName { reference: None } => Self::UnsetWorkspaceName,
+            arbor_ipc::Action::UnsetWorkspaceName {
                 reference: Some(reference),
             } => Self::UnsetWorkSpaceNameByRef(WorkspaceReference::from(reference)),
-            niri_ipc::Action::FocusMonitorLeft {} => Self::FocusMonitorLeft,
-            niri_ipc::Action::FocusMonitorRight {} => Self::FocusMonitorRight,
-            niri_ipc::Action::FocusMonitorDown {} => Self::FocusMonitorDown,
-            niri_ipc::Action::FocusMonitorUp {} => Self::FocusMonitorUp,
-            niri_ipc::Action::FocusMonitorPrevious {} => Self::FocusMonitorPrevious,
-            niri_ipc::Action::FocusMonitorNext {} => Self::FocusMonitorNext,
-            niri_ipc::Action::FocusMonitor { output } => Self::FocusMonitor(output),
-            niri_ipc::Action::MoveWindowToMonitorLeft {} => Self::MoveWindowToMonitorLeft,
-            niri_ipc::Action::MoveWindowToMonitorRight {} => Self::MoveWindowToMonitorRight,
-            niri_ipc::Action::MoveWindowToMonitorDown {} => Self::MoveWindowToMonitorDown,
-            niri_ipc::Action::MoveWindowToMonitorUp {} => Self::MoveWindowToMonitorUp,
-            niri_ipc::Action::MoveWindowToMonitorPrevious {} => Self::MoveWindowToMonitorPrevious,
-            niri_ipc::Action::MoveWindowToMonitorNext {} => Self::MoveWindowToMonitorNext,
-            niri_ipc::Action::MoveWindowToMonitor { id: None, output } => {
+            arbor_ipc::Action::FocusMonitorLeft {} => Self::FocusMonitorLeft,
+            arbor_ipc::Action::FocusMonitorRight {} => Self::FocusMonitorRight,
+            arbor_ipc::Action::FocusMonitorDown {} => Self::FocusMonitorDown,
+            arbor_ipc::Action::FocusMonitorUp {} => Self::FocusMonitorUp,
+            arbor_ipc::Action::FocusMonitorPrevious {} => Self::FocusMonitorPrevious,
+            arbor_ipc::Action::FocusMonitorNext {} => Self::FocusMonitorNext,
+            arbor_ipc::Action::FocusMonitor { output } => Self::FocusMonitor(output),
+            arbor_ipc::Action::MoveWindowToMonitorLeft {} => Self::MoveWindowToMonitorLeft,
+            arbor_ipc::Action::MoveWindowToMonitorRight {} => Self::MoveWindowToMonitorRight,
+            arbor_ipc::Action::MoveWindowToMonitorDown {} => Self::MoveWindowToMonitorDown,
+            arbor_ipc::Action::MoveWindowToMonitorUp {} => Self::MoveWindowToMonitorUp,
+            arbor_ipc::Action::MoveWindowToMonitorPrevious {} => Self::MoveWindowToMonitorPrevious,
+            arbor_ipc::Action::MoveWindowToMonitorNext {} => Self::MoveWindowToMonitorNext,
+            arbor_ipc::Action::MoveWindowToMonitor { id: None, output } => {
                 Self::MoveWindowToMonitor(output)
             }
-            niri_ipc::Action::MoveWindowToMonitor {
+            arbor_ipc::Action::MoveWindowToMonitor {
                 id: Some(id),
                 output,
             } => Self::MoveWindowToMonitorById { id, output },
-            niri_ipc::Action::MoveColumnToMonitorLeft {} => Self::MoveColumnToMonitorLeft,
-            niri_ipc::Action::MoveColumnToMonitorRight {} => Self::MoveColumnToMonitorRight,
-            niri_ipc::Action::MoveColumnToMonitorDown {} => Self::MoveColumnToMonitorDown,
-            niri_ipc::Action::MoveColumnToMonitorUp {} => Self::MoveColumnToMonitorUp,
-            niri_ipc::Action::MoveColumnToMonitorPrevious {} => Self::MoveColumnToMonitorPrevious,
-            niri_ipc::Action::MoveColumnToMonitorNext {} => Self::MoveColumnToMonitorNext,
-            niri_ipc::Action::MoveColumnToMonitor { output } => Self::MoveColumnToMonitor(output),
-            niri_ipc::Action::SetWindowWidth { id: None, change } => Self::SetWindowWidth(change),
-            niri_ipc::Action::SetWindowWidth {
+            arbor_ipc::Action::MoveColumnToMonitorLeft {} => Self::MoveColumnToMonitorLeft,
+            arbor_ipc::Action::MoveColumnToMonitorRight {} => Self::MoveColumnToMonitorRight,
+            arbor_ipc::Action::MoveColumnToMonitorDown {} => Self::MoveColumnToMonitorDown,
+            arbor_ipc::Action::MoveColumnToMonitorUp {} => Self::MoveColumnToMonitorUp,
+            arbor_ipc::Action::MoveColumnToMonitorPrevious {} => Self::MoveColumnToMonitorPrevious,
+            arbor_ipc::Action::MoveColumnToMonitorNext {} => Self::MoveColumnToMonitorNext,
+            arbor_ipc::Action::MoveColumnToMonitor { output } => Self::MoveColumnToMonitor(output),
+            arbor_ipc::Action::SetWindowWidth { id: None, change } => Self::SetWindowWidth(change),
+            arbor_ipc::Action::SetWindowWidth {
                 id: Some(id),
                 change,
             } => Self::SetWindowWidthById { id, change },
-            niri_ipc::Action::SetWindowHeight { id: None, change } => Self::SetWindowHeight(change),
-            niri_ipc::Action::SetWindowHeight {
+            arbor_ipc::Action::SetWindowHeight { id: None, change } => Self::SetWindowHeight(change),
+            arbor_ipc::Action::SetWindowHeight {
                 id: Some(id),
                 change,
             } => Self::SetWindowHeightById { id, change },
-            niri_ipc::Action::ResetWindowHeight { id: None } => Self::ResetWindowHeight,
-            niri_ipc::Action::ResetWindowHeight { id: Some(id) } => Self::ResetWindowHeightById(id),
-            niri_ipc::Action::SwitchPresetColumnWidth {} => Self::SwitchPresetColumnWidth,
-            niri_ipc::Action::SwitchPresetColumnWidthBack {} => Self::SwitchPresetColumnWidthBack,
-            niri_ipc::Action::SwitchPresetWindowWidth { id: None } => Self::SwitchPresetWindowWidth,
-            niri_ipc::Action::SwitchPresetWindowWidthBack { id: None } => {
+            arbor_ipc::Action::ResetWindowHeight { id: None } => Self::ResetWindowHeight,
+            arbor_ipc::Action::ResetWindowHeight { id: Some(id) } => Self::ResetWindowHeightById(id),
+            arbor_ipc::Action::SwitchPresetColumnWidth {} => Self::SwitchPresetColumnWidth,
+            arbor_ipc::Action::SwitchPresetColumnWidthBack {} => Self::SwitchPresetColumnWidthBack,
+            arbor_ipc::Action::SwitchPresetWindowWidth { id: None } => Self::SwitchPresetWindowWidth,
+            arbor_ipc::Action::SwitchPresetWindowWidthBack { id: None } => {
                 Self::SwitchPresetWindowWidthBack
             }
-            niri_ipc::Action::SwitchPresetWindowWidth { id: Some(id) } => {
+            arbor_ipc::Action::SwitchPresetWindowWidth { id: Some(id) } => {
                 Self::SwitchPresetWindowWidthById(id)
             }
-            niri_ipc::Action::SwitchPresetWindowWidthBack { id: Some(id) } => {
+            arbor_ipc::Action::SwitchPresetWindowWidthBack { id: Some(id) } => {
                 Self::SwitchPresetWindowWidthBackById(id)
             }
-            niri_ipc::Action::SwitchPresetWindowHeight { id: None } => {
+            arbor_ipc::Action::SwitchPresetWindowHeight { id: None } => {
                 Self::SwitchPresetWindowHeight
             }
-            niri_ipc::Action::SwitchPresetWindowHeightBack { id: None } => {
+            arbor_ipc::Action::SwitchPresetWindowHeightBack { id: None } => {
                 Self::SwitchPresetWindowHeightBack
             }
-            niri_ipc::Action::SwitchPresetWindowHeight { id: Some(id) } => {
+            arbor_ipc::Action::SwitchPresetWindowHeight { id: Some(id) } => {
                 Self::SwitchPresetWindowHeightById(id)
             }
-            niri_ipc::Action::SwitchPresetWindowHeightBack { id: Some(id) } => {
+            arbor_ipc::Action::SwitchPresetWindowHeightBack { id: Some(id) } => {
                 Self::SwitchPresetWindowHeightBackById(id)
             }
-            niri_ipc::Action::MaximizeWindowToEdges { id: None } => Self::MaximizeWindowToEdges,
-            niri_ipc::Action::MaximizeWindowToEdges { id: Some(id) } => {
+            arbor_ipc::Action::MaximizeWindowToEdges { id: None } => Self::MaximizeWindowToEdges,
+            arbor_ipc::Action::MaximizeWindowToEdges { id: Some(id) } => {
                 Self::MaximizeWindowToEdgesById(id)
             }
-            niri_ipc::Action::SetColumnWidth { change } => Self::SetColumnWidth(change),
-            niri_ipc::Action::SwitchLayout { layout } => Self::SwitchLayout(layout),
-            niri_ipc::Action::ShowHotkeyOverlay {} => Self::ShowHotkeyOverlay,
-            niri_ipc::Action::MoveWorkspaceToMonitorLeft {} => Self::MoveWorkspaceToMonitorLeft,
-            niri_ipc::Action::MoveWorkspaceToMonitorRight {} => Self::MoveWorkspaceToMonitorRight,
-            niri_ipc::Action::MoveWorkspaceToMonitorDown {} => Self::MoveWorkspaceToMonitorDown,
-            niri_ipc::Action::MoveWorkspaceToMonitorUp {} => Self::MoveWorkspaceToMonitorUp,
-            niri_ipc::Action::MoveWorkspaceToMonitorPrevious {} => {
+            arbor_ipc::Action::SetColumnWidth { change } => Self::SetColumnWidth(change),
+            arbor_ipc::Action::SwitchLayout { layout } => Self::SwitchLayout(layout),
+            arbor_ipc::Action::ShowHotkeyOverlay {} => Self::ShowHotkeyOverlay,
+            arbor_ipc::Action::MoveWorkspaceToMonitorLeft {} => Self::MoveWorkspaceToMonitorLeft,
+            arbor_ipc::Action::MoveWorkspaceToMonitorRight {} => Self::MoveWorkspaceToMonitorRight,
+            arbor_ipc::Action::MoveWorkspaceToMonitorDown {} => Self::MoveWorkspaceToMonitorDown,
+            arbor_ipc::Action::MoveWorkspaceToMonitorUp {} => Self::MoveWorkspaceToMonitorUp,
+            arbor_ipc::Action::MoveWorkspaceToMonitorPrevious {} => {
                 Self::MoveWorkspaceToMonitorPrevious
             }
-            niri_ipc::Action::MoveWorkspaceToIndex {
+            arbor_ipc::Action::MoveWorkspaceToIndex {
                 index,
                 reference: Some(reference),
             } => Self::MoveWorkspaceToIndexByRef {
                 new_idx: index,
                 reference: WorkspaceReference::from(reference),
             },
-            niri_ipc::Action::MoveWorkspaceToIndex {
+            arbor_ipc::Action::MoveWorkspaceToIndex {
                 index,
                 reference: None,
             } => Self::MoveWorkspaceToIndex(index),
-            niri_ipc::Action::MoveWorkspaceToMonitor {
+            arbor_ipc::Action::MoveWorkspaceToMonitor {
                 output,
                 reference: Some(reference),
             } => Self::MoveWorkspaceToMonitorByRef {
                 output_name: output,
                 reference: WorkspaceReference::from(reference),
             },
-            niri_ipc::Action::MoveWorkspaceToMonitor {
+            arbor_ipc::Action::MoveWorkspaceToMonitor {
                 output,
                 reference: None,
             } => Self::MoveWorkspaceToMonitor(output),
-            niri_ipc::Action::MoveWorkspaceToMonitorNext {} => Self::MoveWorkspaceToMonitorNext,
-            niri_ipc::Action::ToggleDebugTint {} => Self::ToggleDebugTint,
-            niri_ipc::Action::DebugToggleOpaqueRegions {} => Self::DebugToggleOpaqueRegions,
-            niri_ipc::Action::DebugToggleDamage {} => Self::DebugToggleDamage,
-            niri_ipc::Action::ToggleWindowFloating { id: None } => Self::ToggleWindowFloating,
-            niri_ipc::Action::ToggleWindowFloating { id: Some(id) } => {
+            arbor_ipc::Action::MoveWorkspaceToMonitorNext {} => Self::MoveWorkspaceToMonitorNext,
+            arbor_ipc::Action::ToggleDebugTint {} => Self::ToggleDebugTint,
+            arbor_ipc::Action::DebugToggleOpaqueRegions {} => Self::DebugToggleOpaqueRegions,
+            arbor_ipc::Action::DebugToggleDamage {} => Self::DebugToggleDamage,
+            arbor_ipc::Action::ToggleWindowFloating { id: None } => Self::ToggleWindowFloating,
+            arbor_ipc::Action::ToggleWindowFloating { id: Some(id) } => {
                 Self::ToggleWindowFloatingById(id)
             }
-            niri_ipc::Action::MoveWindowToFloating { id: None } => Self::MoveWindowToFloating,
-            niri_ipc::Action::MoveWindowToFloating { id: Some(id) } => {
+            arbor_ipc::Action::MoveWindowToFloating { id: None } => Self::MoveWindowToFloating,
+            arbor_ipc::Action::MoveWindowToFloating { id: Some(id) } => {
                 Self::MoveWindowToFloatingById(id)
             }
-            niri_ipc::Action::MoveWindowToTiling { id: None } => Self::MoveWindowToTiling,
-            niri_ipc::Action::MoveWindowToTiling { id: Some(id) } => {
+            arbor_ipc::Action::MoveWindowToTiling { id: None } => Self::MoveWindowToTiling,
+            arbor_ipc::Action::MoveWindowToTiling { id: Some(id) } => {
                 Self::MoveWindowToTilingById(id)
             }
-            niri_ipc::Action::FocusFloating {} => Self::FocusFloating,
-            niri_ipc::Action::FocusTiling {} => Self::FocusTiling,
-            niri_ipc::Action::SwitchFocusBetweenFloatingAndTiling {} => {
+            arbor_ipc::Action::FocusFloating {} => Self::FocusFloating,
+            arbor_ipc::Action::FocusTiling {} => Self::FocusTiling,
+            arbor_ipc::Action::SwitchFocusBetweenFloatingAndTiling {} => {
                 Self::SwitchFocusBetweenFloatingAndTiling
             }
-            niri_ipc::Action::MoveFloatingWindow { id, x, y } => {
+            arbor_ipc::Action::MoveFloatingWindow { id, x, y } => {
                 Self::MoveFloatingWindowById { id, x, y }
             }
-            niri_ipc::Action::ToggleWindowRuleOpacity { id: None } => Self::ToggleWindowRuleOpacity,
-            niri_ipc::Action::ToggleWindowRuleOpacity { id: Some(id) } => {
+            arbor_ipc::Action::ToggleWindowRuleOpacity { id: None } => Self::ToggleWindowRuleOpacity,
+            arbor_ipc::Action::ToggleWindowRuleOpacity { id: Some(id) } => {
                 Self::ToggleWindowRuleOpacityById(id)
             }
-            niri_ipc::Action::SetDynamicCastWindow { id: None } => Self::SetDynamicCastWindow,
-            niri_ipc::Action::SetDynamicCastWindow { id: Some(id) } => {
+            arbor_ipc::Action::SetDynamicCastWindow { id: None } => Self::SetDynamicCastWindow,
+            arbor_ipc::Action::SetDynamicCastWindow { id: Some(id) } => {
                 Self::SetDynamicCastWindowById(id)
             }
-            niri_ipc::Action::SetDynamicCastMonitor { output } => {
+            arbor_ipc::Action::SetDynamicCastMonitor { output } => {
                 Self::SetDynamicCastMonitor(output)
             }
-            niri_ipc::Action::ClearDynamicCastTarget {} => Self::ClearDynamicCastTarget,
-            niri_ipc::Action::StopCast { session_id } => Self::StopCast(session_id),
-            niri_ipc::Action::ToggleOverview {} => Self::ToggleOverview,
-            niri_ipc::Action::OpenOverview {} => Self::OpenOverview,
-            niri_ipc::Action::CloseOverview {} => Self::CloseOverview,
-            niri_ipc::Action::ToggleWindowUrgent { id } => Self::ToggleWindowUrgent(id),
-            niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
-            niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
-            niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
-            niri_ipc::Action::MinimizeWindow { id: None } => Self::MinimizeWindow,
-            niri_ipc::Action::MinimizeWindow { id: Some(id) } => Self::MinimizeWindowById(id),
-            niri_ipc::Action::RestoreWindow { id: None } => Self::RestoreWindow,
-            niri_ipc::Action::RestoreWindow { id: Some(id) } => Self::RestoreWindowById(id),
-            niri_ipc::Action::FocusTabNext {} => Self::FocusTabNext,
-            niri_ipc::Action::FocusTabPrev {} => Self::FocusTabPrev,
-            niri_ipc::Action::CameraZoomOut {} => Self::CameraZoomOut,
-            niri_ipc::Action::CameraZoomIn {} => Self::CameraZoomIn,
-            niri_ipc::Action::CameraShowAll {} => Self::CameraShowAll,
-            niri_ipc::Action::CameraFrameWindow {} => Self::CameraFrameWindow,
-            niri_ipc::Action::CameraPanLeft {} => Self::CameraPanLeft,
-            niri_ipc::Action::CameraPanRight {} => Self::CameraPanRight,
-            niri_ipc::Action::CameraPanUp {} => Self::CameraPanUp,
-            niri_ipc::Action::CameraPanDown {} => Self::CameraPanDown,
-            niri_ipc::Action::CameraBack {} => Self::CameraBack,
-            niri_ipc::Action::CameraForward {} => Self::CameraForward,
+            arbor_ipc::Action::ClearDynamicCastTarget {} => Self::ClearDynamicCastTarget,
+            arbor_ipc::Action::StopCast { session_id } => Self::StopCast(session_id),
+            arbor_ipc::Action::ToggleOverview {} => Self::ToggleOverview,
+            arbor_ipc::Action::OpenOverview {} => Self::OpenOverview,
+            arbor_ipc::Action::CloseOverview {} => Self::CloseOverview,
+            arbor_ipc::Action::ToggleWindowUrgent { id } => Self::ToggleWindowUrgent(id),
+            arbor_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
+            arbor_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
+            arbor_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
+            arbor_ipc::Action::MinimizeWindow { id: None } => Self::MinimizeWindow,
+            arbor_ipc::Action::MinimizeWindow { id: Some(id) } => Self::MinimizeWindowById(id),
+            arbor_ipc::Action::RestoreWindow { id: None } => Self::RestoreWindow,
+            arbor_ipc::Action::RestoreWindow { id: Some(id) } => Self::RestoreWindowById(id),
+            arbor_ipc::Action::FocusTabNext {} => Self::FocusTabNext,
+            arbor_ipc::Action::FocusTabPrev {} => Self::FocusTabPrev,
+            arbor_ipc::Action::CameraZoomOut {} => Self::CameraZoomOut,
+            arbor_ipc::Action::CameraZoomIn {} => Self::CameraZoomIn,
+            arbor_ipc::Action::CameraShowAll {} => Self::CameraShowAll,
+            arbor_ipc::Action::CameraFrameWindow {} => Self::CameraFrameWindow,
+            arbor_ipc::Action::CameraPanLeft {} => Self::CameraPanLeft,
+            arbor_ipc::Action::CameraPanRight {} => Self::CameraPanRight,
+            arbor_ipc::Action::CameraPanUp {} => Self::CameraPanUp,
+            arbor_ipc::Action::CameraPanDown {} => Self::CameraPanDown,
+            arbor_ipc::Action::CameraBack {} => Self::CameraBack,
+            arbor_ipc::Action::CameraForward {} => Self::CameraForward,
         }
     }
 }

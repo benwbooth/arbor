@@ -206,6 +206,96 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbor"
+version = "26.4.0"
+dependencies = [
+ "accesskit",
+ "accesskit_unix",
+ "anyhow",
+ "approx 0.5.1",
+ "arbor-config",
+ "arbor-ipc",
+ "arrayvec",
+ "async-channel",
+ "async-io",
+ "atomic",
+ "bitflags 2.11.1",
+ "bytemuck",
+ "calloop 0.14.4",
+ "calloop-wayland-source 0.4.1",
+ "clap",
+ "clap_complete",
+ "clap_complete_nushell",
+ "directories",
+ "drm-ffi",
+ "fastrand",
+ "futures-util",
+ "git-version",
+ "glam",
+ "input",
+ "insta",
+ "keyframe",
+ "libc",
+ "libdisplay-info",
+ "log",
+ "ordered-float",
+ "pango",
+ "pangocairo",
+ "pipewire",
+ "pkg-config",
+ "png",
+ "profiling",
+ "proptest",
+ "proptest-derive",
+ "rayon",
+ "resvg",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "smithay",
+ "smithay-drm-extras",
+ "tracing",
+ "tracing-subscriber",
+ "tracy-client",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols-plasma",
+ "wayland-scanner",
+ "wayland-server",
+ "xcursor",
+ "xshell",
+ "zbus",
+]
+
+[[package]]
+name = "arbor-config"
+version = "26.4.0"
+dependencies = [
+ "arbor-ipc",
+ "bitflags 2.11.1",
+ "csscolorparser",
+ "diff",
+ "insta",
+ "knuffel",
+ "miette",
+ "pretty_assertions",
+ "regex",
+ "smithay",
+ "tracing",
+ "tracy-client",
+]
+
+[[package]]
+name = "arbor-ipc"
+version = "26.4.0"
+dependencies = [
+ "clap",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2072,96 +2162,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
-]
-
-[[package]]
-name = "niri"
-version = "26.4.0"
-dependencies = [
- "accesskit",
- "accesskit_unix",
- "anyhow",
- "approx 0.5.1",
- "arrayvec",
- "async-channel",
- "async-io",
- "atomic",
- "bitflags 2.11.1",
- "bytemuck",
- "calloop 0.14.4",
- "calloop-wayland-source 0.4.1",
- "clap",
- "clap_complete",
- "clap_complete_nushell",
- "directories",
- "drm-ffi",
- "fastrand",
- "futures-util",
- "git-version",
- "glam",
- "input",
- "insta",
- "keyframe",
- "libc",
- "libdisplay-info",
- "log",
- "niri-config",
- "niri-ipc",
- "ordered-float",
- "pango",
- "pangocairo",
- "pipewire",
- "pkg-config",
- "png",
- "profiling",
- "proptest",
- "proptest-derive",
- "rayon",
- "resvg",
- "sd-notify",
- "serde",
- "serde_json",
- "smithay",
- "smithay-drm-extras",
- "tracing",
- "tracing-subscriber",
- "tracy-client",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols-plasma",
- "wayland-scanner",
- "wayland-server",
- "xcursor",
- "xshell",
- "zbus",
-]
-
-[[package]]
-name = "niri-config"
-version = "26.4.0"
-dependencies = [
- "bitflags 2.11.1",
- "csscolorparser",
- "diff",
- "insta",
- "knuffel",
- "miette",
- "niri-ipc",
- "pretty_assertions",
- "regex",
- "smithay",
- "tracing",
- "tracy-client",
-]
-
-[[package]]
-name = "niri-ipc"
-version = "26.4.0"
-dependencies = [
- "clap",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -14,9 +14,9 @@ use calloop::io::Async;
 use directories::BaseDirs;
 use futures_util::io::{AsyncReadExt, BufReader};
 use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
-use niri_config::OutputName;
-use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
-use niri_ipc::{
+use arbor_config::OutputName;
+use arbor_ipc::state::{EventStreamState, EventStreamStatePart as _};
+use arbor_ipc::{
     Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request, Response,
     Timestamp, WindowLayout, Workspace,
 };
@@ -296,25 +296,25 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                     let name = output.name();
                     for surface in layer_map_for_output(output).layers() {
                         let layer = match surface.layer() {
-                            Layer::Background => niri_ipc::Layer::Background,
-                            Layer::Bottom => niri_ipc::Layer::Bottom,
-                            Layer::Top => niri_ipc::Layer::Top,
-                            Layer::Overlay => niri_ipc::Layer::Overlay,
+                            Layer::Background => arbor_ipc::Layer::Background,
+                            Layer::Bottom => arbor_ipc::Layer::Bottom,
+                            Layer::Top => arbor_ipc::Layer::Top,
+                            Layer::Overlay => arbor_ipc::Layer::Overlay,
                         };
                         let keyboard_interactivity =
                             match surface.cached_state().keyboard_interactivity {
                                 KeyboardInteractivity::None => {
-                                    niri_ipc::LayerSurfaceKeyboardInteractivity::None
+                                    arbor_ipc::LayerSurfaceKeyboardInteractivity::None
                                 }
                                 KeyboardInteractivity::Exclusive => {
-                                    niri_ipc::LayerSurfaceKeyboardInteractivity::Exclusive
+                                    arbor_ipc::LayerSurfaceKeyboardInteractivity::Exclusive
                                 }
                                 KeyboardInteractivity::OnDemand => {
-                                    niri_ipc::LayerSurfaceKeyboardInteractivity::OnDemand
+                                    arbor_ipc::LayerSurfaceKeyboardInteractivity::OnDemand
                                 }
                             };
 
-                        layers.push(niri_ipc::LayerSurface {
+                        layers.push(arbor_ipc::LayerSurface {
                             namespace: surface.namespace().to_owned(),
                             output: name.clone(),
                             layer,
@@ -384,7 +384,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
 
             let (tx, rx) = async_channel::bounded(1);
 
-            let action = niri_config::Action::from(action);
+            let action = arbor_config::Action::from(action);
             ctx.event_loop.insert_idle(move |state| {
                 // Make sure some logic like workspace clean-up has a chance to run before doing
                 // actions.
@@ -517,10 +517,10 @@ pub(crate) fn make_ipc_window(
     mapped: &Mapped,
     workspace_id: Option<WorkspaceId>,
     layout: WindowLayout,
-) -> niri_ipc::Window {
+) -> arbor_ipc::Window {
     // Outside with_toplevel_role(): both lock the same surface's states.
     let app_menu = ipc_app_menu(mapped);
-    with_toplevel_role(mapped.toplevel(), |role| niri_ipc::Window {
+    with_toplevel_role(mapped.toplevel(), |role| arbor_ipc::Window {
         id: mapped.id().get(),
         title: role.title.clone(),
         app_id: role.app_id.clone(),
@@ -536,8 +536,8 @@ pub(crate) fn make_ipc_window(
     })
 }
 
-fn ipc_app_menu(mapped: &Mapped) -> Option<niri_ipc::AppMenu> {
-    app_menu_address(mapped.toplevel().wl_surface()).map(|address| niri_ipc::AppMenu {
+fn ipc_app_menu(mapped: &Mapped) -> Option<arbor_ipc::AppMenu> {
+    app_menu_address(mapped.toplevel().wl_surface()).map(|address| arbor_ipc::AppMenu {
         service_name: address.service_name,
         object_path: address.object_path,
     })
@@ -844,11 +844,11 @@ impl State {
                 // Pending dynamic casts don't change any properties, so we only need to check if
                 // it's missing from the state.
                 if !state.casts.contains_key(&stream_id) {
-                    let cast = niri_ipc::Cast {
+                    let cast = arbor_ipc::Cast {
                         session_id: pending.session_id.get(),
                         stream_id,
-                        kind: niri_ipc::CastKind::PipeWire,
-                        target: niri_ipc::CastTarget::Nothing {},
+                        kind: arbor_ipc::CastKind::PipeWire,
+                        target: arbor_ipc::CastTarget::Nothing {},
                         is_dynamic_target: true,
                         is_active: false,
                         pid: None,
@@ -870,10 +870,10 @@ impl State {
                         || !cast.target.matches(&existing.target)
                         || existing.pw_node_id != pw_node_id
                 }) {
-                    let cast = niri_ipc::Cast {
+                    let cast = arbor_ipc::Cast {
                         session_id: cast.session_id.get(),
                         stream_id,
-                        kind: niri_ipc::CastKind::PipeWire,
+                        kind: arbor_ipc::CastKind::PipeWire,
                         target: cast.target.make_ipc(),
                         is_dynamic_target: cast.dynamic_target,
                         is_active: cast.is_active(),
@@ -899,15 +899,15 @@ impl State {
                 if state.casts.get(&stream_id).is_none_or(|existing| {
                     // Only this property can change.
                     match &existing.target {
-                        niri_ipc::CastTarget::Output { name } => *name != cast_info.output_name,
+                        arbor_ipc::CastTarget::Output { name } => *name != cast_info.output_name,
                         _ => true,
                     }
                 }) {
-                    let cast = niri_ipc::Cast {
+                    let cast = arbor_ipc::Cast {
                         session_id: cast_info.session_id.get(),
                         stream_id,
-                        kind: niri_ipc::CastKind::WlrScreencopy,
-                        target: niri_ipc::CastTarget::Output {
+                        kind: arbor_ipc::CastKind::WlrScreencopy,
+                        target: arbor_ipc::CastTarget::Output {
                             name: cast_info.output_name.clone(),
                         },
                         is_dynamic_target: false,

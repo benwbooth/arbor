@@ -78,8 +78,8 @@ impl Socket {
     /// # Examples
     ///
     /// ```no_run
-    /// use niri_ipc::{Request, Response};
-    /// use niri_ipc::socket::Socket;
+    /// use arbor_ipc::{Request, Response};
+    /// use arbor_ipc::socket::Socket;
     ///
     /// fn main() -> std::io::Result<()> {
     ///     let mut socket = Socket::connect()?;

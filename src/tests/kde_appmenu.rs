@@ -1,7 +1,7 @@
 use super::*;
 use crate::ipc::server::make_ipc_window;
 
-fn window_app_menu(f: &mut Fixture) -> Option<niri_ipc::AppMenu> {
+fn window_app_menu(f: &mut Fixture) -> Option<arbor_ipc::AppMenu> {
     let mut menus = Vec::new();
     f.niri().layout.with_windows(|mapped, _, ws_id, layout| {
         menus.push(make_ipc_window(mapped, ws_id, layout).app_menu)
@@ -37,7 +37,7 @@ fn set_address_and_release() {
 
     assert_eq!(
         window_app_menu(&mut f),
-        Some(niri_ipc::AppMenu {
+        Some(arbor_ipc::AppMenu {
             service_name: ":1.42".to_owned(),
             object_path: "/MenuBar/1".to_owned(),
         })

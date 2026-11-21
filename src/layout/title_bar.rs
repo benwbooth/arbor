@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::f64::consts::PI;
 
-use niri_config::{Color, CornerRadius, TitleBars};
+use arbor_config::{Color, CornerRadius, TitleBars};
 use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::{Alignment, EllipsizeMode, FontDescription};
 use smithay::backend::allocator::Fourcc;

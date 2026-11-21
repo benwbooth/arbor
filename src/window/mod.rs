@@ -1,8 +1,8 @@
 use std::cmp::{max, min};
 
-use niri_config::utils::MergeWith as _;
-use niri_config::window_rule::{Match, WindowRule};
-use niri_config::{
+use arbor_config::utils::MergeWith as _;
+use arbor_config::window_rule::{Match, WindowRule};
+use arbor_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
 };

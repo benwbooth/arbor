@@ -42,7 +42,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! niri-ipc = "=26.4.0"
+//! arbor-ipc = "=26.4.0"
 //! ```
 //!
 //! ## Features
@@ -185,8 +185,8 @@ pub struct PickedColor {
 }
 
 /// Actions that arbor can perform.
-// Variants in this enum should match the spelling of the ones in niri-config. Most, but not all,
-// variants from niri-config should be present here.
+// Variants in this enum should match the spelling of the ones in arbor-config. Most, but not all,
+// variants from arbor-config should be present here.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 #[cfg_attr(feature = "clap", command(subcommand_value_name = "ACTION"))]
@@ -1018,8 +1018,8 @@ pub enum ColumnDisplay {
 }
 
 /// Output actions that arbor can perform.
-// Variants in this enum should match the spelling of the ones in niri-config. Most thigs from
-// niri-config should be present here.
+// Variants in this enum should match the spelling of the ones in arbor-config. Most thigs from
+// arbor-config should be present here.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 #[cfg_attr(feature = "clap", command(subcommand_value_name = "ACTION"))]
