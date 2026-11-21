@@ -839,6 +839,138 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
 
 Code: `src/supervisor.rs`, the restart half of `src/session.rs`.
 
+### Design: swaps and crashes that apps don't notice (planned, not built)
+
+Ben, 2026-11-21: *"any swaps need to be nondestructive"*, *"the window
+system should never crash"*. Today a swap keeps the sockets, but every
+client loses its connection. Qt reconnects. Everything else exits and gets
+relaunched: Brave, VS Code and the Claude app (Electron), GTK, foot, and
+X11 apps through xwayland-satellite. A relaunched Claude app loses all of
+Claude Code's background processes. The goal is a swap (and a crash
+restart) that every app survives without seeing anything.
+
+**Options looked at**
+
+1. *Toolkit reconnect* (KWin's approach: David Edmundson's "compositor
+   handoff"; QtWayland 6.6 `QT_WAYLAND_RECONNECT`; wayland MR 283 for a
+   libwayland API; xserver MR 756 for a reconnecting Xwayland). Only Qt
+   ships it. GTK `_exit()`s on a lost connection, Chromium/Electron
+   aborts, and SDL, foot and Firefox have nothing. It needs every toolkit to
+   change, which isn't in our hands. We keep it for Qt, but it isn't the
+   answer.
+2. *Hand state over inside arbor* (the old compositor serializes every
+   client's objects and fds, then the new binary rebuilds them at the same
+   ids in wayland-backend's Rust server). No client sees a thing and there's
+   no extra hop. But it only works for planned swaps: a crash leaves nothing
+   to hand over. It also means serializing all of smithay's internal state
+   in a format that has to survive version changes. It fails the "crashes
+   too" requirement, so it's out.
+3. *Relaunch better* (what we have now). It's destructive by definition.
+4. **A persistent proxy in the supervisor** (chosen). The supervisor
+   already outlives the compositor. It also accepts the Wayland
+   connections. Each client talks to the supervisor. The supervisor keeps
+   a shadow copy of that client's protocol objects and forwards messages to
+   the compositor over its own connection. When the compositor goes away
+   (swap or crash), the client connection stays open. The supervisor
+   connects to the new compositor, recreates the client's objects from the
+   shadow state, and carries on. Prior art for each piece: waypipe parses
+   every message and tracks fds, including shm and dmabuf. Sommelier
+   (ChromeOS) and wprs proxy whole sessions. Arcan's waybridge keeps
+   Wayland clients alive across display-server crashes. mahkoh's
+   `wl-proxy` crate (2026) is a generated-bindings proxy toolkit; we may
+   use it as the codec. wl-restart only restarts the compositor, like our
+   supervisor does today.
+
+**Why the proxy is workable for us:** we write both sides. Replay doesn't
+have to fit into what a stock compositor accepts. A private
+`arbor_restore_v1` protocol on the proxy's connections lets the new
+compositor take restored objects as they are:
+
+- the client's real pid, uid and gid (otherwise every client is the
+  supervisor; `utils::get_credentials_for_client` is the one place that
+  reads them);
+- a stable window token, so each window goes back exactly where it was,
+  instead of being matched by app id;
+- "this is a restore": no serial checks, no initial-configure dance, and
+  the selection and activation tokens are carried over.
+
+**How the proxy works**
+
+- *Steady state:* bytes and fds are forwarded from one socket to the other.
+  Every message is parsed to keep the object table current (interface,
+  version, parent, creation request) along with the replayable state.
+  Received fds are `dup`ed and kept for as long as their object lives: shm
+  pool fds, dmabuf plane fds, keymaps. Object ids are mapped per side, so
+  the new connection's ids don't have to match. Serials are mapped as well.
+- *Replay table:* every request of every protocol we expose is classified
+  in a table generated from the XML, plus hand-written overrides:
+  - **create**: replayed in creation order.
+  - **set**: last value wins. Double-buffered setters are kept in pending
+    and committed versions.
+  - **action**: not replayed (move, resize, a popup grab, `start_drag`).
+  - **destroy**.
+
+  Replaying a client means: bind the same globals (global names and
+  versions are remapped through the cached registry), recreate objects in
+  order, re-apply the committed surface state (buffer, damage over
+  everything, scale, transform, viewport, regions, the subsurface tree),
+  commit, and then re-apply what is still pending without committing it.
+- *What the client sees at a swap:*
+  - Things that can't be carried over end the way the protocol already
+    allows. Open popups get `popup_done`. Drag-and-drop is cancelled.
+    Objects the compositor created (data offers, foreign-toplevel handles,
+    and similar) get their closed or finished event. Keyboard and pointer
+    get leave, then enter again.
+  - Buffers the old compositor still held are released. Pending frame
+    callbacks are re-requested.
+  - The new compositor's configures, output events and keymap are passed on
+    as ordinary events. Toolkits already handle all of these.
+- *During the gap* (the new compositor takes about 1–2 s to come up):
+  requests go into the shadow state and are replayed later. `wl_display.sync`
+  and registry binds are answered from the cache, so roundtrips don't hang.
+  The app freezes on screen and keeps running.
+- *Protocols the proxy can't replay* are left out of the registry it
+  advertises. Apps fall back as they would on any compositor without them.
+  New protocols get added to the table one at a time.
+- *X11:* xwayland-satellite becomes the supervisor's child and connects
+  through the proxy like any other client. It and Xwayland survive with
+  their X clients.
+- *Robustness:* the proxy is the part that must never fail. It runs as one
+  epoll thread. A panic is caught per client and drops only that client.
+  Nothing in it depends on GPU, input or config. A protocol error from the
+  new compositor during replay also drops only that client; the fallback is
+  today's relaunch.
+- *Cost:* one more unix-socket hop per message batch. waypipe in local
+  mode adds microseconds. Frame data never goes through it, only fds.
+- *Security:* `wp_security_context` listeners (flatpak) are accepted by the
+  proxy too, and their sandbox metadata goes over `arbor_restore_v1`. Until
+  then, sandboxed clients connect directly and aren't protected.
+
+**Stages** (each verified in a nested arbor with Brave or the Claude app
+binary in a test profile, a GTK app and foot surviving `reload-binary`):
+
+| # | Stage | Rough size |
+|---|-------|-----------|
+| 0 | Pass-through proxy: wire codec, fd handling, id tables, credentials over `arbor_restore_v1`. Nothing survives yet; checks speed and correctness for every app. | ~2.5k lines |
+| 1 | Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations; window tokens. foot and GTK survive. | ~3k |
+| 2 | What Electron/Chromium uses: text-input, pointer constraints/relative, presentation, idle-inhibit, primary selection, data device (selection kept), xdg-activation. Brave and the Claude app survive. | ~2k |
+| 3 | xwayland-satellite under the supervisor; layer-shell (hearth stops restarting itself); a crash restart uses the same path. | ~1.5k |
+| 4 | The remaining globals, security-context, tests (replay fuzzing against a nested arbor). | ~1.5k |
+
+That comes to about 10k lines in total. Each stage ships on its own. Until
+stage 2 works, devloop's automatic swaps stay off (`no-reload`).
+
+**Risks:**
+
+- Toolkit assumptions we can't see. For example, a client that caches a
+  global's name and later destroys or rebinds it gets the remapped name.
+  The cached registry has to look unchanged to it.
+- A bug in the proxy now affects every app. That's why it's kept small,
+  catches panics per client, and has a kill switch: `ARBOR_NO_PROXY=1`
+  gives the direct sockets of today.
+- Explicit sync (`linux-drm-syncobj`) isn't exposed by arbor today. When it
+  is, its timelines need replay too.
+
 ## Clipboard after the app quits
 
 Like Klipper: arbor reads every format of each new clipboard and primary
