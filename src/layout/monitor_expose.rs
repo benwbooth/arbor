@@ -129,11 +129,11 @@ pub(super) struct ExposeUi<Id> {
     /// thumbnail's new look (hovered, a window moved...) is still being drawn, the old one stays
     /// on screen instead of the thumbnail blinking out for a frame or two.
     shown_thumbs: RefCell<HashMap<usize, TexKey>>,
-    /// Each workspace's window slots from the last layout while the overview was open. Closing
-    /// reuses them: picking a window raises it and moves the camera to it, and laying the
-    /// windows out again from those new places would swap their slots mid-animation, so a
+    /// Each workspace's window slots, laid out once when the overview opens (and again only
+    /// when its windows or the area change). Focusing a window raises it and moves the camera
+    /// to it; laying the windows out again from those new places would swap their slots, so a
     /// different window would fly forward before the picked one snapped into place.
-    slots: RefCell<HashMap<WorkspaceId, Vec<(Id, ExposeSlot)>>>,
+    pub(super) slots: RefCell<HashMap<WorkspaceId, (Rect, Vec<(Id, ExposeSlot)>)>>,
     dim: RefCell<SolidColorBuffer>,
 }
 
@@ -277,15 +277,19 @@ impl<W: LayoutElement> Monitor<W> {
                 Rect::new(center - Point::from((size.w / 2., size.h / 2.)), size)
             })
             .collect();
-        let ids: Vec<&W::Id> = tiles.iter().map(|(tile, _, _)| tile.window().id()).collect();
+        let ids: Vec<&W::Id> = tiles
+            .iter()
+            .map(|(tile, _, _)| tile.window().id())
+            .collect();
 
-        // While closing, keep the slots the windows had while open (unless a window appeared
-        // since, which needs a fresh layout).
+        // Keep the slots from the last layout while the same windows are shown in the same
+        // area.
+        let area = self.expose_area();
         let mut cache = self.expose.slots.borrow_mut();
-        let kept = (!self.overview_open)
-            .then(|| cache.get(&ws.id()))
-            .flatten()
-            .and_then(|cached| {
+        let kept = cache
+            .get(&ws.id())
+            .filter(|(cached_area, cached)| *cached_area == area && cached.len() == ids.len())
+            .and_then(|(_, cached)| {
                 ids.iter()
                     .map(|id| cached.iter().find(|(c, _)| c == *id).map(|(_, slot)| *slot))
                     .collect::<Option<Vec<_>>>()
@@ -293,11 +297,12 @@ impl<W: LayoutElement> Monitor<W> {
         let slots = match kept {
             Some(slots) => slots,
             None => {
-                let slots = expose::layout(&windows, self.expose_area(), &params());
-                if self.overview_open {
-                    let entry = ids.iter().map(|id| (*id).clone()).zip(slots.iter().copied());
-                    cache.insert(ws.id(), entry.collect());
-                }
+                let slots = expose::layout(&windows, area, &params());
+                let entry = ids
+                    .iter()
+                    .map(|id| (*id).clone())
+                    .zip(slots.iter().copied());
+                cache.insert(ws.id(), (area, entry.collect()));
                 slots
             }
         };

@@ -1431,6 +1431,10 @@ impl<W: LayoutElement> Monitor<W> {
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
         self.overview_progress = progress.map(OverviewProgress::from);
+        // arbor: the next overview lays the windows out afresh from where they are then.
+        if self.overview_progress.is_none() {
+            self.expose.slots.get_mut().clear();
+        }
         let new_render_idx = self.workspace_render_idx();
 
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for
