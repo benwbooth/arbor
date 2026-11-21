@@ -561,6 +561,118 @@ Secret `kwallet`, and GlobalShortcuts / Wallpaper / Inhibit `arbor`.
 | `com.canonical.AppMenu.Registrar` (global menu) | hearth (see Code map) |
 | kded modules (plasma-nm secret agent, bluedevil, printer and disk notifiers, keyboard layout OSD) | kded6 doesn't run. hearth has a Bluetooth agent; without plasma-nm's agent, Wi-Fi/VPN password prompts need another NetworkManager secret agent |
 
+## Window previews (window capture)
+
+Shells capture single windows with `hyprland_toplevel_export_manager_v1`
+(version 2): this is what Quickshell's `ScreencopyView { captureSource:
+<Toplevel> }` uses (hearth's dock hover previews, overview and switcher
+thumbnails). `capture_toplevel_with_wlr_toplevel_handle` takes a
+`zwlr_foreign_toplevel_handle_v1`; the plain `capture_toplevel` takes the
+arbor window id from IPC. Frames are the window geometry at its output's
+scale (no title bar, popups clipped), Argb8888 in shm or dmabuf buffers.
+Copies without `ignore_damage` wait for damage since the previous copy made
+through the same manager, checked on every output redraw, so docked,
+floating, minimized windows, hidden tabs and windows on other workspaces
+all capture (hidden ones show their last content until they commit again).
+The cursor is never drawn in. Code: `src/protocols/toplevel_export.rs`,
+`src/handlers/toplevel_export.rs`; tests in `src/tests/toplevel_export.rs`
+(the rendering one is `--ignored`, needs EGL). Not implemented:
+ext-image-copy-capture (Quickshell 0.3.2 uses it for outputs only).
+
+## Session restore
+
+Like Plasma's "restore previous session": the running apps are saved to
+`$XDG_STATE_HOME/arbor/session.json` (`~/.local/state/arbor/session.json`)
+when arbor quits (also on SIGTERM, i.e. logout) and every 3 minutes, and
+reopened at the next session start (`arbor --session`, after 2 s).
+
+- Saved per window: app id, launch command (the `Exec` of
+  `<app-id>.desktop` from the XDG data dirs, else the process command line
+  from `/proc`), workspace (output + index, or name), the workspace's whole
+  dock tree (splits, fractions, tab groups and the shown tab) or the
+  floating position and size, and maximized / fullscreen / minimized.
+  Dialogs (windows with a parent) are left out.
+- One launch per saved process: an app with several windows in one
+  process (browsers, Dolphin, Konsole) is launched once and is expected to
+  reopen its windows itself.
+- As windows map they're matched by app id, in saved order, and put back;
+  the dock tree is rebuilt with the windows that have arrived so far
+  (missing ones are skipped, extra docked windows stay beside it). Windows
+  that haven't appeared after 90 s are forgotten.
+- Automatic saves never replace a saved session with an empty one (at
+  logout the apps may close before arbor); `arbor msg session save` does.
+
+```kdl
+session-restore {
+    // off
+    exclude-app-ids "org.keepassxc.KeePassXC"
+}
+```
+
+`arbor msg session save|restore|clear` (also the actions `session-save`,
+`session-restore`, `session-clear`). xx-session-management (apps
+restoring their own windows) is not implemented; smithay has no support.
+Code: `src/session.rs`, `src/layout/dock_shape.rs`; tests in
+`src/tests/session.rs`.
+
+## Clipboard after the app quits
+
+Like Klipper: arbor reads every format of each new clipboard and primary
+selection in the background, and when the owner goes away (the app quits
+or drops its source and nobody else took over) offers its copy as a
+compositor selection, so pasting still works. Selections offering
+`x-kde-passwordManagerHint` (KeePassXC and other password managers) are
+never kept. The copy is capped (all formats together); formats that don't
+fit are left out. arbor never takes the selection while a client owns one,
+so data-control clipboard managers (Vicinae's history) are unaffected: they
+just see the restored selection as one more change with the same content.
+
+```kdl
+clipboard {
+    // persist false
+    max-size-mb 32
+}
+```
+
+Code: `src/clipboard_persist.rs`; tests in `src/tests/clipboard_persist.rs`.
+
+## Accessibility
+
+- **Screen zoom** (KWin Zoom): `zoom-in`, `zoom-out`, `zoom-reset`
+  scale each output's whole frame around the pointer, animated (with the
+  `horizontal-view-movement` animation). Scaling around the pointer keeps
+  the pointer over what it points at, so input needs no remapping, and
+  moving the pointer pans. It is applied after everything else, independent
+  of the dock camera; screencasts and screenshots stay unzoomed. Allowed on
+  the lock screen. Following the text caret is not implemented yet.
+- **Reduce motion**: `accessibility { reduce-motion }`, or at runtime
+  `arbor msg action set-reduce-motion true|false` /
+  `toggle-reduce-motion`, turns animations off (as `animations { off }`).
+- **Screen reader**: Orca talks to apps over AT-SPI; the compositor's part
+  is `org.freedesktop.a11y.KeyboardMonitor` (the KWin/Mutter interface Orca
+  48+ uses to grab its modifier key, Insert / Caps Lock, and to watch
+  keys), which arbor serves on the session bus when started with
+  `--session`, plus AccessKit for arbor's own UI (overview, Alt-Tab,
+  screenshot UI, exit dialog). Apps need accessibility on: GTK always, Qt
+  with `QT_ACCESSIBILITY=1` (or Qt 6 when the AT-SPI bus says a screen
+  reader is active), Electron/Chromium with `--force-renderer-accessibility`
+  or when Orca is running. Not tested with Orca in a live session.
+
+```kdl
+accessibility {
+    zoom-step 1.25   // factor per step
+    zoom-max 16
+    // reduce-motion
+}
+binds {
+    Mod+Alt+Equal { zoom-in; }
+    Mod+Alt+Minus { zoom-out; }
+    Mod+Alt+0 { zoom-reset; }
+}
+```
+
+Code: `src/zoom.rs`; render check in `src/tests/zoom.rs` (`--ignored`, EGL).
+
 ## Configuration
 
 The config is KDL (`$XDG_CONFIG_HOME/arbor/config.kdl`); arbor writes a
@@ -581,7 +693,8 @@ Top-level sections, mostly as in niri:
 | `glass` | arbor: liquid glass defaults (see Liquid glass) |
 | `binds` | key, mouse button, wheel and touchpad-scroll binds to actions (below) |
 | `portal` | arbor's portal backend: `wallpaper-command`, `lockscreen-wallpaper-command` (see Wallpaper and Inhibit portals) |
-| `animations`, `gestures` (hot corners, DnD workspace switch), `overview`, `cursor`, `environment`, `spawn-at-startup` / `spawn-sh-at-startup`, `workspace "name"`, `screenshot-path`, `hotkey-overlay`, `clipboard`, `prefer-no-csd`, `xwayland-satellite`, `debug` | as in niri |
+| `clipboard`, `session-restore`, `accessibility` | arbor: see the sections above |
+| `animations`, `gestures` (hot corners, DnD workspace switch), `overview`, `cursor`, `environment`, `spawn-at-startup` / `spawn-sh-at-startup`, `workspace "name"`, `screenshot-path`, `hotkey-overlay`, `prefer-no-csd`, `xwayland-satellite`, `debug` | as in niri |
 
 Actions (for `binds` and `arbor msg action ...`):
 
@@ -605,6 +718,8 @@ Actions (for `binds` and `arbor msg action ...`):
   `switch-focus-between-floating-and-tiling`, `center-window` /
   `center-column` (floating windows).
 - **arbor:** `minimize-window`, `restore-window`, `focus-tab-next/prev`,
+  `zoom-in`, `zoom-out`, `zoom-reset`, `set-reduce-motion`, `toggle-reduce-motion`,
+  `session-save`, `session-restore`, `session-clear`,
   `camera-zoom-out/in`, `camera-show-all`, `camera-frame-window`,
   `camera-pan-left/right/up/down`, `camera-back/forward`.
 - **Workspaces, monitors, overview, screenshots, misc:** as in niri

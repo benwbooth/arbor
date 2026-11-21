@@ -264,6 +264,25 @@ hotkey-overlay {
     // skip-at-startup
 }
 
+// The clipboard (and primary selection) stays available after the app that copied it quits.
+clipboard {
+    // persist false
+    // max-size-mb 32
+}
+
+// The running apps are saved on quit and reopened in their places at the next start.
+session-restore {
+    // off
+    // exclude-app-ids "org.example.Secret" "org.example.Other"
+}
+
+// Screen zoom (zoom-in / zoom-out / zoom-reset) and reduced motion.
+accessibility {
+    // zoom-step 1.25
+    // zoom-max 16
+    // reduce-motion
+}
+
 // Uncomment this line to ask the clients to omit their client-side decorations if possible.
 // If the client will specifically ask for CSD, the request will be honored.
 // Additionally, clients will be informed that they are tiled, removing some client-side rounded corners.
@@ -580,6 +599,13 @@ binds {
     // Finer height adjustments when in column with other windows.
     Mod+Shift+Minus { set-window-height "-10%"; }
     Mod+Shift+Equal { set-window-height "+10%"; }
+
+    // Screen zoom (magnifier) around the pointer.
+    Mod+Alt+Equal hotkey-overlay-title="Zoom screen in" { zoom-in; }
+    Mod+Alt+Minus hotkey-overlay-title="Zoom screen out" { zoom-out; }
+    Mod+Alt+0 hotkey-overlay-title="Turn screen zoom off" { zoom-reset; }
+    Mod+Alt+WheelScrollUp cooldown-ms=50 { zoom-in; }
+    Mod+Alt+WheelScrollDown cooldown-ms=50 { zoom-out; }
 
     // Move the focused window between the floating and the tiling layout.
     Mod+V       { toggle-window-floating; }
