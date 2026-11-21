@@ -292,6 +292,9 @@ impl CompositorHandler for State {
                     // Test client: wleird-unmap.
                     trace!("toplevel got unmapped");
 
+                    // arbor: remember where it was (hide-to-tray apps unmap like this).
+                    self.window_memory_record(&window);
+
                     let active_window = self.arbor.layout.focus().map(|m| &m.window);
                     let was_active = active_window == Some(&window);
 

@@ -36,6 +36,7 @@ pub mod supervisor;
 pub mod ui;
 pub mod utils;
 pub mod window;
+pub mod window_memory;
 pub mod wl_proxy;
 pub mod zoom;
 

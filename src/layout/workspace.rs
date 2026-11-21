@@ -1428,6 +1428,25 @@ impl<W: LayoutElement> Workspace<W> {
         self.floating.place_window(id, rect);
     }
 
+    /// arbor (window memory): a floating window's tile position relative to the working area's
+    /// top-left, and its window size; `None` when it isn't floating here or is maximized or
+    /// fullscreen.
+    pub fn floating_placement(
+        &self,
+        id: &W::Id,
+    ) -> Option<(Point<f64, Logical>, Size<i32, Logical>)> {
+        let (tile, pos) = self
+            .floating
+            .tiles_with_offsets()
+            .find(|(tile, _)| tile.window().id() == id)?;
+        let win = tile.window();
+        if !win.pending_sizing_mode().is_normal() {
+            return None;
+        }
+        let size = win.expected_size().unwrap_or_else(|| win.size());
+        Some((pos - self.working_area.loc, size))
+    }
+
     pub fn move_floating_window(
         &mut self,
         id: Option<&W::Id>,

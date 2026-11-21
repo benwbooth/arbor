@@ -322,6 +322,9 @@ impl ResolvedWindowRules {
             resolved.open_on_workspace = open_on_workspace.map(|x| x.to_owned());
         });
 
+        // arbor: where this app's window was last time fills what the rules left unset.
+        crate::window_memory::apply_to_rules(window.toplevel().wl_surface(), &mut resolved);
+
         resolved
     }
 

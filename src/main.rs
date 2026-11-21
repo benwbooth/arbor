@@ -320,6 +320,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(None, &mut state, |state| state.refresh_and_flush_clients())
         .unwrap();
 
+    // Remember where every window is (window_memory.rs).
+    state.window_memory_record_all();
+
     // Save the running apps for the next start (session-restore).
     if cli.session {
         state.session_autosave();

@@ -300,6 +300,8 @@ pub struct Arbor {
     pub session_path: Option<std::path::PathBuf>,
     /// Session restore in progress.
     pub session_restore: Option<crate::session::PendingRestore>,
+    /// Where every app's window was last time (window_memory.rs).
+    pub window_memory: crate::window_memory::WindowMemory,
     /// Session lock state last sent to the supervisor (supervisor.rs).
     pub supervisor_locked: bool,
     /// The supervisor's Wayland socket, not accepting yet after a restart, and since when.
@@ -2701,6 +2703,11 @@ impl Arbor {
                 crate::session::default_session_path()
             },
             session_restore: None,
+            window_memory: crate::window_memory::WindowMemory::load(if cfg!(test) {
+                None
+            } else {
+                crate::window_memory::default_path()
+            }),
             supervisor_locked: false,
             held_listener,
             restart_floating: None,

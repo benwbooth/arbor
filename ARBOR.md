@@ -794,6 +794,25 @@ restoring their own windows) is not implemented; smithay has no support.
 Code: `src/session.rs`, `src/layout/dock_shape.rs`; tests in
 `src/tests/session.rs`.
 
+## Window memory (every app opens where it was)
+
+Separate from session restore: whenever a window closes, hides (an app hiding to the tray
+destroys or unmaps its toplevel, e.g. treetop) or arbor quits, the app's placement is saved to
+`$XDG_STATE_HOME/arbor/windows.json`: output, docked or floating, and for floating windows the
+position (relative to the working area's top left) and window size. The next window of that app
+gets it through the window rules at its initial configure, filling only what the user's own
+rules leave unset (`default-column-width`/`default-window-height`, `default-floating-position`,
+`open-on-output`, `open-docked`), so it opens at the saved size and place without a jump.
+
+- Keyed by app id, plus per window title (the title it opened with, last 16 per app), so an
+  app's settings window and main window each keep their own place.
+- Dialogs (windows with a parent) are neither recorded nor placed. With another window of the
+  app already open only the size is restored, so the new one doesn't cover the old one.
+- Maximized and fullscreen windows keep their previous record. A docked window keeps the last
+  floating geometry for when it floats again.
+
+Code: `src/window_memory.rs`, `src/layout/memory_ops.rs`.
+
 ## Restarting in place (new builds without logging out)
 
 `arbor --session` (or `arbor --supervise`, for nested testing) runs a small

@@ -76,6 +76,7 @@ pub mod camera;
 pub mod closing_window;
 pub mod dock;
 mod dock_ops;
+mod memory_ops;
 pub mod expose;
 pub mod floating;
 pub mod focus_ring;

@@ -858,6 +858,7 @@ impl XdgShellHandler for State {
             .stop_casts_for_target(CastTarget::Window { id: id.get() });
 
         self.store_unmap_snapshot(&window, output.as_ref());
+        self.window_memory_record(&window);
 
         let transaction = Transaction::new();
         let blocker = transaction.blocker();
@@ -1040,10 +1041,18 @@ impl State {
     pub fn send_initial_configure(&mut self, toplevel: &ToplevelSurface) {
         let _span = tracy_client::span!("State::send_initial_configure");
 
-        let Some(unmapped) = self.arbor.unmapped_windows.get_mut(toplevel.wl_surface()) else {
+        if !self.arbor.unmapped_windows.contains_key(toplevel.wl_surface()) {
             error!("window must be present in unmapped_windows in send_initial_configure()");
             return;
-        };
+        }
+
+        // arbor: where this app's window was last time (window_memory.rs).
+        self.window_memory_prepare(toplevel);
+        let unmapped = self
+            .arbor
+            .unmapped_windows
+            .get_mut(toplevel.wl_surface())
+            .unwrap();
 
         let config = self.arbor.config.borrow();
         let rules = ResolvedWindowRules::compute(
