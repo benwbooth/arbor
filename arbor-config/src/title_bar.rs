@@ -16,11 +16,11 @@ pub struct TitleBars {
 
 impl Default for TitleBars {
     fn default() -> Self {
-        // Breeze Dark.
+        // Breeze Dark's header colors (Plasma 6).
         Self {
             off: false,
-            height: 28.,
-            active_color: Color::from_rgba8_unpremul(0x31, 0x36, 0x3b, 0xff),
+            height: 30.,
+            active_color: Color::from_rgba8_unpremul(0x29, 0x2c, 0x30, 0xff),
             inactive_color: Color::from_rgba8_unpremul(0x20, 0x23, 0x26, 0xff),
             active_text_color: Color::from_rgba8_unpremul(0xfc, 0xfc, 0xfc, 0xff),
             inactive_text_color: Color::from_rgba8_unpremul(0xa1, 0xa9, 0xb1, 0xff),

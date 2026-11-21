@@ -1120,25 +1120,27 @@ fn title_bar_size_accounting_and_hits() {
             .requested_size()
             .unwrap()
     };
-    // The window gets the slot height minus the 28 px bar; no bar for the CSD window.
-    assert_eq!(requested(&s, 1).h, r1.size.h as i32 - 28);
+    // The window gets the slot height minus the 30 px bar; no bar for the CSD window.
+    assert_eq!(requested(&s, 1).h, r1.size.h as i32 - 30);
     assert_eq!(requested(&s, 2).h, r2.size.h as i32);
 
     let tile = s.tiles().find(|t| *t.window().id() == 1).unwrap();
-    assert_eq!(tile.title_bar_height(), 28.);
-    assert_eq!(tile.tile_height_for_window_height(100.), 128.);
-    assert_eq!(tile.window_height_for_tile_height(128.), 100.);
+    assert_eq!(tile.title_bar_height(), 30.);
+    assert_eq!(tile.tile_height_for_window_height(100.), 130.);
+    assert_eq!(tile.window_height_for_tile_height(130.), 100.);
     let tile2 = s.tiles().find(|t| *t.window().id() == 2).unwrap();
     assert_eq!(tile2.title_bar_height(), 0.);
-    assert_eq!(tile2.title_bar_hit(Point::from((16., 14.))), None);
+    assert_eq!(tile2.title_bar_hit(Point::from((16., 15.))), None);
 
-    // Hit testing is relative to the tile.
+    // Hit testing is relative to the tile; close is the rightmost button.
+    let bar = tile.title_bar_rect().unwrap();
+    let close_x = bar.loc.x + bar.size.w - 15.;
     assert_eq!(
-        tile.title_bar_hit(Point::from((16., 14.))),
+        tile.title_bar_hit(Point::from((close_x, 15.))),
         Some(TitleBarHit::Close)
     );
     assert_eq!(
-        tile.title_bar_hit(Point::from((80., 14.))),
+        tile.title_bar_hit(Point::from((bar.loc.x + 5., 15.))),
         Some(TitleBarHit::Bar)
     );
     assert_eq!(tile.title_bar_hit(Point::from((80., 40.))), None);

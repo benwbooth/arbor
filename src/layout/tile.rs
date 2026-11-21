@@ -563,8 +563,16 @@ impl<W: LayoutElement> Tile<W> {
                 .scaled_by(1. - expanded_progress as f32);
             let title = self.window.title().unwrap_or_default();
             let config = self.options.layout.title_bars;
-            self.title_bar
-                .update(rect.size, self.scale, title, is_active, config, radius);
+            let is_maximized = self.sizing_mode.is_maximized();
+            self.title_bar.update(
+                rect.size,
+                self.scale,
+                title,
+                is_active,
+                is_maximized,
+                config,
+                radius,
+            );
         }
     }
 
@@ -804,17 +812,17 @@ impl<W: LayoutElement> Tile<W> {
         title_bar::hit(rect.size, point - rect.loc)
     }
 
-    /// arbor: updates whether the pointer is over the title bar buttons; returns whether that
-    /// changed.
+    /// arbor: updates which title bar button is under the pointer; returns whether that changed.
     pub fn set_title_bar_hover(&mut self, point: Option<Point<f64, Logical>>) -> bool {
         let hovered = match (self.title_bar_rect(), point) {
             (Some(rect), Some(point)) => {
-                title_bar::is_over_buttons(rect.size, point - self.bob_offset() - rect.loc)
+                title_bar::hit(rect.size, point - self.bob_offset() - rect.loc)
+                    .filter(|hit| hit.is_button())
             }
-            _ => false,
+            _ => None,
         };
-        let changed = self.title_bar.buttons_hovered != hovered;
-        self.title_bar.buttons_hovered = hovered;
+        let changed = self.title_bar.hovered != hovered;
+        self.title_bar.hovered = hovered;
         changed
     }
 

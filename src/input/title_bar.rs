@@ -58,7 +58,7 @@ impl State {
                 }
             }
             TitleBarHit::Minimize => self.arbor.layout.minimize_window(Some(&window)),
-            TitleBarHit::Zoom => {
+            TitleBarHit::Maximize => {
                 self.arbor.layout.activate_window(&window);
                 self.arbor.layout.toggle_maximized(&window);
             }
@@ -96,7 +96,7 @@ impl State {
         true
     }
 
-    /// Shows the title bar button symbols while the pointer is over them.
+    /// Highlights the title bar button under the pointer.
     pub(super) fn update_title_bar_hover(&mut self) {
         let pointer = self.arbor.seat.get_pointer().unwrap();
         let target = if pointer.is_grabbed() {

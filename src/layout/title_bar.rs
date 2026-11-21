@@ -1,9 +1,9 @@
-//! arbor: macOS-style server-side title bars.
+//! arbor: KDE Breeze-style server-side title bars.
 //!
 //! Drawn by the compositor at the top of a tile, for windows that negotiated server-side
-//! decorations: traffic-light buttons on the left (close, minimize, zoom), the window title
-//! centered. The bar is rendered on the CPU with cairo/pango and cached as a texture until
-//! anything it shows changes.
+//! decorations: the window title centered, and Breeze's minimize, maximize and close buttons on
+//! the right. The buttons show a round highlight under the pointer (red for close). The bar is
+//! rendered on the CPU with cairo/pango and cached as a texture until anything it shows changes.
 
 use std::cell::RefCell;
 use std::f64::consts::PI;
@@ -22,31 +22,55 @@ use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::to_physical_precise_round;
 
-/// Diameter of a traffic-light button.
-const BUTTON_DIAMETER: f64 = 12.;
+/// Diameter of a button (and of its hover highlight).
+const BUTTON_DIAMETER: f64 = 18.;
 /// Distance between button centers.
-const BUTTON_SPACING: f64 = 20.;
-/// Distance from the left edge of the bar to the center of the first button.
-const BUTTON_MARGIN: f64 = 16.;
+const BUTTON_SPACING: f64 = 24.;
+/// Distance from the right edge of the bar to the center of the last (close) button.
+const BUTTON_MARGIN: f64 = 15.;
 /// Extra hit radius around a button.
 const BUTTON_HIT_SLACK: f64 = 3.;
 
-const FONT: &str = "sans 10";
+/// KDE's default window title font.
+const FONT: &str = "Noto Sans, sans 10";
+
+/// Breeze's "negative" color, used for the close button highlight.
+const CLOSE_HOVER: u32 = 0xda4453;
 
 /// Part of a title bar under a point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleBarHit {
-    Close,
     Minimize,
-    Zoom,
-    /// The rest of the bar: drag to move, double-click to zoom.
+    Maximize,
+    Close,
+    /// The rest of the bar: drag to move, double-click to maximize.
     Bar,
 }
 
-const BUTTONS: [TitleBarHit; 3] = [TitleBarHit::Close, TitleBarHit::Minimize, TitleBarHit::Zoom];
+impl TitleBarHit {
+    pub fn is_button(self) -> bool {
+        self != TitleBarHit::Bar
+    }
+}
 
-fn button_center(idx: usize, bar_height: f64) -> Point<f64, Logical> {
-    Point::from((BUTTON_MARGIN + BUTTON_SPACING * idx as f64, bar_height / 2.))
+/// Buttons from left to right, as in Breeze's default layout.
+const BUTTONS: [TitleBarHit; 3] = [
+    TitleBarHit::Minimize,
+    TitleBarHit::Maximize,
+    TitleBarHit::Close,
+];
+
+fn button_center(idx: usize, bar_size: Size<f64, Logical>) -> Point<f64, Logical> {
+    let from_right = (BUTTONS.len() - 1 - idx) as f64;
+    Point::from((
+        bar_size.w - BUTTON_MARGIN - BUTTON_SPACING * from_right,
+        bar_size.h / 2.,
+    ))
+}
+
+/// Width taken by the button group at the right edge.
+fn buttons_width() -> f64 {
+    BUTTON_MARGIN + BUTTON_SPACING * (BUTTONS.len() - 1) as f64 + BUTTON_DIAMETER / 2.
 }
 
 /// Hit-tests a point relative to the top-left corner of a bar of `size`.
@@ -56,18 +80,12 @@ pub fn hit(size: Size<f64, Logical>, point: Point<f64, Logical>) -> Option<Title
     }
 
     for (idx, button) in BUTTONS.into_iter().enumerate() {
-        let d = point - button_center(idx, size.h);
+        let d = point - button_center(idx, size);
         if d.x.hypot(d.y) <= BUTTON_DIAMETER / 2. + BUTTON_HIT_SLACK {
             return Some(button);
         }
     }
     Some(TitleBarHit::Bar)
-}
-
-/// Whether a point is over the button group (which shows the button symbols).
-pub fn is_over_buttons(size: Size<f64, Logical>, point: Point<f64, Logical>) -> bool {
-    let right = BUTTON_MARGIN + BUTTON_SPACING * 2. + BUTTON_DIAMETER / 2. + BUTTON_HIT_SLACK;
-    Rectangle::from_size(Size::from((right, size.h))).contains(point)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,7 +94,8 @@ struct Key {
     scale: f64,
     title: String,
     is_active: bool,
-    buttons_hovered: bool,
+    is_maximized: bool,
+    hovered: Option<TitleBarHit>,
     config: TitleBars,
     radius: CornerRadius,
 }
@@ -87,15 +106,15 @@ pub struct TitleBar {
     key: Option<Key>,
     buffer: Option<MemoryBuffer>,
     texture: RefCell<Option<TextureBuffer<GlesTexture>>>,
-    /// The pointer is over the buttons.
-    pub buttons_hovered: bool,
+    /// The button under the pointer.
+    pub hovered: Option<TitleBarHit>,
 }
 
 impl std::fmt::Debug for TitleBar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TitleBar")
             .field("key", &self.key)
-            .field("buttons_hovered", &self.buttons_hovered)
+            .field("hovered", &self.hovered)
             .finish_non_exhaustive()
     }
 }
@@ -109,6 +128,7 @@ impl TitleBar {
         scale: f64,
         title: String,
         is_active: bool,
+        is_maximized: bool,
         config: TitleBars,
         radius: CornerRadius,
     ) {
@@ -121,7 +141,8 @@ impl TitleBar {
             scale,
             title,
             is_active,
-            buttons_hovered: self.buttons_hovered,
+            is_maximized,
+            hovered: self.hovered,
             config,
             radius,
         };
@@ -220,53 +241,77 @@ fn draw(key: &Key) -> anyhow::Result<MemoryBuffer> {
     );
     cr.fill()?;
 
-    // Traffic lights.
-    let lit = key.is_active || key.buttons_hovered;
-    let colors = [0xff5f57, 0xfebc2e, 0x28c840];
-    let bar_h = hf / s;
-    for (idx, color) in colors.into_iter().enumerate() {
-        let c = button_center(idx, bar_h);
+    let text_color = if key.is_active {
+        config.active_text_color
+    } else {
+        config.inactive_text_color
+    };
+    let bar_color = if key.is_active {
+        config.active_color
+    } else {
+        config.inactive_color
+    };
+
+    // Buttons, drawn like Breeze's on an 18-unit grid.
+    let bar_size = Size::from((wf / s, hf / s));
+    for (idx, button) in BUTTONS.into_iter().enumerate() {
+        let c = button_center(idx, bar_size);
         let (cx, cy) = (c.x * s, c.y * s);
         let r = BUTTON_DIAMETER / 2. * s;
-        cr.new_path();
-        cr.arc(cx, cy, r, 0., 2. * PI);
-        if lit {
-            rgb(&cr, color);
-        } else {
-            rgb(&cr, 0x5a5f66);
-        }
-        cr.fill()?;
+        let hovered = key.hovered == Some(button);
 
-        if key.buttons_hovered {
-            // Symbols: ×, −, +.
-            cr.set_source_rgba(0., 0., 0., 0.6);
-            cr.set_line_width((1.2 * s).max(1.));
-            let a = r * 0.45;
+        if hovered {
             cr.new_path();
-            match idx {
-                0 => {
-                    cr.move_to(cx - a, cy - a);
-                    cr.line_to(cx + a, cy + a);
-                    cr.move_to(cx + a, cy - a);
-                    cr.line_to(cx - a, cy + a);
-                }
-                1 => {
-                    cr.move_to(cx - a * 1.2, cy);
-                    cr.line_to(cx + a * 1.2, cy);
-                }
-                _ => {
-                    cr.move_to(cx - a * 1.2, cy);
-                    cr.line_to(cx + a * 1.2, cy);
-                    cr.move_to(cx, cy - a * 1.2);
-                    cr.line_to(cx, cy + a * 1.2);
-                }
+            cr.arc(cx, cy, r, 0., 2. * PI);
+            if button == TitleBarHit::Close {
+                rgb(&cr, CLOSE_HOVER);
+            } else {
+                set_color(&cr, text_color);
             }
-            cr.stroke()?;
+            cr.fill()?;
         }
+
+        if !hovered {
+            set_color(&cr, text_color);
+        } else if button == TitleBarHit::Close {
+            cr.set_source_rgb(1., 1., 1.);
+        } else {
+            set_color(&cr, bar_color);
+        }
+
+        // Grid unit, with the grid's (9, 9) at the button center.
+        let u = BUTTON_DIAMETER * s / 18.;
+        let p = |x: f64, y: f64| (cx + (x - 9.) * u, cy + (y - 9.) * u);
+        cr.set_line_width((1.1 * s).max(1.));
+        cr.set_line_cap(cairo::LineCap::Round);
+        cr.set_line_join(cairo::LineJoin::Miter);
+        cr.new_path();
+        let line = |points: &[(f64, f64)]| {
+            let (x, y) = p(points[0].0, points[0].1);
+            cr.move_to(x, y);
+            for &(px, py) in &points[1..] {
+                let (x, y) = p(px, py);
+                cr.line_to(x, y);
+            }
+        };
+        match button {
+            TitleBarHit::Minimize => line(&[(4., 7.), (9., 12.), (14., 7.)]),
+            TitleBarHit::Maximize if key.is_maximized => {
+                line(&[(4., 9.), (9., 4.), (14., 9.), (9., 14.)]);
+                cr.close_path();
+            }
+            TitleBarHit::Maximize => line(&[(4., 11.), (9., 6.), (14., 11.)]),
+            TitleBarHit::Close => {
+                line(&[(5., 5.), (13., 13.)]);
+                line(&[(13., 5.), (5., 13.)]);
+            }
+            TitleBarHit::Bar => (),
+        }
+        cr.stroke()?;
     }
 
     // Title, centered over the whole bar, kept clear of the buttons on both sides.
-    let reserved = (BUTTON_MARGIN + BUTTON_SPACING * 2. + BUTTON_DIAMETER / 2. + 12.) * s;
+    let reserved = (buttons_width() + 8.) * s;
     let text_w = wf - reserved * 2.;
     if text_w > 0. && !key.title.is_empty() {
         let mut font = FontDescription::from_string(FONT);
@@ -283,14 +328,7 @@ fn draw(key: &Key) -> anyhow::Result<MemoryBuffer> {
 
         let (_, text_h) = layout.pixel_size();
         cr.move_to(reserved, ((hf - f64::from(text_h)) / 2.).round());
-        set_color(
-            &cr,
-            if key.is_active {
-                config.active_text_color
-            } else {
-                config.inactive_text_color
-            },
-        );
+        set_color(&cr, text_color);
         pangocairo::functions::show_layout(&cr, &layout);
     }
 
@@ -311,17 +349,22 @@ mod tests {
 
     #[test]
     fn hit_buttons_and_bar() {
-        let size = Size::from((400., 28.));
-        assert_eq!(hit(size, Point::from((16., 14.))), Some(TitleBarHit::Close));
+        let size = Size::from((400., 30.));
         assert_eq!(
-            hit(size, Point::from((36., 14.))),
+            hit(size, Point::from((385., 15.))),
+            Some(TitleBarHit::Close)
+        );
+        assert_eq!(
+            hit(size, Point::from((361., 15.))),
+            Some(TitleBarHit::Maximize)
+        );
+        assert_eq!(
+            hit(size, Point::from((337., 15.))),
             Some(TitleBarHit::Minimize)
         );
-        assert_eq!(hit(size, Point::from((56., 14.))), Some(TitleBarHit::Zoom));
-        assert_eq!(hit(size, Point::from((200., 14.))), Some(TitleBarHit::Bar));
-        assert_eq!(hit(size, Point::from((26., 2.))), Some(TitleBarHit::Bar));
-        assert_eq!(hit(size, Point::from((200., 30.))), None);
-        assert!(is_over_buttons(size, Point::from((60., 5.))));
-        assert!(!is_over_buttons(size, Point::from((120., 5.))));
+        assert_eq!(hit(size, Point::from((16., 15.))), Some(TitleBarHit::Bar));
+        assert_eq!(hit(size, Point::from((200., 15.))), Some(TitleBarHit::Bar));
+        assert_eq!(hit(size, Point::from((300., 15.))), Some(TitleBarHit::Bar));
+        assert_eq!(hit(size, Point::from((200., 32.))), None);
     }
 }

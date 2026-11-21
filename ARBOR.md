@@ -304,21 +304,23 @@ zones picker, `~/.config/hearth/zones.json`) over IPC:
 
 ## Title bars
 
-arbor draws macOS-style title bars for windows that negotiated server-side
+arbor draws KDE Breeze-style title bars for windows that negotiated server-side
 decorations (xdg-decoration server-side, or the KDE server-decoration
 protocol in server mode: Qt/KDE apps). CSD apps (browsers, Electron, GTK
 header bars) don't get one. The bar sits inside the tile above the window
-(the window gets the tile height minus the bar), with traffic-light buttons
-on the left (close, minimize, zoom; symbols on hover) and the title
-centered; top corners follow `geometry-corner-radius`. Drag the bar to move
-(and drag-to-dock); double-click or the green button toggles maximize.
+(the window gets the tile height minus the bar), with the title centered in
+Noto Sans 10 and Breeze's buttons on the right (minimize, maximize, close;
+a round highlight under the pointer, red for close); top corners follow
+`geometry-corner-radius`. Drag the bar to move (and drag-to-dock);
+double-click or the maximize button toggles maximize (the icon turns into
+Breeze's restore diamond); minimize sends the window to the Dock.
 
 ```kdl
 layout {
     title-bars {
         // off
-        height 28
-        active-color "#31363b"
+        height 30
+        active-color "#292c30"
         inactive-color "#202326"
         active-text-color "#fcfcfc"
         inactive-text-color "#a1a9b1"
