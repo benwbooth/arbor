@@ -153,3 +153,85 @@ fn kglobalaccel_over_dbus() {
     assert_eq!(component, "org.example.app");
     assert_eq!(action, "say-hi");
 }
+
+/// `org.freedesktop.ScreenSaver.Inhibit` and the Inhibit portal reach the idle notifier (which
+/// swayidle listens to), and un-inhibiting does too without any other event.
+#[test]
+#[ignore = "needs a private session bus (dbus-run-session)"]
+fn idle_inhibit_over_dbus() {
+    use crate::dbus::freedesktop_screensaver::ScreenSaver;
+    use crate::dbus::Start as _;
+
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        return;
+    }
+
+    let mut server = Server::new(Config::default());
+    let arbor = &mut server.state.arbor;
+    let (ping, source) = calloop::ping::make_ping().unwrap();
+    arbor.event_loop.insert_source(source, |_, _, _| ()).unwrap();
+    let _ss = ScreenSaver::new(arbor.is_fdo_idle_inhibited.clone(), Some(ping.clone()))
+        .start()
+        .unwrap();
+
+    let portal = zbus::blocking::Connection::session().unwrap();
+    portal
+        .request_name("org.freedesktop.impl.portal.desktop.arbor")
+        .unwrap();
+    crate::dbus::portal_inhibit::register(&portal, arbor.is_portal_idle_inhibited.clone(), Some(ping))
+        .unwrap();
+
+    let client = zbus::blocking::Connection::session().unwrap();
+    let mut inhibited = |server: &mut Server| {
+        server.dispatch();
+        server.state.arbor.idle_notifier_state.is_inhibited()
+    };
+
+    let cookie: u32 = client
+        .call_method(
+            Some("org.freedesktop.ScreenSaver"),
+            "/org/freedesktop/ScreenSaver",
+            Some("org.freedesktop.ScreenSaver"),
+            "Inhibit",
+            &("mpv", "playing"),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(inhibited(&mut server));
+    client
+        .call_method(
+            Some("org.freedesktop.ScreenSaver"),
+            "/org/freedesktop/ScreenSaver",
+            Some("org.freedesktop.ScreenSaver"),
+            "UnInhibit",
+            &(cookie,),
+        )
+        .unwrap();
+    assert!(!inhibited(&mut server));
+
+    let handle = zbus::zvariant::ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1_1/t")
+        .unwrap();
+    let options: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
+    client
+        .call_method(
+            Some("org.freedesktop.impl.portal.desktop.arbor"),
+            "/org/freedesktop/portal/desktop",
+            Some("org.freedesktop.impl.portal.Inhibit"),
+            "Inhibit",
+            &(&handle, "org.example.Player", "", 8u32, options),
+        )
+        .unwrap();
+    assert!(inhibited(&mut server));
+    client
+        .call_method(
+            Some("org.freedesktop.impl.portal.desktop.arbor"),
+            &handle,
+            Some("org.freedesktop.impl.portal.Request"),
+            "Close",
+            &(),
+        )
+        .unwrap();
+    assert!(!inhibited(&mut server));
+}

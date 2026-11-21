@@ -13,6 +13,7 @@ pub mod kglobalaccel;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
 pub mod portal_global_shortcuts;
+pub mod portal_inhibit;
 pub mod portal_wallpaper;
 
 #[cfg(feature = "xdp-gnome-screencast")]
@@ -26,7 +27,7 @@ use self::gnome_shell_introspect::Introspect;
 use self::mutter_display_config::DisplayConfig;
 use self::mutter_service_channel::ServiceChannel;
 
-trait Start: Interface {
+pub(crate) trait Start: Interface {
     fn start(self) -> anyhow::Result<zbus::blocking::Connection>;
 }
 
@@ -94,7 +95,8 @@ impl DBusServers {
                 .unwrap();
             dbus.conn_display_config = try_start(display_config);
 
-            let screen_saver = ScreenSaver::new(arbor.is_fdo_idle_inhibited.clone());
+            let screen_saver =
+                ScreenSaver::new(arbor.is_fdo_idle_inhibited.clone(), idle_wake(arbor));
             dbus.conn_screen_saver = try_start(screen_saver);
 
             let (to_arbor, from_screenshot) = calloop::channel::channel();
@@ -148,6 +150,10 @@ impl DBusServers {
                 if let Err(err) = portal_wallpaper::register(conn, &arbor.event_loop) {
                     warn!("error starting the Wallpaper portal: {err:?}");
                 }
+                let inhibited = arbor.is_portal_idle_inhibited.clone();
+                if let Err(err) = portal_inhibit::register(conn, inhibited, idle_wake(arbor)) {
+                    warn!("error starting the Inhibit portal: {err:?}");
+                }
             }
 
             dbus.conn_kglobalaccel =
@@ -196,6 +202,13 @@ impl DBusServers {
 
         arbor.dbus = Some(dbus);
     }
+}
+
+/// A ping that wakes the compositor loop (its refresh then picks up D-Bus idle inhibitors).
+fn idle_wake(arbor: &crate::arbor::Arbor) -> Option<calloop::ping::Ping> {
+    let (ping, source) = calloop::ping::make_ping().ok()?;
+    arbor.event_loop.insert_source(source, |_, _, _| ()).ok()?;
+    Some(ping)
 }
 
 fn try_start<I: Start>(iface: I) -> Option<Connection> {

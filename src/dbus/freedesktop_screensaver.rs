@@ -20,6 +20,9 @@ pub struct ScreenSaver {
     inhibitors: Arc<Mutex<HashMap<u32, OwnedUniqueName>>>,
     counter: Arc<AtomicU32>,
     monitor_task: Arc<OnceLock<Task<()>>>,
+    /// Wakes the compositor loop so that a change reaches the idle notifier right away (an idle
+    /// session has no other events that would get it to look).
+    wake: Option<calloop::ping::Ping>,
 }
 
 #[interface(name = "org.freedesktop.ScreenSaver")]
@@ -53,6 +56,7 @@ impl ScreenSaver {
             if let Entry::Vacant(entry) = inhibitors.entry(inhibitor_key) {
                 entry.insert(name);
                 self.is_inhibited.store(true, Ordering::SeqCst);
+                self.wake();
                 let _ = cookie.insert(inhibitor_key);
                 break;
             }
@@ -69,6 +73,7 @@ impl ScreenSaver {
         if inhibitors.remove(&cookie).is_some() {
             if inhibitors.is_empty() {
                 self.is_inhibited.store(false, Ordering::SeqCst);
+                self.wake();
             }
 
             Ok(())
@@ -79,7 +84,13 @@ impl ScreenSaver {
 }
 
 impl ScreenSaver {
-    pub fn new(is_inhibited: Arc<AtomicBool>) -> Self {
+    fn wake(&self) {
+        if let Some(wake) = &self.wake {
+            wake.ping();
+        }
+    }
+
+    pub fn new(is_inhibited: Arc<AtomicBool>, wake: Option<calloop::ping::Ping>) -> Self {
         Self {
             is_inhibited,
             is_broken: Arc::new(AtomicBool::new(false)),
@@ -87,6 +98,7 @@ impl ScreenSaver {
             // Start from 1 because some clients don't like 0.
             counter: Arc::new(AtomicU32::new(1)),
             monitor_task: Arc::new(OnceLock::new()),
+            wake,
         }
     }
 }
@@ -95,6 +107,7 @@ async fn monitor_disappeared_clients(
     conn: &zbus::Connection,
     is_inhibited: Arc<AtomicBool>,
     inhibitors: Arc<Mutex<HashMap<u32, OwnedUniqueName>>>,
+    wake: Option<calloop::ping::Ping>,
 ) -> anyhow::Result<()> {
     let proxy = fdo::DBusProxy::new(conn)
         .await
@@ -120,6 +133,9 @@ async fn monitor_disappeared_clients(
             let mut inhibitors = inhibitors.lock().unwrap();
             inhibitors.retain(|_, owner| owner != name);
             is_inhibited.store(!inhibitors.is_empty(), Ordering::SeqCst);
+            if let Some(wake) = &wake {
+                wake.ping();
+            }
         } else {
             error!("non-null new_owner should've been filtered out");
         }
@@ -134,6 +150,7 @@ impl Start for ScreenSaver {
         let is_broken = self.is_broken.clone();
         let inhibitors = self.inhibitors.clone();
         let monitor_task = self.monitor_task.clone();
+        let wake = self.wake.clone();
 
         let conn = zbus::blocking::Connection::session()?;
         let flags = RequestNameFlags::AllowReplacement
@@ -156,8 +173,13 @@ impl Start for ScreenSaver {
             let conn = async_conn.clone();
             async move {
                 if let Err(err) =
-                    monitor_disappeared_clients(&conn, is_inhibited.clone(), inhibitors.clone())
-                        .await
+                    monitor_disappeared_clients(
+                        &conn,
+                        is_inhibited.clone(),
+                        inhibitors.clone(),
+                        wake,
+                    )
+                    .await
                 {
                     warn!("error monitoring org.freedesktop.ScreenSaver clients: {err:?}");
                     is_broken.store(true, Ordering::SeqCst);

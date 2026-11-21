@@ -342,6 +342,8 @@ pub struct Arbor {
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
+    /// Idle inhibited through the Inhibit portal (arbor's portal backend).
+    pub is_portal_idle_inhibited: Arc<AtomicBool>,
     pub keyboard_shortcuts_inhibiting_surfaces: HashMap<WlSurface, KeyboardShortcutsInhibitor>,
 
     /// Most recent XKB settings from org.freedesktop.locale1.
@@ -2609,6 +2611,7 @@ impl Arbor {
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
+            is_portal_idle_inhibited: Arc::new(AtomicBool::new(false)),
             keyboard_shortcuts_inhibiting_surfaces: HashMap::new(),
             xkb_from_locale1: None,
             cursor_manager,
@@ -4040,6 +4043,7 @@ impl Arbor {
         self.idle_inhibiting_surfaces.retain(|s| s.is_alive());
 
         let is_inhibited = self.is_fdo_idle_inhibited.load(Ordering::SeqCst)
+            || self.is_portal_idle_inhibited.load(Ordering::SeqCst)
             || self.idle_inhibiting_surfaces.iter().any(|surface| {
                 with_states(surface, |states| {
                     surface_primary_scanout_output(surface, states).is_some()
