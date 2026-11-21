@@ -170,6 +170,8 @@ in
             "org.freedesktop.impl.portal.Access" = "gtk";
             "org.freedesktop.impl.portal.FileChooser" = lib.mkIf (!cfg.useNautilus) "gtk";
             "org.freedesktop.impl.portal.Notification" = "gtk";
+            # arbor's own GlobalShortcuts backend (share/xdg-desktop-portal/portals/arbor.portal).
+            "org.freedesktop.impl.portal.GlobalShortcuts" = "arbor";
           };
 
           # Screencasting goes through arbor's Mutter-compatible D-Bus API, which
@@ -177,6 +179,8 @@ in
           extraPortals = [
             pkgs.xdg-desktop-portal-gnome
             pkgs.xdg-desktop-portal-gtk
+            # arbor.portal: the GlobalShortcuts backend arbor itself provides.
+            cfg.package
           ];
         };
 
