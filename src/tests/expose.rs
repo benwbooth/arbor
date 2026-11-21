@@ -252,3 +252,73 @@ fn expose_renders_and_hits() {
     save(&back, "4-closed-again");
     assert_eq!(pixel(&back, 1900, 1070), c0);
 }
+
+/// Dragging a window from the exposé onto the "+" thumbnail moves it to a new workspace.
+#[test]
+fn expose_drag_to_workspace() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    color_window(&mut f, id, (800, 600), (1., 0., 0.), "One");
+    color_window(&mut f, id, (800, 600), (0., 1., 0.), "Two");
+    f.niri_complete_animations();
+
+    f.niri().layout.toggle_overview();
+    f.niri_complete_animations();
+    let output = f.niri_output(1);
+
+    let hit_at =
+        |f: &mut Fixture, x: f64, y: f64| f.niri().layout.expose_hit(&output, (x, y).into());
+    let (window, start) = (0..1920)
+        .step_by(10)
+        .flat_map(|x| (200..1080).step_by(10).map(move |y| (x, y)))
+        .find_map(|(x, y)| match hit_at(&mut f, x as f64, y as f64) {
+            Some(ExposeHit::Window { id, close: false }) => Some((id, (x as f64, y as f64))),
+            _ => None,
+        })
+        .unwrap();
+    let plus = (0..1920)
+        .step_by(10)
+        .find_map(|x| match hit_at(&mut f, x as f64, 60.) {
+            Some(ExposeHit::Workspace(1)) => Some((x as f64, 60.)),
+            _ => None,
+        })
+        .unwrap();
+
+    f.niri()
+        .layout
+        .expose_drag_begin(&output, &window, start.into());
+    f.niri().layout.expose_drag_update(&output, plus.into());
+    assert!(f.niri().layout.expose_drag_end());
+
+    let ws_of = |f: &mut Fixture| {
+        f.niri()
+            .layout
+            .workspaces()
+            .find_map(|(_, idx, ws)| ws.windows().any(|w| w.window == window).then_some(idx))
+    };
+    assert_eq!(ws_of(&mut f), Some(1));
+    // The other window stays, and the overview is still open.
+    assert_eq!(
+        f.niri()
+            .layout
+            .active_workspace()
+            .unwrap()
+            .windows()
+            .count(),
+        1
+    );
+    assert!(f.niri().layout.is_overview_open());
+
+    // Dropping on empty space does nothing.
+    f.niri().layout.switch_workspace(1);
+    f.niri_complete_animations();
+    f.niri()
+        .layout
+        .expose_drag_begin(&output, &window, (960., 600.).into());
+    f.niri()
+        .layout
+        .expose_drag_update(&output, (960., 1000.).into());
+    assert!(!f.niri().layout.expose_drag_end());
+    assert_eq!(ws_of(&mut f), Some(1));
+}
