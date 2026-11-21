@@ -561,7 +561,7 @@ Code: `src/dbus/portal_casting.rs` (ScreenCast + RemoteDesktop, shared sessions)
 bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close):
 
 ```sh
-ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_remote_desktop -- --ignored
+ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_ -- --ignored --test-threads=1
 ```
 
 ## Desktop integration

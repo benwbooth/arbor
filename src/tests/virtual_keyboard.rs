@@ -263,7 +263,7 @@ fn virtual_keyboard_keys_use_its_keymap() {
         got.last(),
         Some(&xkb::Keysym::a),
         "{:?}",
-        &events[n..].len()
+        events[n..].len()
     );
 }
 
