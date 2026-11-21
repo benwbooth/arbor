@@ -38,7 +38,10 @@ const BACKDROP_COLOR: [f32; 4] = [0., 0., 0., 0.45];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAnswer {
     /// Index into [`DialogRequest::choices`], and the state of the "remember" checkbox.
-    Chosen { index: usize, remember: bool },
+    Chosen {
+        index: usize,
+        remember: bool,
+    },
     Cancelled,
 }
 
@@ -63,7 +66,7 @@ struct Open {
     selected: usize,
     remember: bool,
     /// Rendered texture for (scale) and hit rectangles in logical, dialog-local coordinates.
-    cache: RefCell<Option<(f64, MemoryBuffer, Vec<(Hit, Rectangle<f64, Logical>)>)>>,
+    cache: RefCell<Option<(f64, MemoryBuffer, Hits)>>,
     /// Where the dialog was last drawn (global logical rectangle).
     drawn_at: RefCell<Option<Rectangle<f64, Logical>>>,
 }
@@ -263,15 +266,13 @@ impl PortalDialog {
             Kind::Unspecified,
         );
         let elem = PrimaryGpuTextureRenderElement(elem);
-        let elem = RescaleRenderElement::from_element(
-            elem,
-            location.to_physical_precise_round(scale),
-            1.,
-        );
+        let elem =
+            RescaleRenderElement::from_element(elem, location.to_physical_precise_round(scale), 1.);
         push(ExitConfirmDialogRenderElement::Texture(elem));
 
         let mut backdrop = self.backdrop.borrow_mut();
-        let backdrop = backdrop.get_or_insert_with(|| SolidColorBuffer::new(output_size, BACKDROP_COLOR));
+        let backdrop =
+            backdrop.get_or_insert_with(|| SolidColorBuffer::new(output_size, BACKDROP_COLOR));
         backdrop.resize(output_size);
         let elem = SolidColorRenderElement::from_buffer(
             backdrop,
@@ -437,7 +438,13 @@ fn render(
     }
     y += gap;
 
-    button(&cr, y, "Cancel   <span alpha='60%'>(Esc)</span>", false, false)?;
+    button(
+        &cr,
+        y,
+        "Cancel   <span alpha='60%'>(Esc)</span>",
+        false,
+        false,
+    )?;
     hits.push((Hit::Cancel, to_logical(pad, y, width, row_h)));
     y += row_h + gap;
 
@@ -473,7 +480,10 @@ mod tests {
 
     use super::*;
 
-    fn request(choices: &[&str], remember: Option<bool>) -> (DialogRequest, async_channel::Receiver<DialogAnswer>) {
+    fn request(
+        choices: &[&str],
+        remember: Option<bool>,
+    ) -> (DialogRequest, async_channel::Receiver<DialogAnswer>) {
         let (tx, rx) = async_channel::bounded(1);
         (
             DialogRequest {

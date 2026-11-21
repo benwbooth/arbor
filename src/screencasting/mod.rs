@@ -40,6 +40,9 @@ pub struct Screencasting {
     /// Window ID for the "dynamic cast" special window for the xdp-gnome picker.
     pub dynamic_cast_id_for_portal: MappedId,
 
+    /// Told about every stopped cast session, for arbor's own portal backend.
+    pub portal_cast_stopped: Option<async_channel::Sender<CastSessionId>>,
+
     // Drop PipeWire last, and specifically after casts, to prevent a double-free (yay).
     pub pipewire: Option<PipeWire>,
 }
@@ -71,6 +74,7 @@ impl Screencasting {
             pw_to_arbor,
             mapped_cast_output: HashMap::new(),
             dynamic_cast_id_for_portal: MappedId::next(),
+            portal_cast_stopped: None,
             pipewire: None,
         }
     }
@@ -468,6 +472,95 @@ impl State {
     }
 }
 
+/// What a portal cast shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortalCastTarget {
+    Output(String),
+    Window(u64),
+}
+
+/// Stream properties reported to portal clients (logical coordinates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortalStreamMeta {
+    pub position: (i32, i32),
+    pub size: (i32, i32),
+    /// Portal source type: 1 monitor, 2 window.
+    pub source_type: u32,
+}
+
+impl State {
+    /// Starts a PipeWire cast for arbor's portal backend. The node id goes to `ready` once the
+    /// stream is set up.
+    pub fn start_portal_cast(
+        &mut self,
+        session_id: CastSessionId,
+        target: &PortalCastTarget,
+        cursor_mode: CursorMode,
+        ready: async_channel::Sender<u32>,
+    ) -> anyhow::Result<PortalStreamMeta> {
+        let (cast_target, size, refresh, alpha, meta) = match target {
+            PortalCastTarget::Output(name) => {
+                let output = self
+                    .arbor
+                    .global_space
+                    .outputs()
+                    .find(|out| out.name() == *name)
+                    .cloned()
+                    .context("the screen is gone")?;
+                let geo = self
+                    .arbor
+                    .global_space
+                    .output_geometry(&output)
+                    .context("the screen is disabled")?;
+                let (size, refresh) = cast_params_for_output(&output);
+                let meta = PortalStreamMeta {
+                    position: (geo.loc.x, geo.loc.y),
+                    size: (geo.size.w, geo.size.h),
+                    source_type: 1,
+                };
+                (CastTarget::output(&output), size, refresh, false, meta)
+            }
+            PortalCastTarget::Window(id) => {
+                let (size, refresh) = self
+                    .arbor
+                    .cast_params_for_window(*id)
+                    .context("the window is gone")?;
+                let logical = self
+                    .arbor
+                    .layout
+                    .windows()
+                    .find(|(_, m)| m.id().get() == *id)
+                    .map(|(_, m)| m.window.bbox_with_popups().size)
+                    .unwrap_or_default();
+                let meta = PortalStreamMeta {
+                    position: (0, 0),
+                    size: (logical.w, logical.h),
+                    source_type: 2,
+                };
+                (CastTarget::Window { id: *id }, size, refresh, true, meta)
+            }
+        };
+
+        let (gbm, render_formats) = self.prepare_pw_cast()?;
+        let pw = self.arbor.casting.pipewire.as_ref().unwrap();
+        let cast = pw.start_cast(
+            gbm,
+            render_formats,
+            session_id,
+            CastStreamId::next(),
+            cast_target,
+            size,
+            refresh,
+            alpha,
+            cursor_mode,
+            StreamReady::Channel(ready),
+        )?;
+        self.arbor.casting.casts.push(cast);
+        self.arbor.refresh_mapped_cast_window_rules();
+        Ok(meta)
+    }
+}
+
 impl Arbor {
     pub fn refresh_mapped_cast_window_rules(&mut self) {
         // O(N^2) but should be fine since there aren't many casts usually.
@@ -726,8 +819,14 @@ impl Arbor {
             }
         }
 
-        let dbus = &self.dbus.as_ref().unwrap();
-        let server = dbus.conn_screen_cast.as_ref().unwrap().object_server();
+        if let Some(tx) = &self.casting.portal_cast_stopped {
+            let _ = tx.try_send(session_id);
+        }
+
+        let Some(conn) = self.dbus.as_ref().and_then(|d| d.conn_screen_cast.as_ref()) else {
+            return;
+        };
+        let server = conn.object_server();
         let path = format!("/org/gnome/Mutter/ScreenCast/Session/u{}", session_id.get());
         if let Ok(iface) = server.interface::<_, mutter_screen_cast::Session>(path) {
             let _span = tracy_client::span!("invoking Session::stop");

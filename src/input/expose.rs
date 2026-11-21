@@ -55,6 +55,35 @@ impl State {
             return false;
         };
 
+        // A portal asked the user to pick a window: a click picks it.
+        if self.arbor.portal_window_pick.is_some() {
+            match (button, hit) {
+                (Some(MouseButton::Left), ExposeHit::Window { id, .. }) => {
+                    let picked = self
+                        .arbor
+                        .layout
+                        .windows()
+                        .find(|(_, m)| m.window == id)
+                        .map(|(_, m)| m.id());
+                    if let Some(tx) = self.arbor.portal_window_pick.take() {
+                        let _ = tx.try_send(picked);
+                    }
+                    self.arbor.layout.close_overview();
+                }
+                (Some(MouseButton::Left), ExposeHit::Workspace(idx)) => {
+                    self.arbor.layout.focus_output(&output);
+                    self.arbor.layout.switch_workspace(idx);
+                }
+                (Some(MouseButton::Left), ExposeHit::Empty) => {
+                    // Closing the overview cancels the pick (see State::refresh).
+                    self.arbor.layout.close_overview();
+                }
+                _ => (),
+            }
+            self.arbor.queue_redraw_all();
+            return true;
+        }
+
         match (button, hit) {
             (Some(MouseButton::Left), ExposeHit::Window { id, close: true })
             | (Some(MouseButton::Middle), ExposeHit::Window { id, .. }) => {

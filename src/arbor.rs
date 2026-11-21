@@ -427,6 +427,12 @@ pub struct Arbor {
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
+    /// A portal is waiting for the user to click a window in the overview.
+    pub portal_window_pick: Option<async_channel::Sender<Option<MappedId>>>,
+    /// A portal Screenshot request is waiting for the screenshot UI (path of the saved file).
+    pub portal_screenshot: Option<async_channel::Sender<Option<String>>>,
+    /// The screenshot UI was confirmed for `portal_screenshot` (saving is in progress).
+    pub portal_screenshot_confirmed: bool,
     pub pick_color: Option<async_channel::Sender<Option<arbor_ipc::PickedColor>>>,
 
     pub debug_draw_opaque_regions: bool,
@@ -835,6 +841,21 @@ impl State {
         self.arbor.popups.cleanup();
         if self.arbor.portal_dialog.prune() {
             self.arbor.queue_redraw_all();
+        }
+        // A portal window pick ends when the overview closes without a pick.
+        if self.arbor.portal_window_pick.is_some() && !self.arbor.layout.is_overview_open() {
+            if let Some(tx) = self.arbor.portal_window_pick.take() {
+                let _ = tx.try_send(None);
+            }
+        }
+        // An interactive portal screenshot ends when the UI closes without confirming.
+        if self.arbor.portal_screenshot.is_some()
+            && !self.arbor.portal_screenshot_confirmed
+            && !self.arbor.screenshot_ui.is_open()
+        {
+            if let Some(tx) = self.arbor.portal_screenshot.take() {
+                let _ = tx.try_send(None);
+            }
         }
         self.refresh_popup_grab();
         self.update_keyboard_focus();
@@ -2064,6 +2085,11 @@ impl State {
             return;
         };
         let path = path.take();
+        // A portal screenshot always needs the file.
+        let write_to_disk = write_to_disk || self.arbor.portal_screenshot.is_some();
+        if self.arbor.portal_screenshot.is_some() {
+            self.arbor.portal_screenshot_confirmed = true;
+        }
 
         self.backend.with_primary_renderer(|renderer| {
             match self.arbor.screenshot_ui.capture(renderer) {
@@ -2686,6 +2712,9 @@ impl Arbor {
             pending_mru_commit: None,
 
             pick_window: None,
+            portal_window_pick: None,
+            portal_screenshot: None,
+            portal_screenshot_confirmed: false,
             pick_color: None,
 
             debug_draw_opaque_regions: false,
@@ -5885,6 +5914,12 @@ impl Arbor {
         self.event_loop
             .insert_source(event_rx, move |event, _, state| match event {
                 calloop::channel::Event::Msg(path) => {
+                    if state.arbor.portal_screenshot_confirmed {
+                        state.arbor.portal_screenshot_confirmed = false;
+                        if let Some(tx) = state.arbor.portal_screenshot.take() {
+                            let _ = tx.try_send(path.clone());
+                        }
+                    }
                     state.ipc_screenshot_taken(path);
                 }
                 calloop::channel::Event::Closed => (),

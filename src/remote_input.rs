@@ -49,12 +49,28 @@ pub enum ScrollSource {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteInput {
     /// evdev key code.
-    Key { keycode: u32, pressed: bool },
-    Keysym { keysym: u32, pressed: bool },
-    PointerMotion { dx: f64, dy: f64 },
-    PointerMotionAbsolute { target: AbsTarget, x: f64, y: f64 },
+    Key {
+        keycode: u32,
+        pressed: bool,
+    },
+    Keysym {
+        keysym: u32,
+        pressed: bool,
+    },
+    PointerMotion {
+        dx: f64,
+        dy: f64,
+    },
+    PointerMotionAbsolute {
+        target: AbsTarget,
+        x: f64,
+        y: f64,
+    },
     /// evdev button code (BTN_LEFT = 0x110, ...).
-    PointerButton { button: u32, pressed: bool },
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
     /// Smooth scroll in logical pixels. `finish` marks the end of a finger scroll.
     PointerAxis {
         dx: f64,
@@ -63,7 +79,10 @@ pub enum RemoteInput {
         finish: bool,
     },
     /// Wheel clicks; `horizontal` picks the axis.
-    PointerAxisDiscrete { horizontal: bool, steps: i32 },
+    PointerAxisDiscrete {
+        horizontal: bool,
+        steps: i32,
+    },
     TouchDown {
         target: AbsTarget,
         slot: u32,
@@ -76,7 +95,9 @@ pub enum RemoteInput {
         x: f64,
         y: f64,
     },
-    TouchUp { slot: u32 },
+    TouchUp {
+        slot: u32,
+    },
 }
 
 /// Identifies who injects: a RemoteDesktop session or an EIS client.
@@ -573,9 +594,7 @@ impl State {
                     delta: Point::from((dx, dy)),
                     time,
                 };
-                self.process_input_event(InputEvent::<RemoteInputBackend>::PointerMotion {
-                    event,
-                });
+                self.process_input_event(InputEvent::<RemoteInputBackend>::PointerMotion { event });
             }
             RemoteInput::PointerMotionAbsolute { target, x, y } => {
                 let Some(event) = self.remote_abs_event(&target, x, y, 0, time) else {
@@ -604,9 +623,7 @@ impl State {
                     },
                     time,
                 };
-                self.process_input_event(InputEvent::<RemoteInputBackend>::PointerButton {
-                    event,
-                });
+                self.process_input_event(InputEvent::<RemoteInputBackend>::PointerButton { event });
             }
             RemoteInput::PointerAxis {
                 dx,
@@ -863,7 +880,10 @@ impl State {
         })?;
 
         if let Err(err) = keyboard.set_keymap_from_string(self, augmented) {
-            warn!("error installing a keymap for keysym {:#x}: {err:?}", keysym.raw());
+            warn!(
+                "error installing a keymap for keysym {:#x}: {err:?}",
+                keysym.raw()
+            );
             return None;
         }
         // A new keymap starts from a fresh state: put back locked modifiers and the layout.

@@ -12,8 +12,11 @@ pub mod gnome_shell_screenshot;
 pub mod kglobalaccel;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
+#[cfg(feature = "xdp-gnome-screencast")]
+pub mod portal_casting;
 pub mod portal_global_shortcuts;
 pub mod portal_inhibit;
+pub mod portal_screenshot;
 pub mod portal_wallpaper;
 
 #[cfg(feature = "xdp-gnome-screencast")]
@@ -153,6 +156,15 @@ impl DBusServers {
                 let inhibited = arbor.is_portal_idle_inhibited.clone();
                 if let Err(err) = portal_inhibit::register(conn, inhibited, idle_wake(arbor)) {
                     warn!("error starting the Inhibit portal: {err:?}");
+                }
+                #[cfg(feature = "xdp-gnome-screencast")]
+                if let Err(err) =
+                    portal_casting::register(conn, &arbor.event_loop, &mut arbor.casting)
+                {
+                    warn!("error starting the ScreenCast/RemoteDesktop portal: {err:?}");
+                }
+                if let Err(err) = portal_screenshot::register(conn, &arbor.event_loop) {
+                    warn!("error starting the Screenshot portal: {err:?}");
                 }
             }
 
