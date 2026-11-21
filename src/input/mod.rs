@@ -59,6 +59,7 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 pub mod backend_ext;
 mod camera;
 mod dock_divider;
+mod expose;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -2720,6 +2721,7 @@ impl State {
 
         self.update_dock_divider_cursor();
         self.update_title_bar_hover();
+        self.update_expose_pointer();
 
         // Inform the layout of an ongoing DnD operation.
         let is_dnd_grab = pointer
@@ -2815,6 +2817,7 @@ impl State {
 
         self.update_dock_divider_cursor();
         self.update_title_bar_hover();
+        self.update_expose_pointer();
 
         // We moved the pointer, show it.
         self.niri.pointer_visibility = PointerVisibility::Visible;
@@ -2978,7 +2981,9 @@ impl State {
                 }
             }
 
-            if self.try_start_dock_divider_resize(button, button_code, serial) {
+            if self.try_expose_press(button, button_code, serial) {
+                // arbor: the overview (exposé) handles its own clicks.
+            } else if self.try_start_dock_divider_resize(button, button_code, serial) {
                 // arbor: dragging a dock divider.
                 self.niri.queue_redraw_all();
             } else if self.try_zoomed_dock_press(button, button_code, serial) {

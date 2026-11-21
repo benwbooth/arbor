@@ -9,7 +9,11 @@
 //! Everything here is pure geometry so it can be unit tested; rendering and input live in
 //! `monitor_expose.rs`.
 
+use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
+
+use super::monitor::Monitor;
+use super::{ActivateWindow, Layout, LayoutElement, MonitorSet};
 
 type Rect = Rectangle<f64, Logical>;
 
@@ -212,6 +216,17 @@ pub fn layout(windows: &[Rect], area: Rect, params: &ExposeParams) -> Vec<Expose
     slots
 }
 
+/// What is under the pointer in the exposé.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExposeHit<Id> {
+    /// A window; `close` is set over its close button.
+    Window { id: Id, close: bool },
+    /// A workspace thumbnail in the bar, by workspace index.
+    Workspace(usize),
+    /// Empty space.
+    Empty,
+}
+
 /// Linear interpolation between two values.
 pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
@@ -240,8 +255,78 @@ pub fn bar_layout(count: usize, area: Rect, aspect: f64, gap: f64) -> Vec<Rect> 
     let x0 = area.loc.x + (area.size.w - total) / 2.;
     let y = area.loc.y + (area.size.h - h) / 2.;
     (0..count)
-        .map(|i| Rect::new(Point::from((x0 + i as f64 * (w + gap), y)), Size::from((w, h))))
+        .map(|i| {
+            Rect::new(
+                Point::from((x0 + i as f64 * (w + gap), y)),
+                Size::from((w, h)),
+            )
+        })
         .collect()
+}
+
+impl<W: LayoutElement> Layout<W> {
+    fn expose_monitors_mut(&mut self) -> &mut [Monitor<W>] {
+        match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => &mut [],
+        }
+    }
+
+    /// Tells the exposé where the pointer is (for hover highlights and the close button).
+    /// Returns whether anything needs a redraw.
+    pub fn expose_set_pointer(&mut self, pointer: Option<(&Output, Point<f64, Logical>)>) -> bool {
+        let mut changed = false;
+        for mon in self.expose_monitors_mut() {
+            let pos = pointer
+                .filter(|(output, _)| *output == mon.output())
+                .map(|(_, pos)| pos);
+            changed |= mon.expose_set_pointer(pos);
+        }
+        changed
+    }
+
+    /// What is under `pos` in the exposé on `output`, or `None` if the overview isn't shown.
+    pub fn expose_hit(
+        &self,
+        output: &Output,
+        pos: Point<f64, Logical>,
+    ) -> Option<ExposeHit<W::Id>> {
+        self.monitor_for_output(output)?.expose_hit(pos)
+    }
+
+    /// Starts dragging `window` (a thumbnail of it follows the pointer).
+    pub fn expose_drag_begin(&mut self, output: &Output, window: &W::Id, pos: Point<f64, Logical>) {
+        for mon in self.expose_monitors_mut() {
+            if mon.output() == output {
+                mon.expose_drag_begin(window, pos);
+            }
+        }
+    }
+
+    /// Moves the dragged thumbnail.
+    pub fn expose_drag_update(&mut self, output: &Output, pos: Point<f64, Logical>) {
+        for mon in self.expose_monitors_mut() {
+            if mon.output() == output {
+                mon.expose_drag_update(pos);
+            }
+        }
+    }
+
+    /// Ends a drag: a window dropped on another workspace's thumbnail moves there. Returns
+    /// whether it moved.
+    pub fn expose_drag_end(&mut self) -> bool {
+        let mut target = None;
+        for mon in self.expose_monitors_mut() {
+            if let Some((window, idx)) = mon.expose_drag_end() {
+                target = Some((window, idx));
+            }
+        }
+        let Some((window, idx)) = target else {
+            return false;
+        };
+        self.move_to_workspace(Some(&window), idx, ActivateWindow::No);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -254,7 +339,10 @@ mod tests {
 
     fn with_label(slot: &ExposeSlot, params: &ExposeParams) -> Rect {
         let r = slot.rect;
-        Rect::new(r.loc, Size::from((r.size.w, r.size.h + params.label_height)))
+        Rect::new(
+            r.loc,
+            Size::from((r.size.w, r.size.h + params.label_height)),
+        )
     }
 
     fn overlaps(a: &Rect, b: &Rect) -> bool {
@@ -283,7 +371,10 @@ mod tests {
             assert!((a.rect.size.w / a.rect.size.h - w.size.w / w.size.h).abs() < 1e-6);
             for (j, b) in slots.iter().enumerate().skip(i + 1) {
                 let rb = with_label(b, params);
-                assert!(!overlaps(&ra, &rb), "slots {i} and {j} overlap: {ra:?} {rb:?}");
+                assert!(
+                    !overlaps(&ra, &rb),
+                    "slots {i} and {j} overlap: {ra:?} {rb:?}"
+                );
             }
         }
         slots

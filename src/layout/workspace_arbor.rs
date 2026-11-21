@@ -59,6 +59,21 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.focus_tab(forwards)
     }
 
+    /// Shown windows for the overview's exposé, topmost first: the tile, where it is drawn
+    /// (view coordinates) and the scale it is drawn at (the camera zoom for docked windows).
+    /// Minimized windows and hidden tabs are left out.
+    pub fn expose_tiles(&self) -> Vec<(&crate::layout::tile::Tile<W>, Point<f64, Logical>, f64)> {
+        let zoom = self.scrolling.camera_view().zoom;
+        self.tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
+            .map(|(tile, pos, _)| {
+                let through_camera =
+                    !self.floating.has_window(tile.window().id()) && tile.sizing_mode().is_normal();
+                (tile, pos, if through_camera { zoom } else { 1. })
+            })
+            .collect()
+    }
+
     /// The title bar part under `pos`, on the topmost window under it.
     pub fn title_bar_under(&self, pos: Point<f64, Logical>) -> Option<(&W, TitleBarHit)> {
         let (tile, tile_pos) = self.topmost_tile_under(pos)?;

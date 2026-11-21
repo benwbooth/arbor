@@ -33,6 +33,10 @@ use crate::utils::{
     output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
 };
 
+// arbor: the Mission Control-style overview drawn in place of the workspaces.
+#[path = "monitor_expose.rs"]
+mod expose_ui;
+
 /// Amount of touchpad movement to scroll the height of one workspace.
 const WORKSPACE_GESTURE_MOVEMENT: f64 = 300.;
 
@@ -89,6 +93,8 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) options: Rc<Options>,
     /// Layout config overrides for this monitor.
     layout_config: Option<niri_config::LayoutPart>,
+    /// arbor: overview (exposé) pointer, drag and cached textures.
+    expose: expose_ui::ExposeUi<W::Id>,
 }
 
 #[derive(Debug)]
@@ -194,6 +200,8 @@ niri_render_elements! {
         UncroppedInsertHint = InsertHintRenderElement,
         Shadow = ShadowRenderElement,
         SolidColor = SolidColorRenderElement,
+        ExposeTile = super::tile::TileRenderElement<R>,
+        ExposeTexture = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
     }
 }
 
@@ -350,6 +358,7 @@ impl<W: LayoutElement> Monitor<W> {
             base_options,
             options,
             layout_config,
+            expose: Default::default(),
         }
     }
 
@@ -1594,6 +1603,17 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn window_under(&self, pos_within_output: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        // arbor: the overview shows the exposé; its windows only activate.
+        if self.expose_active() {
+            let win = self.expose_window_under(pos_within_output)?;
+            return Some((
+                win,
+                HitType::Activate {
+                    is_tab_indicator: false,
+                },
+            ));
+        }
+
         let (ws, geo) = self.workspace_under(pos_within_output)?;
 
         if self.overview_progress.is_some() {
@@ -1723,6 +1743,12 @@ impl<W: LayoutElement> Monitor<W> {
     ) {
         let _span = tracy_client::span!("Monitor::render_workspaces");
 
+        // arbor: the overview is the exposé.
+        if self.expose_active() {
+            self.render_expose(ctx, push);
+            return;
+        }
+
         let scale = self.scale.fractional_scale();
         // Ceil the height in physical pixels.
         let height = (self.view_size.h * scale).ceil() as i32;
@@ -1801,6 +1827,10 @@ impl<W: LayoutElement> Monitor<W> {
         renderer: &mut R,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
+        // arbor: the exposé has no workspace shadows.
+        if self.expose_active() {
+            return;
+        }
         let Some(progress) = self.overview_progress.as_ref().map(|p| p.clamped_value()) else {
             return;
         };

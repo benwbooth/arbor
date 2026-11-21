@@ -321,7 +321,7 @@ fn load_png(path: &Path) -> Option<IconImage> {
 }
 
 /// Background colour for an app: a stable hue from the app id.
-fn app_color(app_id: &str) -> (f64, f64, f64) {
+pub(crate) fn app_color(app_id: &str) -> (f64, f64, f64) {
     let mut hash: u32 = 2166136261;
     for b in app_id.bytes() {
         hash = (hash ^ u32::from(b)).wrapping_mul(16777619);
@@ -354,7 +354,7 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
 }
 
 /// The letter shown for an app without an icon: the first letter of the last app id component.
-fn app_letter(app_id: &str) -> String {
+pub(crate) fn app_letter(app_id: &str) -> String {
     app_id
         .rsplit('.')
         .next()
@@ -474,7 +474,7 @@ impl IconTiles {
     }
 }
 
-fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+pub(crate) fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     let r = r.min(w / 2.).min(h / 2.).max(0.);
     cr.new_sub_path();
     cr.arc(x + w - r, y + r, r, -PI / 2., 0.);
@@ -571,6 +571,34 @@ fn draw(key: &Key, icon: Option<&IconImage>) -> anyhow::Result<MemoryBuffer> {
         s,
         Transform::Normal,
     ))
+}
+
+/// Paints `icon` scaled to fit a `side` x `side` square at (`x`, `y`).
+pub(crate) fn paint_icon(
+    cr: &cairo::Context,
+    icon: &IconImage,
+    x: f64,
+    y: f64,
+    side: f64,
+) -> anyhow::Result<()> {
+    let img = ImageSurface::create_for_data(
+        icon.data.clone(),
+        cairo::Format::ARgb32,
+        icon.width,
+        icon.height,
+        icon.width * 4,
+    )?;
+    let k = side / f64::from(icon.width.max(icon.height));
+    cr.save()?;
+    cr.translate(
+        x + (side - f64::from(icon.width) * k) / 2.,
+        y + (side - f64::from(icon.height) * k) / 2.,
+    );
+    cr.scale(k, k);
+    cr.set_source_surface(&img, 0., 0.)?;
+    cr.paint()?;
+    cr.restore()?;
+    Ok(())
 }
 
 /// Relative rectangle of `inner` within `outer` (0..1 coordinates).
