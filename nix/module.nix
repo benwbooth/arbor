@@ -48,9 +48,11 @@ in
       description = "The arbor package to use.";
     };
 
-    useNautilus = lib.mkEnableOption "Nautilus as file-chooser for xdg-desktop-portal-gnome" // {
-      default = true;
-    };
+    useNautilus = lib.mkEnableOption ''
+      Nautilus as file chooser. Only useful if you add xdg-desktop-portal-gnome
+      yourself and route FileChooser to it; arbor's portal setup uses the KDE
+      portal for files and does not need GNOME
+    '';
 
     rdp = {
       enable = lib.mkEnableOption ''
@@ -135,7 +137,7 @@ in
       {
         environment.systemPackages = [ cfg.package ];
 
-        # Required for xdg-desktop-portal-gnome's FileChooser to work properly.
+        # Only for xdg-desktop-portal-gnome's FileChooser (see useNautilus).
         services.dbus.packages = lib.mkIf cfg.useNautilus [ pkgs.nautilus ];
 
         services.displayManager.sessionPackages = [ cfg.package ];
@@ -160,29 +162,31 @@ in
           enable = lib.mkDefault true;
 
           # NOTE: `configPackages` is ignored when `xdg.portal.config.arbor` is
-          # defined. No Secret portal here: GNOME Keyring is not enabled by this
-          # module (set "org.freedesktop.impl.portal.Secret" yourself).
+          # defined. No Secret portal here (set "org.freedesktop.impl.portal.Secret"
+          # yourself, e.g. to "kwallet").
+          #
+          # arbor implements screen sharing, screenshots, remote control, global
+          # shortcuts, wallpaper and idle inhibition itself
+          # (share/xdg-desktop-portal/portals/arbor.portal); the KDE portal covers
+          # the rest (file chooser, settings, notifications, access dialogs), with
+          # GTK as fallback. Nothing here needs GNOME.
           config.arbor = {
             default = [
-              "gnome"
+              "kde"
               "gtk"
             ];
-            "org.freedesktop.impl.portal.Access" = "gtk";
-            "org.freedesktop.impl.portal.FileChooser" = lib.mkIf (!cfg.useNautilus) "gtk";
-            "org.freedesktop.impl.portal.Notification" = "gtk";
-            # arbor's own GlobalShortcuts backend (share/xdg-desktop-portal/portals/arbor.portal).
+            "org.freedesktop.impl.portal.ScreenCast" = "arbor";
+            "org.freedesktop.impl.portal.Screenshot" = "arbor";
+            "org.freedesktop.impl.portal.RemoteDesktop" = "arbor";
             "org.freedesktop.impl.portal.GlobalShortcuts" = "arbor";
-            # arbor's Wallpaper (portal { wallpaper-command }) and Inhibit (idle) backends.
             "org.freedesktop.impl.portal.Wallpaper" = "arbor";
             "org.freedesktop.impl.portal.Inhibit" = "arbor";
           };
 
-          # Screencasting goes through arbor's Mutter-compatible D-Bus API, which
-          # the GNOME portal speaks.
           extraPortals = [
-            pkgs.xdg-desktop-portal-gnome
+            pkgs.kdePackages.xdg-desktop-portal-kde
             pkgs.xdg-desktop-portal-gtk
-            # arbor.portal: the GlobalShortcuts backend arbor itself provides.
+            # arbor.portal: the backends arbor itself provides.
             cfg.package
           ];
         };

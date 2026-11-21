@@ -516,12 +516,61 @@ next input). Only `Inhibit`/`UnInhibit` are implemented (no `Lock`,
 `GetActive`, `SimulateUserActivity`). Test: `tests::kglobalaccel::idle_inhibit_over_dbus`
 (same private-bus command as above).
 
+## Screen sharing, screenshots and remote control
+
+arbor is its own portal backend for these (`org.freedesktop.impl.portal.desktop.arbor`,
+`share/xdg-desktop-portal/portals/arbor.portal`), built straight on its PipeWire casting
+and input pipeline: no xdg-desktop-portal-gnome, no Mutter D-Bus round trip. (The
+Mutter-compatible `org.gnome.Mutter.ScreenCast` API is still there for anything that talks to
+it directly.)
+
+- **ScreenCast**: `Start` shows an arbor-drawn dialog on the active screen: one button per
+  screen ("the entire screen: Dell U2723QE (DP-1)") and "one window (click it in the
+  overview)", which opens the overview; clicking a window shares it, clicking empty space or
+  Escape cancels. Number keys, arrows + Enter and clicks work in the dialog; Escape or Cancel
+  closes it. Cursor modes hidden / embedded / metadata, DMA-BUF or SHM, damage-driven frames
+  and window resizing are the casting code's (the same as for the Mutter API). One stream per
+  session: a request for several sources gets one.
+- **RemoteDesktop**: the same dialog asks to "use your keyboard" (or keyboard and mouse, ...);
+  with screen-cast sources selected on the session it asks for both at once. `Notify*`
+  keyboard, pointer, scroll and touch calls go through `remote_input` into the normal input
+  pipeline, so binds and global shortcuts see them like real keys. Keysyms are typed with the
+  key and the shift level modifiers of the active layout (locked Caps Lock respected); a
+  keysym no key produces ("—", "é" on a US layout, emoji) is typed through a temporary
+  keymap with one spare key, and the original keymap and modifiers come back right after.
+  Calls for devices that weren't granted fail. Closing the session releases every key,
+  button and touch it still holds. `ConnectToEIS` is not offered yet; clipboard sharing
+  neither (`clipboard_enabled` is false).
+- **Remember**: when the app asks for persistence (`persist_mode`), the dialog has a
+  "Remember, and don't ask again" checkbox (ticked by default). The choice goes back to the
+  frontend as restore data (`("arbor", 1, {output | window-app-id + window-title, devices})`),
+  which keeps it under the app's restore token, so later sessions start without a dialog
+  (Whisper Typer's keyboard-only session, a meeting app re-sharing the same screen). A
+  restored screen that is gone, a window that no longer exists, or more devices than were
+  allowed before bring the dialog back.
+- **Screenshot**: non-interactive requests capture every screen into one PNG (the portal
+  frontend asks permission first through the Access portal and remembers it); interactive ones
+  open arbor's screenshot UI (Escape cancels). Files go to `screenshot-path`, or
+  `~/.cache/arbor/screenshots` when screenshots aren't saved. `PickColor` uses the colour
+  picker.
+
+Code: `src/dbus/portal_casting.rs` (ScreenCast + RemoteDesktop, shared sessions),
+`src/dbus/portal_screenshot.rs`, `src/ui/portal_dialog.rs`, `src/remote_input.rs`,
+`State::start_portal_cast` in `src/screencasting/mod.rs`. Tests: `remote_input` and
+`portal_dialog` unit tests; `tests::portal_remote_desktop` drives the D-Bus API on a private
+bus (dialog, restore data, keycodes and keysyms reaching the seat keyboard, release on close):
+
+```sh
+ARBOR_TEST_PRIVATE_DBUS=1 dbus-run-session -- cargo test portal_remote_desktop -- --ignored
+```
+
 ## Desktop integration
 
 What KDE Plasma provided to apps, and what serves it under arbor + hearth.
-Portal backends assume the portal config `default=kde;gtk`, ScreenCast /
-Screenshot / RemoteDesktop `gnome` (arbor's Mutter-compatible D-Bus API),
-Secret `kwallet`, and GlobalShortcuts / Wallpaper / Inhibit `arbor`.
+Portal backends assume the portal config `default=kde;gtk`, Secret
+`kwallet`, and ScreenCast / Screenshot / RemoteDesktop / GlobalShortcuts /
+Wallpaper / Inhibit `arbor` (see "Screen sharing, screenshots and remote
+control"). Nothing needs xdg-desktop-portal-gnome.
 
 | Portal | Backend under arbor | Works outside KWin? |
 | --- | --- | --- |
@@ -529,20 +578,20 @@ Secret `kwallet`, and GlobalShortcuts / Wallpaper / Inhibit `arbor`.
 | Account | kde | Yes |
 | AppChooser | kde | Yes |
 | Background | kde | Partly: autostart requests work; the running-apps list comes from KWin's window management protocol, which arbor doesn't offer, so apps are never seen as running in the background |
-| Clipboard | gnome (with RemoteDesktop) | Only with arbor's Mutter RemoteDesktop/clipboard (in progress on the portals branch) |
+| Clipboard | none yet | Not yet: remote-desktop clipboard sharing is not implemented (RemoteDesktop reports `clipboard_enabled=false`) |
 | DynamicLauncher | kde | Yes |
 | Email | kde | Yes |
 | FileChooser | kde | Yes (KDE file dialog; needs KIO, installed) |
 | GlobalShortcuts | **arbor** | Yes (above). The kde backend would also work now, through arbor's kglobalaccel |
 | Inhibit | **arbor** | Yes for idle (above). kde (PowerDevil) and gnome (gnome-session) don't run here |
-| InputCapture | gnome | Only with arbor's Mutter InputCapture (in progress on the portals branch) |
+| InputCapture | none yet | Not yet (Deskflow / Input Leap as a server need it, with EIS) |
 | Notification | kde | Yes: KNotification → `org.freedesktop.Notifications` (swaync, started by hearth) |
 | OpenURI | kde | Yes |
 | Print | kde | Yes |
 | ProxyResolver | frontend only | Yes (no backend involved) |
-| RemoteDesktop | gnome | Only with arbor's Mutter RemoteDesktop (portals branch) |
-| ScreenCast | gnome | Yes (arbor's Mutter ScreenCast API) |
-| Screenshot | gnome | Yes (arbor's GNOME Shell Screenshot API) |
+| RemoteDesktop | **arbor** | Yes: keyboard, pointer, touch through the Notify* methods (no EIS yet) |
+| ScreenCast | **arbor** | Yes: a screen or a window, arbor-drawn picker, restore tokens |
+| Screenshot | **arbor** | Yes: whole desktop, or interactive through the screenshot UI; PickColor |
 | Secret | kwallet | Yes (ksecretd/kwalletd; `pam_kwallet_init` is started by the config) |
 | Settings | kde | Yes: reads kdeglobals (colour scheme, fonts, accent) |
 | Usb | none | No: neither kde nor gtk implements `impl.portal.Usb` |
@@ -556,7 +605,7 @@ Secret `kwallet`, and GlobalShortcuts / Wallpaper / Inhibit `arbor`.
 | `org.freedesktop.Notifications` | swaync (hearth) |
 | Brightness / volume / media keys (PowerDevil, kmix, mediacontrol) | arbor config binds → hearth IPC, wpctl, playerctl. Apps calling PowerDevil's D-Bus get nothing |
 | xdg-activation / startup feedback | arbor implements xdg-activation-v1 (focus stealing prevention, `XDG_ACTIVATION_TOKEN` for spawned apps). There is no launch feedback (busy cursor, dock bounce) in arbor; that would be hearth's dock |
-| KDE Connect | kdeconnectd + `kdeconnect-indicator` (started by the config): notification sync, MPRIS, clipboard (wlr-data-control), lock (logind), screensaver inhibit, its global shortcuts (kglobalaccel) work; remote input needs the RemoteDesktop portal (portals branch) |
+| KDE Connect | kdeconnectd + `kdeconnect-indicator` (started by the config): notification sync, MPRIS, clipboard (wlr-data-control), lock (logind), screensaver inhibit, its global shortcuts (kglobalaccel) work; remote input goes through arbor's RemoteDesktop portal |
 | StatusNotifierItem (tray) | hearth is the watcher and host |
 | `com.canonical.AppMenu.Registrar` (global menu) | hearth (see Code map) |
 | kded modules (plasma-nm secret agent, bluedevil, printer and disk notifiers, keyboard layout OSD) | kded6 doesn't run. hearth has a Bluetooth agent; without plasma-nm's agent, Wi-Fi/VPN password prompts need another NetworkManager secret agent |
