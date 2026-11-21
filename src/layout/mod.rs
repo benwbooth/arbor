@@ -4782,15 +4782,3 @@ fn compute_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f
     let _ = (options, overview_progress);
     1.
 }
-
-#[allow(dead_code)] // arbor: niri's zoomed-out overview, kept for rebases.
-fn compute_arbor_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
-    // Clamp to some sane values.
-    let zoom = options.overview.zoom.clamp(0.0001, 0.75);
-
-    if let Some(p) = overview_progress {
-        (1. - p * (1. - zoom)).max(0.0001)
-    } else {
-        1.
-    }
-}
