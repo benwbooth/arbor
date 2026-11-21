@@ -661,7 +661,7 @@ control"). Nothing needs xdg-desktop-portal-gnome.
 | --- | --- |
 | `org.kde.kglobalaccel` (global shortcuts of KDE apps) | arbor (above) |
 | `org.kde.KWin` | Not provided, on purpose (arbor and hearth don't depend on KDE tools). Spectacle needs KWin's ScreenShot2 and zkde_screencast, so it doesn't work here; hearth has its own Spectacle-style tool (Screenshots below). Also matters for KWin scripts, "show desktop"/window lists over KWin D-Bus, krunner's window runner. Window activation goes through xdg-activation, which arbor implements |
-| `org.freedesktop.ScreenSaver` | arbor: Inhibit/UnInhibit stop idle notifications (swayidle honours them through ext-idle-notify); `Lock`/`GetActive`/`SimulateUserActivity` not implemented. Locking goes through logind (`loginctl lock-session` → swayidle `lock` → hyprlock), which KDE Connect uses |
+| `org.freedesktop.ScreenSaver` | arbor: Inhibit/UnInhibit stop idle notifications (swayidle honours them through ext-idle-notify); `Lock`/`GetActive`/`SimulateUserActivity` not implemented. Locking goes through logind (`loginctl lock-session` → swayidle `lock` → hearth's lock screen, hyprlock as its fallback; a dead lock client leaves the session locked until a new locker takes over), which KDE Connect uses |
 | `org.freedesktop.Notifications` | swaync (hearth) |
 | Brightness / volume / media keys (PowerDevil, kmix, mediacontrol) | arbor config binds → hearth IPC, wpctl, playerctl. Apps calling PowerDevil's D-Bus get nothing |
 | xdg-activation / startup feedback | arbor implements xdg-activation-v1 (focus stealing prevention, `XDG_ACTIVATION_TOKEN` for spawned apps). There is no launch feedback (busy cursor, dock bounce) in arbor; that would be hearth's dock |
