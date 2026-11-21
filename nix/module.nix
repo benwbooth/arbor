@@ -13,6 +13,15 @@ let
   cfg = config.programs.arbor;
   rdp = cfg.rdp;
   rdpConfig = (pkgs.formats.toml { }).generate "arbor-rdp.toml" rdp.settings;
+  # Fails (skipping the unit) inside an arbor session.
+  notInArbor = pkgs.writeShellScript "arbor-not-in-arbor" ''
+    case "$XDG_CURRENT_DESKTOP" in
+      arbor | arbor:*) exit 1 ;;
+    esac
+    exit 0
+  '';
+  # Unit that systemd-xdg-autostart-generator makes for <name>.desktop.
+  autostartUnit = name: "app-${lib.replaceStrings [ "-" ] [ "\\x2d" ] name}@autostart";
   # Shipped as a package unit (with [Install]) rather than a NixOS
   # `systemd.user.services` entry, so it stays off until enabled at runtime
   # (`systemctl --user enable --now arbor-rdp`, or hearth's tray switch).
@@ -53,6 +62,26 @@ in
       yourself and route FileChooser to it; arbor's portal setup uses the KDE
       portal for files and does not need GNOME
     '';
+
+    plasmaOnlyAutostart = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [
+        "org.kde.plasma-fallback-session-restore"
+        "org.kde.discover.notifier"
+        "kwrited-autostart"
+      ];
+      example = [ "fanzyzones-kde-dev" ];
+      description = ''
+        XDG autostart entries (desktop file names without `.desktop`) that
+        must not start inside arbor. arbor's `XDG_CURRENT_DESKTOP` is
+        `arbor:KDE`, so entries with `OnlyShowIn=KDE` start under arbor too;
+        most are fine (or carry `X-systemd-skip=true`), but these are
+        Plasma-only: Plasma's fallback session restore would relaunch the
+        apps of the last Plasma session next to arbor's own session restore.
+        Each listed entry's autostart unit gets a condition that skips it in
+        arbor sessions (Plasma is unaffected).
+      '';
+    };
 
     rdp = {
       enable = lib.mkEnableOption ''
@@ -203,6 +232,18 @@ in
         # Window manager only sessions (unlike DEs) don't handle XDG autostart
         # files, so force them to run the service.
         services.xserver.desktopManager.runXdgAutostartIfNone = lib.mkDefault true;
+      }
+
+      {
+        systemd.user.services = lib.genAttrs (map autostartUnit cfg.plasmaOnlyAutostart) (
+          _:
+          {
+            overrideStrategy = "asDropin";
+            serviceConfig.ExecCondition = [ "${notInArbor}" ];
+          }
+          # Keep the session's PATH (see the arbor unit below).
+          // lib.optionalAttrs hasEnableDefaultPath { enableDefaultPath = false; }
+        );
       }
 
       (lib.mkIf rdp.enable {

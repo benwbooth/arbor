@@ -17,12 +17,12 @@ uniform names available to custom shaders.
 | What | Name |
 | --- | --- |
 | Binary | `arbor`: `arbor msg`, `arbor validate`, `arbor --session`, `arbor completions`. No `niri` binary. |
-| Session | `bin/arbor-session` (starts `arbor.service`), user units `arbor.service` and `arbor-shutdown.target`, `share/wayland-sessions/arbor.desktop` (`DesktopNames=arbor`, so `XDG_CURRENT_DESKTOP=arbor`; `arbor --session` also sets it) |
+| Session | `bin/arbor-session` (starts `arbor.service`), user units `arbor.service` and `arbor-shutdown.target`, `share/wayland-sessions/arbor.desktop` (`DesktopNames=arbor;KDE;`, so `XDG_CURRENT_DESKTOP=arbor:KDE`; `arbor --session` also sets it; see "XDG_CURRENT_DESKTOP" below) |
 | Portals | `share/xdg-desktop-portal/arbor-portals.conf`; on NixOS `xdg.portal.config.arbor`. arbor's own backend: `share/xdg-desktop-portal/portals/arbor.portal` (D-Bus name `org.freedesktop.impl.portal.desktop.arbor`) |
 | Config | `$XDG_CONFIG_HOME/arbor/config.kdl`, override with `--config` or `$ARBOR_CONFIG`; system-wide fallback `/etc/arbor/config.kdl`. The default config is written there on first run. |
 | IPC | `$XDG_RUNTIME_DIR/arbor.<wayland-display>.<pid>.sock`, exported as `$ARBOR_SOCKET`. `$NIRI_SOCKET` is exported with the same path so tools with niri IPC support (waybar's niri modules, Quickshell, ...) keep working; `arbor msg` reads `$ARBOR_SOCKET` first, then `$NIRI_SOCKET`. The protocol is niri's. |
 | Env | `ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY=1` skips the systemd/fd ready notification. Spawned apps get transient scopes `app-arbor-*.scope`. Build time: `ARBOR_BUILD_COMMIT` / `ARBOR_BUILD_VERSION_STRING` set the version string. |
-| Nix | `packages.<system>.arbor` (= `default`, plus `arbor-debug`), `overlays.default` adds `pkgs.arbor`, `nixosModules.arbor` (= `default`) provides `programs.arbor = { enable; package; useNautilus; }` |
+| Nix | `packages.<system>.arbor` (= `default`, plus `arbor-debug`), `overlays.default` adds `pkgs.arbor`, `nixosModules.arbor` (= `default`) provides `programs.arbor = { enable; package; plasmaOnlyAutostart; useNautilus; rdp; }` |
 
 D-Bus names that clients depend on (`org.gnome.Mutter.*`,
 `org.gnome.Shell.*`) and Wayland protocol names are unchanged.
@@ -37,6 +37,44 @@ mkdir -p ~/.config/arbor && mv ~/.config/niri/config.kdl ~/.config/arbor/
 `programs.arbor` from this flake's module (it does not enable GNOME Keyring;
 set the Secret portal yourself) and `xdg.portal.config.niri` with
 `xdg.portal.config.arbor`.
+
+## XDG_CURRENT_DESKTOP
+
+An arbor session sets `XDG_CURRENT_DESKTOP=arbor:KDE`.
+
+- **Why KDE**: some apps only enable features for desktops they recognise. Zoom (7.1.5)
+  enables Wayland screen sharing only when it recognises the desktop: it reads
+  `XDG_CURRENT_DESKTOP` (and `DESKTOP_SESSION`) through `QProcessEnvironment` and runs
+  `QString::indexOf(name, 0, Qt::CaseInsensitive)` for "Gnome", "KDE", "Deepin", "plasma",
+  "cinnamon", "Hyprland", "sway", "Mate", "xfce", "lxde"; anything else is "Unsupported
+  desktop" (found by disassembling the function that references those strings). It is a
+  case-insensitive substring match, so `arbor:KDE` counts as KDE. For KDE it then expects
+  `xdg-desktop-portal-kde` at the usual FHS paths (nixpkgs' `zoom-us` provides them with
+  `plasma6XdgDesktopPortalSupport = true`) and uses `org.freedesktop.portal.ScreenCast`,
+  which arbor serves itself. KDE rather than GNOME because the rest of the portal setup and
+  the apps are KDE's.
+- **Why arbor first**: xdg-desktop-portal tries `<desktop>-portals.conf` for each name in
+  order, so `arbor-portals.conf` (NixOS: `xdg.portal.config.arbor`) wins over
+  `kde-portals.conf`; autostart entries can opt out with `NotShowIn=arbor` (the first
+  matching name decides).
+- **Side effects checked**:
+  - XDG autostart: entries with `OnlyShowIn=KDE` now start under arbor. Plasma's own
+    components carry `X-systemd-skip=true` (plasmashell, kglobalacceld, powerdevil, kaccess,
+    xembedsniproxy, gmenudbusmenuproxy, polkit-kde-agent, baloo) and stay off. The rest:
+    `org.kde.plasma-fallback-session-restore` would relaunch the last Plasma session's apps
+    next to arbor's own session restore, `org.kde.discover.notifier` and `kwrited` are useless
+    here; the NixOS module skips these in arbor sessions
+    (`programs.arbor.plasmaOnlyAutostart`, a drop-in `ExecCondition` per entry; Plasma is
+    unaffected). Add your own Plasma-only entries to that list.
+  - xdg-utils (`xdg-open`) matches the whole variable (`KDE)` in a `case`), so it behaves as
+    before (generic, not kde-open).
+  - Qt only picks its KDE platform theme for the exact value `KDE`; set
+    `QT_QPA_PLATFORMTHEME` if you want it.
+  - Chromium/Electron split the list and see KDE: Brave/Chrome default to the kwallet password
+    store and may offer the Qt theme; pass `--password-store=kwallet6` explicitly (already in
+    use here).
+  - `KDE_FULL_SESSION` and `KDE_SESSION_VERSION` are not set, so KDE apps don't assume
+    Plasma (no KWin-only paths).
 
 ## Model
 

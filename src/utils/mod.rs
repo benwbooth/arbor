@@ -159,6 +159,9 @@ pub fn version() -> String {
     }
 }
 
+/// `XDG_CURRENT_DESKTOP` of an arbor session (also the `DesktopNames` of arbor.desktop).
+pub const XDG_CURRENT_DESKTOP: &str = "arbor:KDE";
+
 pub fn get_monotonic_time() -> Duration {
     let ts = clock_gettime(ClockId::Monotonic);
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)

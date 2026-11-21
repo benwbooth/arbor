@@ -91,8 +91,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Set the current desktop for xdg-desktop-portal.
-        env::set_var("XDG_CURRENT_DESKTOP", "arbor");
+        // Set the current desktop. "arbor" comes first, so xdg-desktop-portal uses
+        // arbor-portals.conf and autostart entries can opt out with NotShowIn=arbor; "KDE" second,
+        // because some apps only enable features for desktops they know (Zoom's Wayland screen
+        // sharing looks for "KDE", "GNOME", "Hyprland", ... in this variable). See ARBOR.md.
+        env::set_var("XDG_CURRENT_DESKTOP", arbor::utils::XDG_CURRENT_DESKTOP);
         // Ensure the session type is set to Wayland for xdg-autostart and Qt apps.
         env::set_var("XDG_SESSION_TYPE", "wayland");
     }

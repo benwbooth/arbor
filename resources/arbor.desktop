@@ -3,4 +3,4 @@ Name=arbor
 Comment=A Wayland compositor with a docking layout under a zoomable camera
 Exec=arbor-session
 Type=Application
-DesktopNames=arbor
+DesktopNames=arbor;KDE;
