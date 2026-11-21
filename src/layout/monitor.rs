@@ -12,7 +12,8 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::dock::DockInsert;
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
-use super::scrolling::{Column, ColumnWidth};
+use super::dock::MovedTile;
+use super::sizing::ColumnWidth;
 use super::tile::Tile;
 use super::workspace::{
     compute_working_area, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
@@ -547,7 +548,7 @@ impl<W: LayoutElement> Monitor<W> {
         );
     }
 
-    pub fn add_column(&mut self, mut workspace_idx: usize, column: Column<W>, activate: bool) {
+    pub fn add_column(&mut self, mut workspace_idx: usize, column: MovedTile<W>, activate: bool) {
         let workspace = &mut self.workspaces[workspace_idx];
 
         workspace.add_column(column, activate);

@@ -42,7 +42,8 @@ use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-use scrolling::{Column, ColumnWidth};
+use dock::MovedTile;
+use sizing::ColumnWidth;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
@@ -57,7 +58,7 @@ use self::monitor::{Monitor, WorkspaceSwitch};
 use self::workspace::{OutputId, Workspace};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
-use crate::layout::scrolling::ScrollDirection;
+use crate::layout::sizing::ScrollDirection;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::offscreen::OffscreenData;
@@ -86,7 +87,7 @@ pub mod icon_tile;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
-pub mod scrolling;
+pub mod sizing;
 pub mod shadow;
 pub mod tab_indicator;
 pub mod tile;
@@ -918,7 +919,7 @@ impl<W: LayoutElement> Layout<W> {
         &mut self,
         monitor_idx: usize,
         workspace_idx: usize,
-        column: Column<W>,
+        column: MovedTile<W>,
         activate: bool,
     ) {
         let MonitorSet::Normal {

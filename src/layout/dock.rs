@@ -1,12 +1,11 @@
 //! Nested docking tree layout.
 //!
-//! The dock tree replaces niri's scrollable tiling inside a workspace. Every node is either a
-//! split (children tiling the split's rectangle along one axis, with gaps between them) or a leaf
-//! holding one tile. See `ARBOR.md` for the design.
+//! The dock tree is the tiling layout inside a workspace. Every node is either a split (children
+//! tiling the split's rectangle along one axis, with gaps between them) or a leaf holding one tile
+//! (or a tab group). See `ARBOR.md` for the design.
 //!
-//! `DockSpace` deliberately exposes the same method names and signatures that `Workspace` used to
-//! call on `ScrollingSpace`, so that `workspace.rs` changes stay minimal. Column-specific
-//! operations are no-ops or the closest sensible equivalent.
+//! The column-flavoured method names (`focus_column_*`, `consume_or_expel_window_*`, ...) back the
+//! actions of the same names, mapped onto the tree.
 
 use std::cell::Cell;
 use std::cmp::max;
@@ -26,9 +25,7 @@ use super::camera::{clamp_to_bounds, pan_to_show, Camera, CameraMode, CameraView
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::icon_tile::{relative_rect, IconTiles, TileContent};
 use super::monitor::InsertPosition;
-use super::scrolling::{
-    compute_toplevel_bounds, compute_working_area, Column, ColumnWidth, ScrollDirection,
-};
+use super::sizing::{compute_toplevel_bounds, compute_working_area, ColumnWidth, ScrollDirection};
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
@@ -72,6 +69,14 @@ const DIVIDER_HIT: f64 = 8.;
 /// Largest depth of the edge band of a docked window where a window dragged from the Desktop
 /// docks beside it.
 const LEAF_EDGE_BAND: f64 = 80.;
+
+/// A docked window taken off one workspace to be docked on another (the `move-column-to-*`
+/// actions).
+#[derive(Debug)]
+pub struct MovedTile<W: LayoutElement> {
+    pub tile: Tile<W>,
+    pub is_pending_maximized: bool,
+}
 
 static LEAF_ID_COUNTER: IdCounter = IdCounter::new();
 
@@ -2650,31 +2655,13 @@ impl<W: LayoutElement> DockSpace<W> {
         self.add_tile_docked(tile, dock, activate);
     }
 
-    pub fn add_column(
-        &mut self,
-        _idx: Option<usize>,
-        column: Column<W>,
-        activate: bool,
-        _anim_config: Option<niri_config::Animation>,
-    ) {
-        // Dock the first tile next to the active leaf and stack the rest below it.
-        let mut prev: Option<LeafId> = None;
-        let (tiles, is_pending_maximized) = column.into_tiles();
-        for tile in tiles {
-            let dock = match prev {
-                Some(id) => DockInsert {
-                    target: DockTarget::Leaf(id),
-                    side: DockSide::Bottom,
-                },
-                None => self.default_insert(),
-            };
-            let mut leaf = DockLeaf::new(tile, self.view_size, self.scale, self.options.clone());
-            leaf.is_pending_maximized |= is_pending_maximized;
-            let id = self.insert_leaf(leaf, dock);
-            if (activate && prev.is_none()) || self.active_leaf().is_none() {
-                self.activate_leaf(id);
-            }
-            prev = Some(id);
+    pub fn add_column(&mut self, column: MovedTile<W>, activate: bool) {
+        let dock = self.default_insert();
+        let mut leaf = DockLeaf::new(column.tile, self.view_size, self.scale, self.options.clone());
+        leaf.is_pending_maximized |= column.is_pending_maximized;
+        let id = self.insert_leaf(leaf, dock);
+        if activate || self.active_leaf().is_none() {
+            self.activate_leaf(id);
         }
         self.relayout(true, true, None);
     }
@@ -2726,22 +2713,13 @@ impl<W: LayoutElement> DockSpace<W> {
         }
     }
 
-    pub fn remove_active_column(&mut self) -> Option<Column<W>> {
-        let was_maximized = self.active_leaf()?.is_pending_maximized;
+    pub fn remove_active_column(&mut self) -> Option<MovedTile<W>> {
+        let is_pending_maximized = self.active_leaf()?.is_pending_maximized;
         let removed = self.remove_active_tile(Transaction::new())?;
-        let mut column = Column::new_with_tile(
-            removed.tile,
-            self.view_size,
-            self.working_area,
-            self.parent_area,
-            self.scale,
-            removed.width,
-            removed.is_full_width,
-        );
-        if was_maximized {
-            column.set_maximized(true);
-        }
-        Some(column)
+        Some(MovedTile {
+            tile: removed.tile,
+            is_pending_maximized,
+        })
     }
 
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {

@@ -22,7 +22,8 @@ mod arbor;
 
 use super::dock::{DockInsert, DockSpace, DockSpaceRenderElement};
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
-use super::scrolling::{Column, ColumnWidth, ScrollDirection};
+use super::dock::MovedTile;
+use super::sizing::{ColumnWidth, ScrollDirection};
 use super::shadow::Shadow;
 use super::tile::{Tile, TileRenderSnapshot};
 use super::{
@@ -722,12 +723,10 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn add_column(&mut self, column: Column<W>, activate: bool) {
-        for (tile, _) in column.tiles() {
-            self.enter_output_for_window(tile.window());
-        }
+    pub fn add_column(&mut self, column: MovedTile<W>, activate: bool) {
+        self.enter_output_for_window(column.tile.window());
 
-        self.scrolling.add_column(None, column, activate, None);
+        self.scrolling.add_column(column, activate);
 
         if activate {
             self.floating_is_active = FloatingActive::No;
@@ -782,7 +781,7 @@ impl<W: LayoutElement> Workspace<W> {
         Some(removed)
     }
 
-    pub fn remove_active_column(&mut self) -> Option<Column<W>> {
+    pub fn remove_active_column(&mut self) -> Option<MovedTile<W>> {
         let from_floating = self.floating_is_active.get();
         if from_floating {
             return None;
@@ -791,9 +790,7 @@ impl<W: LayoutElement> Workspace<W> {
         let column = self.scrolling.remove_active_column()?;
 
         if let Some(output) = &self.output {
-            for (tile, _) in column.tiles() {
-                tile.window().output_leave(output);
-            }
+            column.tile.window().output_leave(output);
         }
 
         self.update_focus_floating_tiling_after_removing(from_floating);

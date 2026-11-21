@@ -427,7 +427,7 @@ fn column_round_trip() {
     s.verify_invariants();
     assert_eq!(s.tree_string(), "1");
 
-    s.add_column(None, column, true, None);
+    s.add_column(column, true);
     s.verify_invariants();
     assert_eq!(s.tree_string(), "H[1,2]");
     assert_eq!(active(&s), 2);
