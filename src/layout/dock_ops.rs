@@ -1,4 +1,4 @@
-//! arbor additions to `Layout`, kept out of `mod.rs` for easy rebasing.
+//! Dock-tree operations on `Layout`: minimize and restore, tab groups, title bars and the camera.
 
 use smithay::output::Output;
 use smithay::utils::{Logical, Point};

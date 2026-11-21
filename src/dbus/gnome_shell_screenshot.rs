@@ -9,16 +9,16 @@ use zbus::{interface, zvariant};
 use super::Start;
 
 pub struct Screenshot {
-    to_niri: calloop::channel::Sender<ScreenshotToNiri>,
-    from_niri: async_channel::Receiver<NiriToScreenshot>,
+    to_arbor: calloop::channel::Sender<ScreenshotToArbor>,
+    from_arbor: async_channel::Receiver<ArborToScreenshot>,
 }
 
-pub enum ScreenshotToNiri {
+pub enum ScreenshotToArbor {
     TakeScreenshot { include_cursor: bool },
     PickColor(async_channel::Sender<Option<PickedColor>>),
 }
 
-pub enum NiriToScreenshot {
+pub enum ArborToScreenshot {
     ScreenshotResult(Option<PathBuf>),
 }
 
@@ -31,16 +31,16 @@ impl Screenshot {
         _filename: PathBuf,
     ) -> fdo::Result<(bool, PathBuf)> {
         if let Err(err) = self
-            .to_niri
-            .send(ScreenshotToNiri::TakeScreenshot { include_cursor })
+            .to_arbor
+            .send(ScreenshotToArbor::TakeScreenshot { include_cursor })
         {
             warn!("error sending message to the compositor: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
-        let filename = match self.from_niri.recv().await {
-            Ok(NiriToScreenshot::ScreenshotResult(Some(filename))) => filename,
-            Ok(NiriToScreenshot::ScreenshotResult(None)) => {
+        let filename = match self.from_arbor.recv().await {
+            Ok(ArborToScreenshot::ScreenshotResult(Some(filename))) => filename,
+            Ok(ArborToScreenshot::ScreenshotResult(None)) => {
                 return Err(fdo::Error::Failed("internal error".to_owned()));
             }
             Err(err) => {
@@ -54,7 +54,7 @@ impl Screenshot {
 
     async fn pick_color(&self) -> fdo::Result<HashMap<String, OwnedValue>> {
         let (tx, rx) = async_channel::bounded(1);
-        if let Err(err) = self.to_niri.send(ScreenshotToNiri::PickColor(tx)) {
+        if let Err(err) = self.to_arbor.send(ScreenshotToArbor::PickColor(tx)) {
             warn!("error sending pick color message to the compositor: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
@@ -83,10 +83,13 @@ impl Screenshot {
 
 impl Screenshot {
     pub fn new(
-        to_niri: calloop::channel::Sender<ScreenshotToNiri>,
-        from_niri: async_channel::Receiver<NiriToScreenshot>,
+        to_arbor: calloop::channel::Sender<ScreenshotToArbor>,
+        from_arbor: async_channel::Receiver<ArborToScreenshot>,
     ) -> Self {
-        Self { to_niri, from_niri }
+        Self {
+            to_arbor,
+            from_arbor,
+        }
     }
 }
 

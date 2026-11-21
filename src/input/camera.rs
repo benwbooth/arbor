@@ -6,7 +6,7 @@ use smithay::utils::Serial;
 
 use super::move_grab::MoveGrab;
 use super::{modifiers_from_state, PointerOrTouchStartData, DOUBLE_CLICK_TIME};
-use crate::niri::State;
+use crate::arbor::State;
 use crate::utils::get_monotonic_time;
 
 impl State {
@@ -14,54 +14,56 @@ impl State {
     /// a zoomed-out dock tree (elsewhere pinches go to the window under the pointer). Returns
     /// whether the gesture is ours.
     pub(super) fn camera_pinch_begin(&mut self) -> bool {
-        let mods = self.niri.seat.get_keyboard().unwrap().modifier_state();
-        let mod_key = self.backend.mod_key(&self.niri.config.borrow());
+        let mods = self.arbor.seat.get_keyboard().unwrap().modifier_state();
+        let mod_key = self.backend.mod_key(&self.arbor.config.borrow());
         let mod_down = modifiers_from_state(mods).contains(mod_key.to_modifiers());
 
         let ours = mod_down || {
-            let pointer = self.niri.seat.get_pointer().unwrap();
-            self.niri.pointer_contents.layer.is_none()
+            let pointer = self.arbor.seat.get_pointer().unwrap();
+            self.arbor.pointer_contents.layer.is_none()
                 && self
-                    .niri
+                    .arbor
                     .output_under(pointer.current_location())
-                    .is_some_and(|(output, pos)| self.niri.layout.camera_pinch_allowed(output, pos))
+                    .is_some_and(|(output, pos)| {
+                        self.arbor.layout.camera_pinch_allowed(output, pos)
+                    })
         };
         if !ours {
             return false;
         }
-        self.niri.camera_pinch = Some(1.);
+        self.arbor.camera_pinch = Some(1.);
         true
     }
 
     /// Zooms the camera with a pinch in progress. Returns whether the gesture is ours.
     pub(super) fn camera_pinch_update(&mut self, scale: f64) -> bool {
-        let Some(last) = self.niri.camera_pinch else {
+        let Some(last) = self.arbor.camera_pinch else {
             return false;
         };
         if scale <= 0. || last <= 0. {
             return true;
         }
-        self.niri.camera_pinch = Some(scale);
+        self.arbor.camera_pinch = Some(scale);
 
-        let pointer = self.niri.seat.get_pointer().unwrap();
-        if let Some((output, pos)) = self.niri.output_under(pointer.current_location()) {
+        let pointer = self.arbor.seat.get_pointer().unwrap();
+        if let Some((output, pos)) = self.arbor.output_under(pointer.current_location()) {
             let output = output.clone();
-            self.niri.layout.camera_zoom_at(&output, pos, scale / last);
-            self.niri.queue_redraw_all();
+            self.arbor.layout.camera_zoom_at(&output, pos, scale / last);
+            self.arbor.queue_redraw_all();
         }
         true
     }
 
     pub(super) fn camera_pinch_end(&mut self) -> bool {
-        if self.niri.camera_pinch.take().is_none() {
+        if self.arbor.camera_pinch.take().is_none() {
             return false;
         }
         // Settle: close to actual size snaps back to it, animated.
-        let pointer = self.niri.seat.get_pointer().unwrap();
-        if let Some((output, pos)) = self.niri.output_under(pointer.current_location()) {
+        let pointer = self.arbor.seat.get_pointer().unwrap();
+        if let Some((output, pos)) = self.arbor.output_under(pointer.current_location()) {
             let output = output.clone();
-            self.niri.layout.camera_pinch_end(&output, pos);
-            self.niri.queue_redraw_all();
+            self.arbor.layout.camera_pinch_end(&output, pos);
+            self.arbor.queue_redraw_all();
         }
         true
     }
@@ -74,24 +76,24 @@ impl State {
         button_code: u32,
         serial: Serial,
     ) -> bool {
-        let pointer = self.niri.seat.get_pointer().unwrap();
+        let pointer = self.arbor.seat.get_pointer().unwrap();
         if button != Some(MouseButton::Left) || pointer.is_grabbed() {
             return false;
         }
-        if self.niri.is_locked()
-            || self.niri.screenshot_ui.is_open()
-            || self.niri.pointer_contents.layer.is_some()
+        if self.arbor.is_locked()
+            || self.arbor.screenshot_ui.is_open()
+            || self.arbor.pointer_contents.layer.is_some()
         {
             return false;
         }
 
         let location = pointer.current_location();
-        let Some((output, pos)) = self.niri.output_under(location) else {
+        let Some((output, pos)) = self.arbor.output_under(location) else {
             return false;
         };
         let output = output.clone();
         let Some(window) = self
-            .niri
+            .arbor
             .layout
             .zoomed_dock_window_under(&output, pos)
             .map(|mapped| mapped.window.clone())
@@ -101,17 +103,17 @@ impl State {
 
         let now = get_monotonic_time();
         let is_double = self
-            .niri
+            .arbor
             .title_bar_last_click
             .take()
             .is_some_and(|(time, win)| {
                 win == window && now.saturating_sub(time) <= DOUBLE_CLICK_TIME
             });
         if is_double {
-            self.niri.layout.camera_frame_window(&window);
+            self.arbor.layout.camera_frame_window(&window);
         } else {
-            self.niri.title_bar_last_click = Some((now, window.clone()));
-            self.niri.layout.activate_window(&window);
+            self.arbor.title_bar_last_click = Some((now, window.clone()));
+            self.arbor.layout.activate_window(&window);
 
             let start_data = PointerGrabStartData {
                 focus: None,
@@ -119,14 +121,12 @@ impl State {
                 location,
             };
             let start_data = PointerOrTouchStartData::Pointer(start_data);
-            if let Some(grab) =
-                MoveGrab::new(self, start_data, window, Some(CursorIcon::Default))
-            {
+            if let Some(grab) = MoveGrab::new(self, start_data, window, Some(CursorIcon::Default)) {
                 pointer.set_grab(self, grab, serial, Focus::Clear);
             }
         }
 
-        self.niri.queue_redraw_all();
+        self.arbor.queue_redraw_all();
         true
     }
 }

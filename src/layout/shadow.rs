@@ -3,7 +3,7 @@ use std::iter::zip;
 use arbor_config::CornerRadius;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 
 #[derive(Debug)]
@@ -164,7 +164,7 @@ impl Shadow {
 
     pub fn render(
         &self,
-        renderer: &mut impl NiriRenderer,
+        renderer: &mut impl ArborRenderer,
         location: Point<f64, Logical>,
         push: &mut dyn FnMut(ShadowRenderElement),
     ) {

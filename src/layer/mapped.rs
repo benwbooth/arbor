@@ -9,10 +9,10 @@ use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
 use super::ResolvedLayerRules;
 use crate::animation::Clock;
+use crate::arbor_render_elements;
 use crate::layout::shadow::Shadow;
-use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
@@ -55,7 +55,7 @@ pub struct MappedLayer {
     clock: Clock,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     LayerSurfaceRenderElement<R> => {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
@@ -184,7 +184,7 @@ impl MappedLayer {
         Point::from((0., y))
     }
 
-    pub fn render_normal<R: NiriRenderer>(
+    pub fn render_normal<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         ns: Option<usize>,
@@ -255,7 +255,7 @@ impl MappedLayer {
         );
     }
 
-    pub fn render_popups<R: NiriRenderer>(
+    pub fn render_popups<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         ns: Option<usize>,

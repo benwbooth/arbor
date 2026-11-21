@@ -3,10 +3,10 @@ use std::os::unix::net::UnixStream;
 use zbus::{fdo, interface, zvariant};
 
 use super::Start;
-use crate::niri::NewClient;
+use crate::arbor::NewClient;
 
 pub struct ServiceChannel {
-    to_niri: calloop::channel::Sender<NewClient>,
+    to_arbor: calloop::channel::Sender<NewClient>,
 }
 
 #[interface(name = "org.gnome.Mutter.ServiceChannel")]
@@ -28,7 +28,7 @@ impl ServiceChannel {
             // FIXME: maybe you can get the PID from D-Bus somehow?
             credentials_unknown: true,
         };
-        if let Err(err) = self.to_niri.send(client) {
+        if let Err(err) = self.to_arbor.send(client) {
             warn!("error sending message to the compositor: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
@@ -38,8 +38,8 @@ impl ServiceChannel {
 }
 
 impl ServiceChannel {
-    pub fn new(to_niri: calloop::channel::Sender<NewClient>) -> Self {
-        Self { to_niri }
+    pub fn new(to_arbor: calloop::channel::Sender<NewClient>) -> Self {
+        Self { to_arbor }
     }
 }
 

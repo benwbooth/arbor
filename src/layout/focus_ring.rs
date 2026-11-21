@@ -4,9 +4,9 @@ use arbor_config::{CornerRadius, Gradient, GradientRelativeTo};
 use smithay::backend::renderer::element::{Element as _, Kind};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::niri_render_elements;
+use crate::arbor_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 
 #[derive(Debug)]
@@ -22,7 +22,7 @@ pub struct FocusRing {
     thicken_corners: bool,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     FocusRingRenderElement => {
         SolidColor = SolidColorRenderElement,
         Gradient = BorderRenderElement,
@@ -217,7 +217,7 @@ impl FocusRing {
 
     pub fn render(
         &self,
-        renderer: &mut impl NiriRenderer,
+        renderer: &mut impl ArborRenderer,
         location: Point<f64, Logical>,
         push: &mut dyn FnMut(FocusRingRenderElement),
     ) {

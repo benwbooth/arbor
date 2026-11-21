@@ -1,9 +1,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use arbor_ipc::{Action, OutputAction};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
-use arbor_ipc::{Action, OutputAction};
 
 use crate::utils::version;
 

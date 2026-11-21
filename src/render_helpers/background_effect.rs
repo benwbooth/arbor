@@ -6,8 +6,8 @@ use smithay::utils::{Logical, Point, Rectangle, Scale};
 use smithay::wayland::compositor::{with_states, SurfaceData};
 use wayland_server::protocol::wl_surface::WlSurface;
 
+use crate::arbor_render_elements;
 use crate::handlers::background_effect::get_cached_blur_region;
-use crate::niri_render_elements;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
@@ -73,7 +73,7 @@ impl RenderParams {
     }
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     BackgroundEffectElement => {
         FramebufferEffect = FramebufferEffectElement,
         Xray = XrayElement,

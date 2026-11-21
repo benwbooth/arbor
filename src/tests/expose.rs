@@ -66,10 +66,10 @@ fn wallpaper(f: &mut Fixture, id: ClientId) {
 
 /// Renders output 1 and returns RGBA pixels.
 fn render(f: &mut Fixture) -> Vec<u8> {
-    let output = f.niri_output(1);
-    let state = f.niri_state();
-    let niri = &mut state.niri;
-    niri.update_render_elements(Some(&output));
+    let output = f.arbor_output(1);
+    let state = f.arbor_state();
+    let arbor = &mut state.arbor;
+    arbor.update_render_elements(Some(&output));
     state
         .backend
         .headless()
@@ -79,7 +79,7 @@ fn render(f: &mut Fixture) -> Vec<u8> {
                 target: RenderTarget::ScreenCapture,
                 xray: None,
             };
-            let elements = niri.render_to_vec(ctx, &output, false);
+            let elements = arbor.render_to_vec(ctx, &output, false);
             render_to_vec(
                 renderer,
                 (1920, 1080).into(),
@@ -123,41 +123,41 @@ fn expose_renders_and_hits() {
     let mut config = arbor_config::Config::default();
     config.hotkey_overlay.skip_at_startup = true;
     let mut f = Fixture::with_config(config);
-    f.niri_state().backend.headless().add_renderer().unwrap();
+    f.arbor_state().backend.headless().add_renderer().unwrap();
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     wallpaper(&mut f, id);
 
     let red = color_window(&mut f, id, (800, 600), (0.85, 0.2, 0.2), "Red docked");
-    f.niri().layout.toggle_window_floating(None);
+    f.arbor().layout.toggle_window_floating(None);
     f.double_roundtrip(id);
     let green = color_window(&mut f, id, (800, 600), (0.2, 0.75, 0.3), "Green docked");
-    f.niri().layout.toggle_window_floating(None);
+    f.arbor().layout.toggle_window_floating(None);
     f.double_roundtrip(id);
     let _blue = color_window(&mut f, id, (640, 400), (0.2, 0.4, 0.9), "Blue floating");
     for surface in [&red, &green] {
         f.client(id).window(surface).ack_last_and_commit();
     }
     f.double_roundtrip(id);
-    f.niri_complete_animations();
+    f.arbor_complete_animations();
 
     let closed = render(&mut f);
     save(&closed, "0-closed");
 
     // Half way through opening.
-    f.niri().layout.overview_gesture_begin();
-    f.niri()
+    f.arbor().layout.overview_gesture_begin();
+    f.arbor()
         .layout
         .overview_gesture_update(150., std::time::Duration::ZERO);
     let half = render(&mut f);
     save(&half, "1-half");
-    f.niri().layout.overview_gesture_end();
-    f.niri_complete_animations();
-    if !f.niri().layout.is_overview_open() {
-        f.niri().layout.toggle_overview();
-        f.niri_complete_animations();
+    f.arbor().layout.overview_gesture_end();
+    f.arbor_complete_animations();
+    if !f.arbor().layout.is_overview_open() {
+        f.arbor().layout.toggle_overview();
+        f.arbor_complete_animations();
     }
-    assert!(f.niri().layout.is_overview_open());
+    assert!(f.arbor().layout.is_overview_open());
 
     let open = render(&mut f);
     save(&open, "2-open");
@@ -168,12 +168,12 @@ fn expose_renders_and_hits() {
 
     // Every window is somewhere in the exposé area and hit testing finds each one at the
     // centre of its slot.
-    let output = f.niri_output(1);
+    let output = f.arbor_output(1);
     let mut found = 0;
     for y in (200..1080).step_by(20) {
         for x in (0..1920).step_by(20) {
             if let Some(ExposeHit::Window { .. }) = f
-                .niri()
+                .arbor()
                 .layout
                 .expose_hit(&output, Point::from((x as f64, y as f64)))
             {
@@ -183,7 +183,7 @@ fn expose_renders_and_hits() {
     }
     assert!(found > 0);
     let windows: Vec<_> = f
-        .niri()
+        .arbor()
         .layout
         .windows()
         .map(|(_, m)| m.window.clone())
@@ -194,7 +194,7 @@ fn expose_renders_and_hits() {
         'outer: for y in (100..1080).step_by(10) {
             for x in (0..1920).step_by(10) {
                 if let Some(ExposeHit::Window { id, .. }) = f
-                    .niri()
+                    .arbor()
                     .layout
                     .expose_hit(&output, Point::from((x as f64, y as f64)))
                 {
@@ -213,7 +213,7 @@ fn expose_renders_and_hits() {
         .step_by(10)
         .filter_map(|x| {
             match f
-                .niri()
+                .arbor()
                 .layout
                 .expose_hit(&output, Point::from((x as f64, 60.)))
             {
@@ -231,14 +231,14 @@ fn expose_renders_and_hits() {
         .flat_map(|x| (300..1000).step_by(10).map(move |y| (x, y)))
         .find(|&(x, y)| {
             matches!(
-                f.niri()
+                f.arbor()
                     .layout
                     .expose_hit(&output, Point::from((x as f64, y as f64))),
                 Some(ExposeHit::Window { close: false, .. })
             )
         })
         .unwrap();
-    f.niri().layout.expose_set_pointer(Some((
+    f.arbor().layout.expose_set_pointer(Some((
         &output,
         Point::from((target.0 as f64 + 40., target.1 as f64 + 40.)),
     )));
@@ -246,8 +246,8 @@ fn expose_renders_and_hits() {
     save(&hovered, "3-hover");
 
     // Closing animates back to the real layout.
-    f.niri().layout.toggle_overview();
-    f.niri_complete_animations();
+    f.arbor().layout.toggle_overview();
+    f.arbor_complete_animations();
     let back = render(&mut f);
     save(&back, "4-closed-again");
     assert_eq!(pixel(&back, 1900, 1070), c0);
@@ -261,14 +261,14 @@ fn expose_drag_to_workspace() {
     let id = f.add_client();
     color_window(&mut f, id, (800, 600), (1., 0., 0.), "One");
     color_window(&mut f, id, (800, 600), (0., 1., 0.), "Two");
-    f.niri_complete_animations();
+    f.arbor_complete_animations();
 
-    f.niri().layout.toggle_overview();
-    f.niri_complete_animations();
-    let output = f.niri_output(1);
+    f.arbor().layout.toggle_overview();
+    f.arbor_complete_animations();
+    let output = f.arbor_output(1);
 
     let hit_at =
-        |f: &mut Fixture, x: f64, y: f64| f.niri().layout.expose_hit(&output, (x, y).into());
+        |f: &mut Fixture, x: f64, y: f64| f.arbor().layout.expose_hit(&output, (x, y).into());
     let (window, start) = (0..1920)
         .step_by(10)
         .flat_map(|x| (200..1080).step_by(10).map(move |y| (x, y)))
@@ -285,14 +285,14 @@ fn expose_drag_to_workspace() {
         })
         .unwrap();
 
-    f.niri()
+    f.arbor()
         .layout
         .expose_drag_begin(&output, &window, start.into());
-    f.niri().layout.expose_drag_update(&output, plus.into());
-    assert!(f.niri().layout.expose_drag_end());
+    f.arbor().layout.expose_drag_update(&output, plus.into());
+    assert!(f.arbor().layout.expose_drag_end());
 
     let ws_of = |f: &mut Fixture| {
-        f.niri()
+        f.arbor()
             .layout
             .workspaces()
             .find_map(|(_, idx, ws)| ws.windows().any(|w| w.window == window).then_some(idx))
@@ -300,7 +300,7 @@ fn expose_drag_to_workspace() {
     assert_eq!(ws_of(&mut f), Some(1));
     // The other window stays, and the overview is still open.
     assert_eq!(
-        f.niri()
+        f.arbor()
             .layout
             .active_workspace()
             .unwrap()
@@ -308,17 +308,17 @@ fn expose_drag_to_workspace() {
             .count(),
         1
     );
-    assert!(f.niri().layout.is_overview_open());
+    assert!(f.arbor().layout.is_overview_open());
 
     // Dropping on empty space does nothing.
-    f.niri().layout.switch_workspace(1);
-    f.niri_complete_animations();
-    f.niri()
+    f.arbor().layout.switch_workspace(1);
+    f.arbor_complete_animations();
+    f.arbor()
         .layout
         .expose_drag_begin(&output, &window, (960., 600.).into());
-    f.niri()
+    f.arbor()
         .layout
         .expose_drag_update(&output, (960., 1000.).into());
-    assert!(!f.niri().layout.expose_drag_end());
+    assert!(!f.arbor().layout.expose_drag_end());
     assert_eq!(ws_of(&mut f), Some(1));
 }

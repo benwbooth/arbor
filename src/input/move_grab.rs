@@ -16,8 +16,8 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::utils::{IsAlive, Logical, Point, Serial, SERIAL_COUNTER};
 
+use crate::arbor::State;
 use crate::input::PointerOrTouchStartData;
-use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
 pub struct MoveGrab {
@@ -48,7 +48,7 @@ impl MoveGrab {
         move_icon: Option<CursorIcon>,
     ) -> Option<Self> {
         let location = start_data.location();
-        let (output, pos_within_output) = state.niri.output_under(location)?;
+        let (output, pos_within_output) = state.arbor.output_under(location)?;
 
         Some(Self {
             last_location: location,
@@ -68,9 +68,8 @@ impl MoveGrab {
         self.gesture == GestureState::Move
     }
 
-
     fn on_ungrab(&mut self, data: &mut State) {
-        let layout = &mut data.niri.layout;
+        let layout = &mut data.arbor.layout;
         match self.gesture {
             GestureState::Recognizing => {
                 // Activate the window on release. This is most prominent in the overview where
@@ -94,17 +93,17 @@ impl MoveGrab {
         }
 
         if self.start_data.is_pointer() {
-            data.niri
+            data.arbor
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::default_named());
         }
 
         // FIXME: only redraw the window output.
-        data.niri.queue_redraw_all();
+        data.arbor.queue_redraw_all();
     }
 
     fn begin_move(&mut self, data: &mut State) -> bool {
-        if !data.niri.layout.interactive_move_begin(
+        if !data.arbor.layout.interactive_move_begin(
             self.window.clone(),
             &self.start_output,
             self.start_pos_within_output,
@@ -116,7 +115,7 @@ impl MoveGrab {
         self.gesture = GestureState::Move;
 
         if self.start_data.is_pointer() {
-            data.niri
+            data.arbor
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::Named(self.move_icon));
         }
@@ -154,7 +153,7 @@ impl MoveGrab {
         match self.gesture {
             GestureState::Recognizing => return true,
             GestureState::Move => {
-                let Some((output, pos_within_output)) = data.niri.output_under(self.last_location)
+                let Some((output, pos_within_output)) = data.arbor.output_under(self.last_location)
                 else {
                     return true;
                 };
@@ -162,7 +161,7 @@ impl MoveGrab {
 
                 // Interactive move always uses absolute delta since the window must remain pinned
                 // to the cursor even when it's clamped to monitor bounds.
-                let ongoing = data.niri.layout.interactive_move_update(
+                let ongoing = data.arbor.layout.interactive_move_update(
                     &self.window,
                     delta,
                     output,
@@ -170,7 +169,7 @@ impl MoveGrab {
                 );
                 if ongoing {
                     // FIXME: only redraw the previous and the new output.
-                    data.niri.queue_redraw_all();
+                    data.arbor.queue_redraw_all();
                     return true;
                 }
             }
@@ -182,7 +181,7 @@ impl MoveGrab {
     fn on_toggle_floating(&mut self, data: &mut State) -> bool {
         // Start move if still recognizing.
         if self.gesture == GestureState::Recognizing {
-            let Some((output, pos_within_output)) = data.niri.output_under(self.last_location)
+            let Some((output, pos_within_output)) = data.arbor.output_under(self.last_location)
             else {
                 return false;
             };
@@ -193,7 +192,7 @@ impl MoveGrab {
             }
 
             // Apply the delta accumulated during recognizing.
-            let ongoing = data.niri.layout.interactive_move_update(
+            let ongoing = data.arbor.layout.interactive_move_update(
                 &self.window,
                 self.last_location - self.start_data.location(),
                 output,
@@ -204,8 +203,8 @@ impl MoveGrab {
             }
         }
 
-        data.niri.layout.toggle_window_floating(Some(&self.window));
-        data.niri.queue_redraw_all();
+        data.arbor.layout.toggle_window_floating(Some(&self.window));
+        data.arbor.queue_redraw_all();
 
         true
     }

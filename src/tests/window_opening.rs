@@ -1,7 +1,7 @@
 use std::fmt::{self, Write as _};
 
-use insta::assert_snapshot;
 use arbor_config::Config;
+use insta::assert_snapshot;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use super::*;
@@ -266,11 +266,11 @@ window-rule {
 
     // If the window ended up fullscreen, unfullscreen it and output the configure.
     let mut post_unfullscreen = String::new();
-    let mapped = f.niri().layout.windows().next().unwrap().1;
+    let mapped = f.arbor().layout.windows().next().unwrap().1;
     let is_fullscreen = mapped.sizing_mode().is_fullscreen();
     let win = mapped.window.clone();
     if is_fullscreen {
-        f.niri().layout.set_fullscreen(&win, false);
+        f.arbor().layout.set_fullscreen(&win, false);
         f.double_roundtrip(id);
 
         let window = f.client(id).window(&surface);
@@ -295,4 +295,3 @@ post-map configures:
     let _guard = settings.bind_to_scope();
     assert_snapshot!(snapshot);
 }
-

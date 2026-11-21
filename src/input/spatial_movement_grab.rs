@@ -10,7 +10,7 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
-use crate::niri::State;
+use crate::arbor::State;
 use crate::utils::get_monotonic_time;
 
 pub struct SpatialMovementGrab {
@@ -61,7 +61,7 @@ impl SpatialMovementGrab {
             .unwrap_or(self.new_location - self.last_location);
         self.last_location = self.new_location;
 
-        let layout = &mut data.niri.layout;
+        let layout = &mut data.arbor.layout;
         let res = match self.gesture {
             GestureState::Recognizing => {
                 let c = self.new_location - self.start_data.location;
@@ -82,7 +82,7 @@ impl SpatialMovementGrab {
 
         if let Some(output) = res {
             if let Some(output) = output {
-                data.niri.queue_redraw(&output);
+                data.arbor.queue_redraw(&output);
             }
             true
         } else {
@@ -91,18 +91,18 @@ impl SpatialMovementGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        let layout = &mut state.niri.layout;
+        let layout = &mut state.arbor.layout;
         let res = match self.gesture {
             GestureState::Recognizing => None,
             GestureState::WorkspaceSwitch => layout.workspace_switch_gesture_end(Some(false)),
         };
 
         if let Some(output) = res {
-            state.niri.queue_redraw(&output);
+            state.arbor.queue_redraw(&output);
         }
 
         state
-            .niri
+            .arbor
             .cursor_manager
             .set_cursor_image(CursorImageStatus::default_named());
     }

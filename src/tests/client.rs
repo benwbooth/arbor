@@ -365,8 +365,6 @@ impl Window {
         self.xdg_toplevel.set_maximized();
     }
 
-
-
     pub fn set_title(&self, title: &str) {
         self.xdg_toplevel.set_title(title.to_owned());
     }

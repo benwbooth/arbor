@@ -24,16 +24,16 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::arbor::Arbor;
+use crate::arbor_render_elements;
 use crate::layout::focus_ring::{FocusRing, FocusRingRenderElement};
 use crate::layout::{Layout, LayoutElement as _, LayoutElementRenderElement};
-use crate::niri::Niri;
-use crate::niri_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::ClippedSurfaceRenderElement;
 use crate::render_helpers::gradient_fade_texture::GradientFadeTextureRenderElement;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::RenderCtx;
@@ -107,7 +107,7 @@ pub enum MruCloseRequest {
     Confirm,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     ThumbnailRenderElement<R> => {
         LayoutElement = LayoutElementRenderElement<R>,
         ClippedSurface = ClippedSurfaceRenderElement<R>,
@@ -115,7 +115,7 @@ niri_render_elements! {
     }
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     WindowMruUiRenderElement<R> => {
         SolidColor = SolidColorRenderElement,
         TextureElement = PrimaryGpuTextureRenderElement,
@@ -336,7 +336,7 @@ impl Thumbnail {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render<R: NiriRenderer>(
+    fn render<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         config: &arbor_config::RecentWindows,
@@ -569,8 +569,8 @@ impl Thumbnail {
 }
 
 impl WindowMru {
-    pub fn new(niri: &Niri) -> Self {
-        let Some(output) = niri.layout.active_output() else {
+    pub fn new(arbor: &Arbor) -> Self {
+        let Some(output) = arbor.layout.active_output() else {
             return Self {
                 thumbnails: Vec::new(),
                 current_id: None,
@@ -579,15 +579,15 @@ impl WindowMru {
             };
         };
 
-        let config = niri.config.borrow().recent_windows.previews;
+        let config = arbor.config.borrow().recent_windows.previews;
         let mut thumbnails = Vec::new();
-        for (mon, ws_idx, ws) in niri.layout.workspaces() {
+        for (mon, ws_idx, ws) in arbor.layout.workspaces() {
             let mon = mon.expect("an active output exists so all workspaces have a monitor");
             let on_current_output = mon.output() == output;
             let on_current_workspace = on_current_output && mon.active_workspace_idx() == ws_idx;
 
             for mapped in ws.windows() {
-                let mut thumbnail = Thumbnail::from_mapped(mapped, niri.clock.clone(), config);
+                let mut thumbnail = Thumbnail::from_mapped(mapped, arbor.clock.clone(), config);
                 thumbnail.on_current_output = on_current_output;
                 thumbnail.on_current_workspace = on_current_workspace;
                 thumbnails.push(thumbnail);
@@ -1093,9 +1093,9 @@ impl WindowMruUi {
         }
     }
 
-    pub fn render_output<R: NiriRenderer>(
+    pub fn render_output<R: ArborRenderer>(
         &self,
-        niri: &Niri,
+        arbor: &Arbor,
         output: &Output,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
@@ -1138,7 +1138,7 @@ impl WindowMruUi {
             let mut ctx = ctx.as_gles();
 
             let mut elems = Vec::new();
-            inner.render(niri, ctx.r(), &mut |elem| elems.push(elem));
+            inner.render(arbor, ctx.r(), &mut |elem| elems.push(elem));
             elems.push(WindowMruUiRenderElement::SolidColor(render_backdrop(1.)));
 
             let scale = output.current_scale().fractional_scale();
@@ -1171,7 +1171,7 @@ impl WindowMruUi {
         // This is not used as fallback when offscreen fails to render because it looks better to
         // hide the previews immediately than to render them with alpha = 1. during a fade-out.
         if *output == inner.output && alpha == 1. {
-            inner.render(niri, ctx, &mut |elem| push(elem));
+            inner.render(arbor, ctx, &mut |elem| push(elem));
         }
 
         // This is used for both normal elems and for other outputs.
@@ -1550,9 +1550,9 @@ impl Inner {
         })
     }
 
-    fn render<R: NiriRenderer>(
+    fn render<R: ArborRenderer>(
         &self,
-        niri: &Niri,
+        arbor: &Arbor,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
     ) {
@@ -1588,7 +1588,7 @@ impl Inner {
 
         for (thumbnail, geo) in self.thumbnails_in_view_render() {
             let id = thumbnail.id;
-            let Some((_, mapped)) = niri.layout.windows().find(|(_, m)| m.id() == id) else {
+            let Some((_, mapped)) = arbor.layout.windows().find(|(_, m)| m.id() == id) else {
                 error!("window in the MRU must be present in the layout");
                 continue;
             };

@@ -1,4 +1,5 @@
-//! arbor additions to `Workspace`, kept out of `workspace.rs` for easy rebasing.
+//! Dock-tree operations on `Workspace`: minimize and restore, tab groups, title bars and the
+//! camera.
 
 use smithay::utils::{Logical, Point};
 
@@ -29,12 +30,12 @@ impl<W: LayoutElement> Workspace<W> {
             }
             return true;
         }
-        if !self.scrolling.minimize_window(&id) {
+        if !self.dock.minimize_window(&id) {
             return false;
         }
 
         // Nothing docked is shown anymore: focus the Desktop.
-        if self.scrolling.is_empty() && !self.floating.is_empty() {
+        if self.dock.is_empty() && !self.floating.is_empty() {
             self.floating_is_active = FloatingActive::Yes;
         }
         true
@@ -42,7 +43,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// The window that restoring without a target brings back: the most recently minimized one.
     pub fn last_minimized_window(&self) -> Option<&W::Id> {
-        let docked = self.scrolling.last_minimized_window();
+        let docked = self.dock.last_minimized_window();
         let floating = self.floating.last_minimized_window();
         docked
             .into_iter()
@@ -56,14 +57,14 @@ impl<W: LayoutElement> Workspace<W> {
         if self.floating_is_active.get() {
             return false;
         }
-        self.scrolling.focus_tab(forwards)
+        self.dock.focus_tab(forwards)
     }
 
     /// Shown windows for the overview's exposé, topmost first: the tile, where it is drawn
     /// (view coordinates) and the scale it is drawn at (the camera zoom for docked windows).
     /// Minimized windows and hidden tabs are left out.
     pub fn expose_tiles(&self) -> Vec<(&crate::layout::tile::Tile<W>, Point<f64, Logical>, f64)> {
-        let zoom = self.scrolling.camera_view().zoom;
+        let zoom = self.dock.camera_view().zoom;
         self.tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
             .map(|(tile, pos, _)| {
@@ -85,7 +86,7 @@ impl<W: LayoutElement> Workspace<W> {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(&crate::layout::tile::Tile<W>, Point<f64, Logical>)> {
-        let zoomed = self.scrolling.is_zoomed();
+        let zoomed = self.dock.is_zoomed();
         self.tiles_with_render_positions()
             .filter(|(_, _, visible)| *visible)
             // Zoomed-out docked windows have no title bar interaction.
@@ -115,18 +116,18 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// The dock tree.
     pub fn dock(&self) -> &crate::layout::dock::DockSpace<W> {
-        &self.scrolling
+        &self.dock
     }
 
     /// The dock tree (for camera actions).
     pub fn dock_mut(&mut self) -> &mut crate::layout::dock::DockSpace<W> {
-        &mut self.scrolling
+        &mut self.dock
     }
 
     /// The docked window under `pos` while the camera is zoomed (when docked windows only take
     /// activation clicks).
     pub fn zoomed_dock_window_under(&self, pos: Point<f64, Logical>) -> Option<&W> {
-        if !self.scrolling.is_zoomed() {
+        if !self.dock.is_zoomed() {
             return None;
         }
         let (win, _) = self.window_under(pos)?;
@@ -134,6 +135,6 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn is_minimized(&self, id: &W::Id) -> bool {
-        self.scrolling.is_minimized(id) || self.floating.is_minimized(id)
+        self.dock.is_minimized(id) || self.floating.is_minimized(id)
     }
 }

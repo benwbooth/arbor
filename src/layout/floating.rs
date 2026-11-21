@@ -16,8 +16,8 @@ use super::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, Options, RemovedTile, SizeFrac,
 };
 use crate::animation::{Animation, Clock};
-use crate::niri_render_elements;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::arbor_render_elements;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::transaction::TransactionBlocker;
@@ -69,7 +69,7 @@ pub struct FloatingSpace<W: LayoutElement> {
     options: Rc<Options>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     FloatingSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
@@ -1120,7 +1120,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         true
     }
 
-    pub fn render<R: NiriRenderer>(
+    pub fn render<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,

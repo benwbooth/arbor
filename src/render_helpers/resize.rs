@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use glam::{Mat3, Vec2};
 use arbor_config::CornerRadius;
+use glam::{Mat3, Vec2};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -11,7 +11,7 @@ use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform};
 
-use super::renderer::{AsGlesFrame, NiriRenderer};
+use super::renderer::{ArborRenderer, AsGlesFrame};
 use super::shader_element::ShaderRenderElement;
 use super::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
@@ -115,7 +115,7 @@ impl ResizeRenderElement {
         )
     }
 
-    pub fn has_shader(renderer: &mut impl NiriRenderer) -> bool {
+    pub fn has_shader(renderer: &mut impl ArborRenderer) -> bool {
         Shaders::get(renderer)
             .program(ProgramType::Resize)
             .is_some()

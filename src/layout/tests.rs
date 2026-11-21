@@ -3,8 +3,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use arbor_config::utils::{Flag, MergeWith as _};
 use arbor_config::workspace::WorkspaceName;
 use arbor_config::{
-    FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
-    WorkspaceReference,
+    FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition, WorkspaceReference,
 };
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -362,7 +361,6 @@ prop_compose! {
     }
 }
 
-
 fn arbitrary_resize_edge() -> impl Strategy<Value = ResizeEdge> {
     prop_oneof![
         Just(ResizeEdge::RIGHT),
@@ -401,7 +399,6 @@ fn arbitrary_parent_id() -> impl Strategy<Value = Option<usize>> {
 fn arbitrary_scroll_direction() -> impl Strategy<Value = ScrollDirection> {
     prop_oneof![Just(ScrollDirection::Left), Just(ScrollDirection::Right)]
 }
-
 
 #[derive(Debug, Clone, Arbitrary)]
 enum Op {
@@ -2296,7 +2293,7 @@ fn open_right_of_on_different_workspace() {
         "the second workspace must remain active"
     );
     assert_eq!(
-        mon.workspaces[0].scrolling().active_column_idx(),
+        mon.workspaces[0].dock().active_column_idx(),
         1,
         "the new window must become active"
     );
@@ -2339,7 +2336,7 @@ fn open_right_of_on_different_workspace_ewaf() {
         "the second workspace must remain active"
     );
     assert_eq!(
-        mon.workspaces[1].scrolling().active_column_idx(),
+        mon.workspaces[1].dock().active_column_idx(),
         1,
         "the new window must become active"
     );
@@ -3453,7 +3450,7 @@ fn restore_to_floating_persists_across_fullscreen_maximize() {
     let mut layout = check_ops(ops);
 
     // Unfullscreening should return the window to the maximized state.
-    let scrolling = layout.active_workspace().unwrap().scrolling();
+    let scrolling = layout.active_workspace().unwrap().dock();
     assert!(scrolling.tiles().next().is_some());
 
     let ops = [
@@ -3463,7 +3460,7 @@ fn restore_to_floating_persists_across_fullscreen_maximize() {
     check_ops_on_layout(&mut layout, ops);
 
     // Unmaximize should return the window back to floating.
-    let scrolling = layout.active_workspace().unwrap().scrolling();
+    let scrolling = layout.active_workspace().unwrap().dock();
     assert!(scrolling.tiles().next().is_none());
 }
 
@@ -3485,7 +3482,7 @@ fn unmaximize_during_fullscreen_does_not_float() {
     let mut layout = check_ops(ops);
 
     // Unmaximize shouldn't have changed the window state since it's fullscreen.
-    let scrolling = layout.active_workspace().unwrap().scrolling();
+    let scrolling = layout.active_workspace().unwrap().dock();
     assert!(scrolling.tiles().next().is_some());
 
     let ops = [
@@ -3495,7 +3492,7 @@ fn unmaximize_during_fullscreen_does_not_float() {
     check_ops_on_layout(&mut layout, ops);
 
     // Unfullscreen should return the window back to floating.
-    let scrolling = layout.active_workspace().unwrap().scrolling();
+    let scrolling = layout.active_workspace().unwrap().dock();
     assert!(scrolling.tiles().next().is_none());
 }
 
@@ -3704,7 +3701,6 @@ fn arbitrary_struts() -> impl Strategy<Value = Struts> {
             bottom: FloatOrInt(bottom),
         })
 }
-
 
 fn arbitrary_tab_indicator_position() -> impl Strategy<Value = TabIndicatorPosition> {
     prop_oneof![

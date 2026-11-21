@@ -225,7 +225,6 @@ impl ResolvedWindowRules {
                     resolved.default_height = Some(x.0);
                 }
 
-
                 if let Some(x) = rule.default_floating_position {
                     resolved.default_floating_position = Some(x);
                 }

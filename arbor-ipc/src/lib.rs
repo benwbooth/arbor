@@ -23,8 +23,8 @@
 //! it is a fairly simple helper, so if you need async, or if you're using a different language,
 //! you are encouraged to communicate with the socket manually.
 //!
-//! 1. Read the socket filesystem path from [`socket::SOCKET_PATH_ENV`] (`$ARBOR_SOCKET`; arbor
-//!    also sets `$NIRI_SOCKET` to the same path for niri-compatible tools).
+//! 1. Read the socket filesystem path from [`socket::SOCKET_PATH_ENV`] (`$ARBOR_SOCKET`; arbor also
+//!    sets `$NIRI_SOCKET` to the same path for niri-compatible tools).
 //! 2. Connect to the socket and write a JSON-formatted [`Request`] on a single line. You can follow
 //!    up with a line break and a flush, or just flush and shutdown the write end of the socket.
 //! 3. arbor will respond with a single line JSON-formatted [`Reply`].

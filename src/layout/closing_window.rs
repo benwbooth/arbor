@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::Context as _;
-use glam::{Mat3, Vec2};
 use arbor_config::BlockOutFrom;
+use glam::{Mat3, Vec2};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
@@ -15,7 +15,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size, Transform};
 use smithay::wayland::compositor::{Blocker, BlockerState};
 
 use crate::animation::Animation;
-use crate::niri_render_elements;
+use crate::arbor_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
@@ -63,7 +63,7 @@ pub struct ClosingWindow {
     random_seed: f32,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     ClosingWindowRenderElement => {
         Texture = RelocateRenderElement<RescaleRenderElement<PrimaryGpuTextureRenderElement>>,
         Shader = ShaderRenderElement,

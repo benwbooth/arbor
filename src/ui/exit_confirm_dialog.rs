@@ -14,10 +14,10 @@ use smithay::reexports::gbm::Format as Fourcc;
 use smithay::utils::{Point, Transform};
 
 use crate::animation::{Animation, Clock};
-use crate::niri_render_elements;
+use crate::arbor_render_elements;
 use crate::render_helpers::memory::MemoryBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::{output_size, to_physical_precise_round};
@@ -36,7 +36,7 @@ pub struct ExitConfirmDialog {
     config: Rc<RefCell<Config>>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     ExitConfirmDialogRenderElement => {
         Texture = RescaleRenderElement<PrimaryGpuTextureRenderElement>,
         SolidColor = SolidColorRenderElement,
@@ -146,7 +146,7 @@ impl ExitConfirmDialog {
         matches!(self.state, State::Showing(_) | State::Hiding(_))
     }
 
-    pub fn render<R: NiriRenderer>(
+    pub fn render<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         output: &Output,

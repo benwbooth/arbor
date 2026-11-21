@@ -3,12 +3,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
+use arbor_ipc::{LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg};
 use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
-use arbor_ipc::{
-    LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
-};
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
 use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
 use smithay::input::keyboard::Keysym;
@@ -409,7 +407,9 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::PowerOnMonitors {} => Self::PowerOnMonitors,
             arbor_ipc::Action::Spawn { command } => Self::Spawn(command),
             arbor_ipc::Action::SpawnSh { command } => Self::SpawnSh(command),
-            arbor_ipc::Action::DoScreenTransition { delay_ms } => Self::DoScreenTransition(delay_ms),
+            arbor_ipc::Action::DoScreenTransition { delay_ms } => {
+                Self::DoScreenTransition(delay_ms)
+            }
             arbor_ipc::Action::Screenshot { show_pointer, path } => {
                 Self::Screenshot(show_pointer, path)
             }
@@ -464,7 +464,9 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::FocusWindowDown {} => Self::FocusWindowDown,
             arbor_ipc::Action::FocusWindowUp {} => Self::FocusWindowUp,
             arbor_ipc::Action::FocusWindowDownOrColumnLeft {} => Self::FocusWindowDownOrColumnLeft,
-            arbor_ipc::Action::FocusWindowDownOrColumnRight {} => Self::FocusWindowDownOrColumnRight,
+            arbor_ipc::Action::FocusWindowDownOrColumnRight {} => {
+                Self::FocusWindowDownOrColumnRight
+            }
             arbor_ipc::Action::FocusWindowUpOrColumnLeft {} => Self::FocusWindowUpOrColumnLeft,
             arbor_ipc::Action::FocusWindowUpOrColumnRight {} => Self::FocusWindowUpOrColumnRight,
             arbor_ipc::Action::FocusWindowOrWorkspaceDown {} => Self::FocusWindowOrWorkspaceDown,
@@ -590,16 +592,22 @@ impl From<arbor_ipc::Action> for Action {
                 id: Some(id),
                 change,
             } => Self::SetWindowWidthById { id, change },
-            arbor_ipc::Action::SetWindowHeight { id: None, change } => Self::SetWindowHeight(change),
+            arbor_ipc::Action::SetWindowHeight { id: None, change } => {
+                Self::SetWindowHeight(change)
+            }
             arbor_ipc::Action::SetWindowHeight {
                 id: Some(id),
                 change,
             } => Self::SetWindowHeightById { id, change },
             arbor_ipc::Action::ResetWindowHeight { id: None } => Self::ResetWindowHeight,
-            arbor_ipc::Action::ResetWindowHeight { id: Some(id) } => Self::ResetWindowHeightById(id),
+            arbor_ipc::Action::ResetWindowHeight { id: Some(id) } => {
+                Self::ResetWindowHeightById(id)
+            }
             arbor_ipc::Action::SwitchPresetColumnWidth {} => Self::SwitchPresetColumnWidth,
             arbor_ipc::Action::SwitchPresetColumnWidthBack {} => Self::SwitchPresetColumnWidthBack,
-            arbor_ipc::Action::SwitchPresetWindowWidth { id: None } => Self::SwitchPresetWindowWidth,
+            arbor_ipc::Action::SwitchPresetWindowWidth { id: None } => {
+                Self::SwitchPresetWindowWidth
+            }
             arbor_ipc::Action::SwitchPresetWindowWidthBack { id: None } => {
                 Self::SwitchPresetWindowWidthBack
             }
@@ -681,7 +689,9 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::MoveFloatingWindow { id, x, y } => {
                 Self::MoveFloatingWindowById { id, x, y }
             }
-            arbor_ipc::Action::ToggleWindowRuleOpacity { id: None } => Self::ToggleWindowRuleOpacity,
+            arbor_ipc::Action::ToggleWindowRuleOpacity { id: None } => {
+                Self::ToggleWindowRuleOpacity
+            }
             arbor_ipc::Action::ToggleWindowRuleOpacity { id: Some(id) } => {
                 Self::ToggleWindowRuleOpacityById(id)
             }

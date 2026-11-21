@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use calloop::EventLoop;
 use arbor_config::Config;
+use calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 
-use crate::niri::State;
+use crate::arbor::State;
 
 pub struct Server {
     pub event_loop: EventLoop<'static, State>,

@@ -30,10 +30,10 @@ use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
+use crate::arbor_render_elements;
 use crate::layout::SizingMode;
-use crate::niri_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::id::IdCounter;
@@ -148,7 +148,7 @@ pub struct DockInsert {
     pub side: DockSide,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     DockInnerRenderElement<R> => {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
@@ -156,7 +156,7 @@ niri_render_elements! {
     }
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     DockSpaceRenderElement<R> => {
         Inner = DockInnerRenderElement<R>,
         Camera = RescaleRenderElement<DockInnerRenderElement<R>>,
@@ -2483,8 +2483,7 @@ impl<W: LayoutElement> DockSpace<W> {
             })
     }
 
-
-    pub fn render<R: NiriRenderer>(
+    pub fn render<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
@@ -2639,7 +2638,12 @@ impl<W: LayoutElement> DockSpace<W> {
 
     pub fn add_column(&mut self, column: MovedTile<W>, activate: bool) {
         let dock = self.default_insert();
-        let mut leaf = DockLeaf::new(column.tile, self.view_size, self.scale, self.options.clone());
+        let mut leaf = DockLeaf::new(
+            column.tile,
+            self.view_size,
+            self.scale,
+            self.options.clone(),
+        );
         leaf.is_pending_maximized |= column.is_pending_maximized;
         let id = self.insert_leaf(leaf, dock);
         if activate || self.active_leaf().is_none() {
@@ -2961,7 +2965,6 @@ impl<W: LayoutElement> DockSpace<W> {
         self.activate_leaf(id);
     }
 
-
     pub fn focus_down_or_left(&mut self) {
         if !self.focus_down() {
             self.focus_left();
@@ -3017,9 +3020,6 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn move_down(&mut self) -> bool {
         self.move_direction(DockSide::Bottom)
     }
-
-
-
 
     /// Stacks the window below its left neighbor, or, if it is already in a vertical stack,
     /// moves it out to the left of that stack.
@@ -3151,12 +3151,9 @@ impl<W: LayoutElement> DockSpace<W> {
         };
     }
 
-
-
     pub fn center_column(&mut self) {}
 
     pub fn center_window(&mut self, _window: Option<&W::Id>) {}
-
 
     // ---------------------------------------------------------------------------------------
     // Sizing.
@@ -3164,7 +3161,6 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn toggle_width(&mut self, forwards: bool) {
         self.toggle_preset(None, Axis::Horizontal, forwards);
     }
-
 
     pub fn set_window_width(&mut self, window: Option<&W::Id>, change: SizeChange) {
         self.resize_with_change(window, Axis::Horizontal, change);
@@ -3195,7 +3191,6 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn toggle_window_height(&mut self, window: Option<&W::Id>, forwards: bool) {
         self.toggle_preset(window, Axis::Vertical, forwards);
     }
-
 
     pub fn set_fullscreen(&mut self, window: &W::Id, is_fullscreen: bool) -> bool {
         let Some(leaf) = self.leaf_by_window(window) else {
@@ -3461,7 +3456,6 @@ impl<W: LayoutElement> DockSpace<W> {
     pub fn view_pos(&self) -> f64 {
         0.
     }
-
 
     /// Compact description of the tree shape, e.g. `H[1,V[2,3]]`.
     #[cfg(test)]

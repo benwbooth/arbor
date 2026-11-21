@@ -11,12 +11,12 @@ use std::time::Duration;
 use std::{io, mem};
 
 use anyhow::{anyhow, bail, ensure, Context};
-use bytemuck::cast_slice_mut;
-use drm_ffi::drm_mode_modeinfo;
-use libc::dev_t;
 use arbor_config::output::Modeline;
 use arbor_config::{Config, OutputName};
 use arbor_ipc::{HSyncPolarity, VSyncPolarity};
+use bytemuck::cast_slice_mut;
+use drm_ffi::drm_mode_modeinfo;
+use libc::dev_t;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -62,9 +62,9 @@ use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use super::{IpcOutputMap, RenderResult};
+use crate::arbor::{Arbor, RedrawState, State};
 use crate::backend::OutputId;
 use crate::frame_clock::FrameClock;
-use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
@@ -244,7 +244,7 @@ impl OutputDevice {
         cleanup.extend(res_handles.crtcs());
 
         for (conn, info) in self.drm_scanner.connectors() {
-            // We only keep the connector if it has a CRTC and the output isn't off in niri.
+            // We only keep the connector if it has a CRTC and the output isn't off in arbor.
             if let Some(crtc) = self.drm_scanner.crtc_for_connector(conn) {
                 // Verify that the connector's current CRTC matches the CRTC we expect. If not,
                 // clear the CRTC and the connector so that all connectors can get the expected
@@ -417,7 +417,7 @@ impl Tty {
         let _span = tracy_client::span!("Tty::new");
 
         let (session, notifier) = LibSeatSession::new().context(
-            "Error creating a session. This might mean that you're trying to run niri on a TTY \
+            "Error creating a session. This might mean that you're trying to run arbor on a TTY \
              that is already busy, for example if you're running this inside tmux that had been \
              originally started on a different TTY",
         )?;
@@ -426,7 +426,7 @@ impl Tty {
         let udev_backend =
             UdevBackend::new(session.seat()).context("error creating a udev backend")?;
         let udev_dispatcher = Dispatcher::new(udev_backend, move |event, _, state: &mut State| {
-            state.backend.tty().on_udev_event(&mut state.niri, event);
+            state.backend.tty().on_udev_event(&mut state.arbor, event);
         });
         event_loop
             .register_dispatcher(udev_dispatcher.clone())
@@ -440,7 +440,7 @@ impl Tty {
         }
         .map_err(|()| anyhow!("error assigning the seat to libinput"))?;
 
-        // If the session is not active at startup (e.g. niri was launched from a different TTY),
+        // If the session is not active at startup (e.g. arbor was launched from a different TTY),
         // suspend libinput now so that when ActivateSession fires, libinput.resume() performs a
         // full re-enumeration of input devices instead of being a no-op.
         if !session.is_active() {
@@ -458,7 +458,10 @@ impl Tty {
 
         event_loop
             .insert_source(notifier, move |event, _, state| {
-                state.backend.tty().on_session_event(&mut state.niri, event);
+                state
+                    .backend
+                    .tty()
+                    .on_session_event(&mut state.arbor, event);
             })
             .unwrap();
 
@@ -511,11 +514,11 @@ impl Tty {
         })
     }
 
-    pub fn init(&mut self, niri: &mut Niri) {
+    pub fn init(&mut self, arbor: &mut Arbor) {
         // If the session is inactive, skip initialization because we won't be able to do much with
         // the devices anyway. We'll get ActivateSession and add the devices there instead.
         //
-        // This can happen when starting niri while having a different TTY active (e.g. via tmux).
+        // This can happen when starting arbor while having a different TTY active (e.g. via tmux).
         if !self.session.is_active() {
             return;
         }
@@ -532,7 +535,7 @@ impl Tty {
             .device_list()
             .find(|&(device_id, _)| device_id == self.primary_node.dev_id())
         {
-            if let Err(err) = self.device_added(primary_device_id, primary_device_path, niri) {
+            if let Err(err) = self.device_added(primary_device_id, primary_device_path, arbor) {
                 warn!(
                     "error adding primary node device, display-only devices may not work: {err:?}"
                 );
@@ -546,13 +549,13 @@ impl Tty {
                 continue;
             }
 
-            if let Err(err) = self.device_added(device_id, path, niri) {
+            if let Err(err) = self.device_added(device_id, path, arbor) {
                 warn!("error adding device: {err:?}");
             }
         }
     }
 
-    fn on_udev_event(&mut self, niri: &mut Niri, event: UdevEvent) {
+    fn on_udev_event(&mut self, arbor: &mut Arbor, event: UdevEvent) {
         let _span = tracy_client::span!("Tty::on_udev_event");
 
         match event {
@@ -566,7 +569,7 @@ impl Tty {
                 // new underlying device IDs.
                 self.ignored_nodes = self.compute_ignored_nodes();
 
-                if let Err(err) = self.device_added(device_id, &path, niri) {
+                if let Err(err) = self.device_added(device_id, &path, arbor) {
                     warn!("error adding device: {err:?}");
                 }
             }
@@ -576,7 +579,7 @@ impl Tty {
                     return;
                 }
 
-                self.device_changed(device_id, niri, false)
+                self.device_changed(device_id, arbor, false)
             }
             UdevEvent::Removed { device_id } => {
                 if !self.session.is_active() {
@@ -584,12 +587,12 @@ impl Tty {
                     return;
                 }
 
-                self.device_removed(device_id, niri)
+                self.device_removed(device_id, arbor)
             }
         }
     }
 
-    fn on_session_event(&mut self, niri: &mut Niri, event: SessionEvent) {
+    fn on_session_event(&mut self, arbor: &mut Arbor, event: SessionEvent) {
         let _span = tracy_client::span!("Tty::on_session_event");
 
         match event {
@@ -647,7 +650,7 @@ impl Tty {
                 // Remove removed devices.
                 for node in removed_devices {
                     device_list.remove(&node.dev_id());
-                    self.device_removed(node.dev_id(), niri);
+                    self.device_removed(node.dev_id(), arbor);
                 }
 
                 // Update remained devices.
@@ -673,7 +676,7 @@ impl Tty {
                     }
 
                     // Refresh the connectors.
-                    self.device_changed(node.dev_id(), niri, true);
+                    self.device_changed(node.dev_id(), arbor, true);
 
                     // Apply pending gamma changes and restore our existing gamma.
                     let device = self.devices.get_mut(&node).unwrap();
@@ -722,21 +725,21 @@ impl Tty {
                 let primary = primary_device_path.map(|path| (primary_device_id, path));
 
                 for (device_id, path) in primary.into_iter().chain(device_list) {
-                    if let Err(err) = self.device_added(device_id, &path, niri) {
+                    if let Err(err) = self.device_added(device_id, &path, arbor) {
                         warn!("error adding device: {err:?}");
                     }
                 }
 
                 if self.update_output_config_on_resume {
-                    self.on_output_config_changed(niri);
+                    self.on_output_config_changed(arbor);
                 }
 
-                self.refresh_ipc_outputs(niri);
+                self.refresh_ipc_outputs(arbor);
 
-                niri.notify_activity();
-                niri.monitors_active = true;
+                arbor.notify_activity();
+                arbor.monitors_active = true;
                 self.set_monitors_active(true);
-                niri.queue_redraw_all();
+                arbor.queue_redraw_all();
             }
         }
     }
@@ -745,7 +748,7 @@ impl Tty {
         &mut self,
         device_id: dev_t,
         path: &Path,
-        niri: &mut Niri,
+        arbor: &mut Arbor,
     ) -> anyhow::Result<()> {
         debug!("adding device: {device_id} {path:?}");
 
@@ -830,7 +833,7 @@ impl Tty {
                 .single_renderer(&render_node)
                 .context("error creating renderer")?;
 
-            if let Err(err) = renderer.bind_wl_display(&niri.display_handle) {
+            if let Err(err) = renderer.bind_wl_display(&arbor.display_handle) {
                 // wl_drm is on its way out so this is expected on most modern distros.
                 trace!("error binding legacy EGL to wl_display: {err}");
             } else {
@@ -853,7 +856,7 @@ impl Tty {
             }
             drop(config);
 
-            niri.update_shaders();
+            arbor.update_shaders();
 
             // Create the dmabuf global.
             let primary_formats = renderer.dmabuf_formats();
@@ -861,10 +864,10 @@ impl Tty {
                 DmabufFeedbackBuilder::new(render_node.dev_id(), primary_formats.clone())
                     .build()
                     .context("error building default dmabuf feedback")?;
-            let dmabuf_global = niri
+            let dmabuf_global = arbor
                 .dmabuf_state
                 .create_global_with_default_feedback::<State>(
-                    &niri.display_handle,
+                    &arbor.display_handle,
                     &default_feedback,
                 );
             assert!(self.dmabuf_global.replace(dmabuf_global).is_none());
@@ -900,21 +903,21 @@ impl Tty {
         let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
         let allocator = GbmAllocator::new(allocator_gbm, gbm_flags);
 
-        let token = niri
+        let token = arbor
             .event_loop
             .insert_source(drm_notifier, move |event, meta, state| {
                 let tty = state.backend.tty();
                 match event {
                     DrmEvent::VBlank(crtc) => {
                         let meta = meta.expect("VBlank events must have metadata");
-                        tty.on_vblank(&mut state.niri, node, crtc, meta);
+                        tty.on_vblank(&mut state.arbor, node, crtc, meta);
                     }
                     DrmEvent::Error(error) => warn!("DRM error: {error}"),
                 };
             })
             .unwrap();
 
-        let drm_lease_state = DrmLeaseState::new::<State>(&niri.display_handle, &node)
+        let drm_lease_state = DrmLeaseState::new::<State>(&arbor.display_handle, &node)
             .map_err(|err| warn!("error initializing DRM leasing for {node}: {err:?}"))
             .ok();
 
@@ -933,12 +936,12 @@ impl Tty {
         };
         assert!(self.devices.insert(node, device).is_none());
 
-        self.device_changed(device_id, niri, true);
+        self.device_changed(device_id, arbor, true);
 
         Ok(())
     }
 
-    fn device_changed(&mut self, device_id: dev_t, niri: &mut Niri, cleanup: bool) {
+    fn device_changed(&mut self, device_id: dev_t, arbor: &mut Arbor, cleanup: bool) {
         debug!("device changed: {device_id}");
 
         let Ok(node) = DrmNode::from_dev_id(device_id) else {
@@ -960,7 +963,7 @@ impl Tty {
             if let Some(path) = node.dev_path() {
                 warn!("unknown device; trying to add");
 
-                if let Err(err) = self.device_added(device_id, &path, niri) {
+                if let Err(err) = self.device_added(device_id, &path, arbor) {
                     warn!("error adding device: {err:?}");
                 }
             } else {
@@ -1035,7 +1038,7 @@ impl Tty {
         }
 
         for crtc in &removed {
-            self.connector_disconnected(niri, node, *crtc);
+            self.connector_disconnected(arbor, node, *crtc);
         }
 
         let Some(device) = self.devices.get_mut(&node) else {
@@ -1086,7 +1089,7 @@ impl Tty {
             let device = self.devices.get(&node).unwrap();
 
             // Follow the logic in on_output_config_changed().
-            let disable_laptop_panels = self.should_disable_laptop_panels(niri.is_lid_closed);
+            let disable_laptop_panels = self.should_disable_laptop_panels(arbor.is_lid_closed);
             let should_disable = |conn: &str| disable_laptop_panels && is_laptop_panel(conn);
 
             let config = self.config.borrow();
@@ -1125,10 +1128,10 @@ impl Tty {
         //
         // It will also call refresh_ipc_outputs(), which will catch the disconnected connectors
         // above.
-        self.on_output_config_changed(niri);
+        self.on_output_config_changed(arbor);
     }
 
-    fn device_removed(&mut self, device_id: dev_t, niri: &mut Niri) {
+    fn device_removed(&mut self, device_id: dev_t, arbor: &mut Arbor) {
         debug!("removing device: {device_id}");
 
         let Ok(node) = DrmNode::from_dev_id(device_id) else {
@@ -1153,7 +1156,7 @@ impl Tty {
             .collect();
 
         for crtc in crtcs {
-            self.connector_disconnected(niri, node, crtc);
+            self.connector_disconnected(arbor, node, crtc);
         }
 
         let mut device = self.devices.remove(&node).unwrap();
@@ -1184,16 +1187,18 @@ impl Tty {
 
                 // Disable and destroy the dmabuf global.
                 if let Some(global) = self.dmabuf_global.take() {
-                    niri.dmabuf_state
-                        .disable_global::<State>(&niri.display_handle, &global);
-                    niri.event_loop
+                    arbor
+                        .dmabuf_state
+                        .disable_global::<State>(&arbor.display_handle, &global);
+                    arbor
+                        .event_loop
                         .insert_source(
                             Timer::from_duration(Duration::from_secs(10)),
                             move |_, _, state| {
                                 state
-                                    .niri
+                                    .arbor
                                     .dmabuf_state
-                                    .destroy_global::<State>(&state.niri.display_handle, global);
+                                    .destroy_global::<State>(&state.arbor.display_handle, global);
                                 TimeoutAction::Drop
                             },
                         )
@@ -1217,9 +1222,9 @@ impl Tty {
             }
         }
 
-        niri.event_loop.remove(device.token);
+        arbor.event_loop.remove(device.token);
 
-        self.refresh_ipc_outputs(niri);
+        self.refresh_ipc_outputs(arbor);
 
         drop(device);
 
@@ -1237,7 +1242,7 @@ impl Tty {
 
     fn connector_connected(
         &mut self,
-        niri: &mut Niri,
+        arbor: &mut Arbor,
         node: DrmNode,
         connector: connector::Info,
         crtc: crtc::Handle,
@@ -1542,7 +1547,7 @@ impl Tty {
 
         // Some buggy monitors replug upon powering off, so powering on here would prevent such
         // monitors from powering off. Therefore, we avoid unconditionally powering on.
-        if !niri.monitors_active {
+        if !arbor.monitors_active {
             if let Err(err) = compositor.clear() {
                 warn!("error clearing drm surface: {err:?}");
             }
@@ -1578,14 +1583,14 @@ impl Tty {
         let res = device.surfaces.insert(crtc, surface);
         assert!(res.is_none(), "crtc must not have already existed");
 
-        niri.add_output(output.clone(), Some(refresh_interval(mode)), vrr_enabled);
+        arbor.add_output(output.clone(), Some(refresh_interval(mode)), vrr_enabled);
 
-        if niri.monitors_active {
+        if arbor.monitors_active {
             // Redraw the new monitor.
-            niri.event_loop.insert_idle(move |state| {
+            arbor.event_loop.insert_idle(move |state| {
                 // Guard against output disconnecting before the idle has a chance to run.
-                if state.niri.output_state.contains_key(&output) {
-                    state.niri.queue_redraw(&output);
+                if state.arbor.output_state.contains_key(&output) {
+                    state.arbor.queue_redraw(&output);
                 }
             });
         }
@@ -1593,7 +1598,7 @@ impl Tty {
         Ok(())
     }
 
-    fn connector_disconnected(&mut self, niri: &mut Niri, node: DrmNode, crtc: crtc::Handle) {
+    fn connector_disconnected(&mut self, arbor: &mut Arbor, node: DrmNode, crtc: crtc::Handle) {
         let Some(device) = self.devices.get_mut(&node) else {
             debug!("disconnecting connector for crtc: {crtc:?}");
             error!("missing device");
@@ -1625,7 +1630,7 @@ impl Tty {
 
         debug!("disconnecting connector: {:?}", surface.name.connector);
 
-        let output = niri
+        let output = arbor
             .global_space
             .outputs()
             .find(|output| {
@@ -1634,7 +1639,7 @@ impl Tty {
             })
             .cloned();
         if let Some(output) = output {
-            niri.remove_output(&output);
+            arbor.remove_output(&output);
         } else {
             error!("missing output for crtc {crtc:?}");
         };
@@ -1642,7 +1647,7 @@ impl Tty {
 
     fn on_vblank(
         &mut self,
-        niri: &mut Niri,
+        arbor: &mut Arbor,
         node: DrmNode,
         crtc: crtc::Handle,
         meta: DrmEventMetadata,
@@ -1678,7 +1683,7 @@ impl Tty {
                 Duration::ZERO
             }
         };
-        let presentation_time = if niri.config.borrow().debug.emulate_zero_presentation_time {
+        let presentation_time = if arbor.config.borrow().debug.emulate_zero_presentation_time {
             Duration::ZERO
         } else {
             presentation_time
@@ -1705,7 +1710,7 @@ impl Tty {
             .unwrap()
             .message(&message, 0);
 
-        let Some(output) = niri
+        let Some(output) = arbor
             .global_space
             .outputs()
             .find(|output| {
@@ -1718,7 +1723,7 @@ impl Tty {
             return;
         };
 
-        let Some(output_state) = niri.output_state.get_mut(&output) else {
+        let Some(output_state) = arbor.output_state.get_mut(&output) else {
             error!("missing output state for {name}");
             return;
         };
@@ -1740,7 +1745,7 @@ impl Tty {
                 };
 
                 let tty = state.backend.tty();
-                tty.on_vblank(&mut state.niri, node, crtc, meta);
+                tty.on_vblank(&mut state.arbor, node, crtc, meta);
             })
         {
             // Throttled.
@@ -1822,19 +1827,19 @@ impl Tty {
                 .non_continuous_frame(surface.vblank_frame_name);
             surface.vblank_frame = Some(vblank_frame);
 
-            niri.queue_redraw(&output);
+            arbor.queue_redraw(&output);
         } else {
-            niri.send_frame_callbacks(&output);
+            arbor.send_frame_callbacks(&output);
         }
     }
 
-    fn on_estimated_vblank_timer(&self, niri: &mut Niri, output: Output) {
+    fn on_estimated_vblank_timer(&self, arbor: &mut Arbor, output: Output) {
         let span = tracy_client::span!("Tty::on_estimated_vblank_timer");
 
         let name = output.name();
         span.emit_text(&name);
 
-        let Some(output_state) = niri.output_state.get_mut(&output) else {
+        let Some(output_state) = arbor.output_state.get_mut(&output) else {
             error!("missing output state for {name}");
             return;
         };
@@ -1855,9 +1860,9 @@ impl Tty {
         }
 
         if output_state.unfinished_animations_remain {
-            niri.queue_redraw(&output);
+            arbor.queue_redraw(&output);
         } else {
-            niri.send_frame_callbacks(&output);
+            arbor.send_frame_callbacks(&output);
         }
     }
 
@@ -1878,7 +1883,7 @@ impl Tty {
 
     pub fn render(
         &mut self,
-        niri: &mut Niri,
+        arbor: &mut Arbor,
         output: &Output,
         target_presentation_time: Duration,
     ) -> RenderResult {
@@ -1923,11 +1928,11 @@ impl Tty {
             target: RenderTarget::Output,
             xray: None,
         };
-        let mut elements = niri.render_to_vec(ctx, output, true);
+        let mut elements = arbor.render_to_vec(ctx, output, true);
 
         // Visualize the damage, if enabled.
-        if niri.debug_draw_damage {
-            let output_state = niri.output_state.get_mut(output).unwrap();
+        if arbor.debug_draw_damage {
+            let output_state = arbor.output_state.get_mut(output).unwrap();
             draw_damage(&mut output_state.debug_damage_tracker, &mut elements);
         }
 
@@ -1954,7 +1959,7 @@ impl Tty {
                 flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
             }
             if debug.skip_cursor_only_updates_during_vrr {
-                let output_state = niri.output_state.get(output).unwrap();
+                let output_state = arbor.output_state.get(output).unwrap();
                 if output_state.frame_clock.vrr() {
                     flags.insert(FrameFlags::SKIP_CURSOR_ONLY_UPDATES);
                 }
@@ -1982,19 +1987,19 @@ impl Tty {
                     }
                 }
 
-                niri.update_primary_scanout_output(output, &res.states);
+                arbor.update_primary_scanout_output(output, &res.states);
                 if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
-                    niri.send_dmabuf_feedbacks(output, dmabuf_feedback, &res.states);
+                    arbor.send_dmabuf_feedbacks(output, dmabuf_feedback, &res.states);
                 }
 
                 if !res.is_empty {
                     let presentation_feedbacks =
-                        niri.take_presentation_feedbacks(output, &res.states);
+                        arbor.take_presentation_feedbacks(output, &res.states);
                     let data = (presentation_feedbacks, target_presentation_time);
 
                     match drm_compositor.queue_frame(data) {
                         Ok(()) => {
-                            let output_state = niri.output_state.get_mut(output).unwrap();
+                            let output_state = arbor.output_state.get_mut(output).unwrap();
                             let new_state = RedrawState::WaitingForVBlank {
                                 redraw_needed: false,
                             };
@@ -2004,7 +2009,7 @@ impl Tty {
                                 RedrawState::WaitingForVBlank { .. } => unreachable!(),
                                 RedrawState::WaitingForEstimatedVBlank(_) => unreachable!(),
                                 RedrawState::WaitingForEstimatedVBlankAndQueued(token) => {
-                                    niri.event_loop.remove(token);
+                                    arbor.event_loop.remove(token);
                                 }
                             };
 
@@ -2034,7 +2039,7 @@ impl Tty {
         drop(surface.vblank_frame.take());
 
         // Queue a timer to fire at the predicted vblank time.
-        queue_estimated_vblank_timer(niri, output.clone(), target_presentation_time);
+        queue_estimated_vblank_timer(arbor, output.clone(), target_presentation_time);
 
         rv
     }
@@ -2142,7 +2147,7 @@ impl Tty {
         }
     }
 
-    fn refresh_ipc_outputs(&self, niri: &mut Niri) {
+    fn refresh_ipc_outputs(&self, arbor: &mut Arbor) {
         let _span = tracy_client::span!("Tty::refresh_ipc_outputs");
 
         let mut ipc_outputs = HashMap::new();
@@ -2215,7 +2220,7 @@ impl Tty {
                     });
                 let vrr_enabled = surface.is_some_and(|surface| surface.compositor.vrr_enabled());
 
-                let logical = niri
+                let logical = arbor
                     .global_space
                     .outputs()
                     .find(|output| {
@@ -2250,7 +2255,7 @@ impl Tty {
 
         let mut guard = self.ipc_outputs.lock().unwrap();
         *guard = ipc_outputs;
-        niri.ipc_outputs_changed = true;
+        arbor.ipc_outputs_changed = true;
     }
 
     pub fn ipc_outputs(&self) -> Arc<Mutex<IpcOutputMap>> {
@@ -2289,10 +2294,15 @@ impl Tty {
         }
     }
 
-    pub fn set_output_on_demand_vrr(&mut self, niri: &mut Niri, output: &Output, enable_vrr: bool) {
+    pub fn set_output_on_demand_vrr(
+        &mut self,
+        arbor: &mut Arbor,
+        output: &Output,
+        enable_vrr: bool,
+    ) {
         let _span = tracy_client::span!("Tty::set_output_on_demand_vrr");
 
-        let output_state = niri.output_state.get_mut(output).unwrap();
+        let output_state = arbor.output_state.get_mut(output).unwrap();
         output_state.on_demand_vrr_enabled = enable_vrr;
         if output_state.frame_clock.vrr() == enable_vrr {
             return;
@@ -2312,7 +2322,7 @@ impl Tty {
                         .frame_clock
                         .set_vrr(surface.compositor.vrr_enabled());
 
-                    self.refresh_ipc_outputs(niri);
+                    self.refresh_ipc_outputs(arbor);
                     return;
                 }
             }
@@ -2329,7 +2339,7 @@ impl Tty {
         ignored_nodes
     }
 
-    pub fn update_ignored_nodes_config(&mut self, niri: &mut Niri) {
+    pub fn update_ignored_nodes_config(&mut self, arbor: &mut Arbor) {
         let _span = tracy_client::span!("Tty::update_ignored_nodes_config");
 
         // If we're inactive, we can't do anything, but we'll recompute in ActivateSession.
@@ -2361,7 +2371,7 @@ impl Tty {
 
         for node in removed_devices {
             device_list.remove(&node.dev_id());
-            self.device_removed(node.dev_id(), niri);
+            self.device_removed(node.dev_id(), arbor);
         }
 
         for node in self.devices.keys() {
@@ -2369,7 +2379,7 @@ impl Tty {
         }
 
         for (device_id, path) in device_list {
-            if let Err(err) = self.device_added(device_id, &path, niri) {
+            if let Err(err) = self.device_added(device_id, &path, arbor) {
                 warn!("error adding device {path:?}: {err:?}");
             }
         }
@@ -2395,7 +2405,7 @@ impl Tty {
         false
     }
 
-    pub fn on_output_config_changed(&mut self, niri: &mut Niri) {
+    pub fn on_output_config_changed(&mut self, arbor: &mut Arbor) {
         let _span = tracy_client::span!("Tty::on_output_config_changed");
 
         // If we're inactive, we can't do anything, so just set a flag for later.
@@ -2406,7 +2416,7 @@ impl Tty {
         self.update_output_config_on_resume = false;
 
         // Figure out if we should disable laptop panels.
-        let disable_laptop_panels = self.should_disable_laptop_panels(niri.is_lid_closed);
+        let disable_laptop_panels = self.should_disable_laptop_panels(arbor.is_lid_closed);
         let should_disable = |connector: &str| disable_laptop_panels && is_laptop_panel(connector);
 
         let mut to_disconnect = vec![];
@@ -2491,7 +2501,7 @@ impl Tty {
                     continue;
                 }
 
-                let output = niri
+                let output = arbor
                     .global_space
                     .outputs()
                     .find(|output| {
@@ -2503,7 +2513,7 @@ impl Tty {
                     error!("missing output for crtc: {crtc:?}");
                     continue;
                 };
-                let Some(output_state) = niri.output_state.get_mut(&output) else {
+                let Some(output_state) = arbor.output_state.get_mut(&output) else {
                     error!("missing state for output {:?}", surface.name.connector);
                     continue;
                 };
@@ -2557,7 +2567,7 @@ impl Tty {
                         Some(refresh_interval(mode)),
                         surface.compositor.vrr_enabled(),
                     );
-                    niri.output_resized(&output);
+                    arbor.output_resized(&output);
                 }
             }
 
@@ -2594,7 +2604,7 @@ impl Tty {
         }
 
         for (node, crtc) in to_disconnect {
-            self.connector_disconnected(niri, node, crtc);
+            self.connector_disconnected(arbor, node, crtc);
         }
 
         // Sort by output name to get more predictable first focused output at initial compositor
@@ -2602,12 +2612,12 @@ impl Tty {
         to_connect.sort_unstable_by(|a, b| a.3.compare(&b.3));
 
         for (node, connector, crtc, _name) in to_connect {
-            if let Err(err) = self.connector_connected(niri, node, connector, crtc) {
+            if let Err(err) = self.connector_connected(arbor, node, connector, crtc) {
                 warn!("error connecting connector: {err:?}");
             }
         }
 
-        self.refresh_ipc_outputs(niri);
+        self.refresh_ipc_outputs(arbor);
     }
 
     pub fn get_device_from_node(&mut self, node: DrmNode) -> Option<&mut OutputDevice> {
@@ -3021,11 +3031,11 @@ fn suspend() -> anyhow::Result<()> {
 }
 
 fn queue_estimated_vblank_timer(
-    niri: &mut Niri,
+    arbor: &mut Arbor,
     output: Output,
     target_presentation_time: Duration,
 ) {
-    let output_state = niri.output_state.get_mut(&output).unwrap();
+    let output_state = arbor.output_state.get_mut(&output).unwrap();
     match mem::take(&mut output_state.redraw_state) {
         RedrawState::Idle => unreachable!(),
         RedrawState::Queued => (),
@@ -3054,12 +3064,12 @@ fn queue_estimated_vblank_timer(
     trace!("queueing estimated vblank timer to fire in {duration:?}");
 
     let timer = Timer::from_duration(duration);
-    let token = niri
+    let token = arbor
         .event_loop
         .insert_source(timer, move |_, _, data| {
             data.backend
                 .tty()
-                .on_estimated_vblank_timer(&mut data.niri, output.clone());
+                .on_estimated_vblank_timer(&mut data.arbor, output.clone());
             TimeoutAction::Drop
         })
         .unwrap();
@@ -3523,9 +3533,9 @@ mod color_pipeline;
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_debug_snapshot;
     use arbor_config::output::Modeline;
     use arbor_ipc::{HSyncPolarity, VSyncPolarity};
+    use insta::assert_debug_snapshot;
 
     use crate::backend::tty::{calculate_drm_mode_from_modeline, calculate_mode_cvt};
 

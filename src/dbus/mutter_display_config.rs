@@ -15,7 +15,7 @@ use crate::utils::is_laptop_panel;
 use crate::utils::scale::supported_scales;
 
 pub struct DisplayConfig {
-    to_niri: calloop::channel::Sender<HashMap<String, Option<arbor_config::Output>>>,
+    to_arbor: calloop::channel::Sender<HashMap<String, Option<arbor_config::Output>>>,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
 }
 
@@ -245,7 +245,7 @@ impl DisplayConfig {
             // 0 means "verify", so don't actually apply here
             return Ok(());
         }
-        if let Err(err) = self.to_niri.send(new_conf) {
+        if let Err(err) = self.to_arbor.send(new_conf) {
             warn!("error sending message to the compositor: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
@@ -283,11 +283,11 @@ impl DisplayConfig {
 
 impl DisplayConfig {
     pub fn new(
-        to_niri: calloop::channel::Sender<HashMap<String, Option<arbor_config::Output>>>,
+        to_arbor: calloop::channel::Sender<HashMap<String, Option<arbor_config::Output>>>,
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
     ) -> Self {
         Self {
-            to_niri,
+            to_arbor,
             ipc_outputs,
         }
     }

@@ -22,7 +22,7 @@ use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal};
 use smithay::wayland::presentation::Refresh;
 
 use super::{IpcOutputMap, OutputId, RenderResult};
-use crate::niri::{Niri, RedrawState, State};
+use crate::arbor::{Arbor, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, logical_output};
@@ -124,15 +124,15 @@ impl Winit {
                             logical.width = size.w as u32;
                             logical.height = size.h as u32;
                         }
-                        state.niri.ipc_outputs_changed = true;
+                        state.arbor.ipc_outputs_changed = true;
                     }
 
-                    state.niri.output_resized(&winit.output);
+                    state.arbor.output_resized(&winit.output);
                 }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Focus(_) => (),
-                WinitEvent::Redraw => state.niri.queue_redraw(&state.backend.winit().output),
-                WinitEvent::CloseRequested => state.niri.stop_signal.stop(),
+                WinitEvent::Redraw => state.arbor.queue_redraw(&state.backend.winit().output),
+                WinitEvent::CloseRequested => state.arbor.stop_signal.stop(),
             })
             .unwrap();
 
@@ -146,9 +146,9 @@ impl Winit {
         })
     }
 
-    pub fn init(&mut self, niri: &mut Niri) {
+    pub fn init(&mut self, arbor: &mut Arbor) {
         let renderer = self.backend.renderer();
-        if let Err(err) = renderer.bind_wl_display(&niri.display_handle) {
+        if let Err(err) = renderer.bind_wl_display(&arbor.display_handle) {
             // wl_drm is on its way out so this is expected on most modern distros.
             trace!("error binding legacy EGL to wl_display: {err}");
         } else {
@@ -170,14 +170,14 @@ impl Winit {
         }
         drop(config);
 
-        niri.update_shaders();
+        arbor.update_shaders();
 
-        self.create_dmabuf_global(niri);
+        self.create_dmabuf_global(arbor);
 
-        niri.add_output(self.output.clone(), None, false);
+        arbor.add_output(self.output.clone(), None, false);
     }
 
-    pub fn create_dmabuf_global(&mut self, niri: &mut Niri) {
+    pub fn create_dmabuf_global(&mut self, arbor: &mut Arbor) {
         let renderer = self.backend.renderer();
 
         let default_feedback = || {
@@ -197,14 +197,15 @@ impl Winit {
 
         // Fallback to dmabuf v3 if we failed to build feedback.
         let dmabuf_global = match default_feedback() {
-            Ok(feedback) => niri
+            Ok(feedback) => arbor
                 .dmabuf_state
-                .create_global_with_default_feedback::<State>(&niri.display_handle, &feedback),
+                .create_global_with_default_feedback::<State>(&arbor.display_handle, &feedback),
             Err(err) => {
                 debug!("failed building default dmabuf feedback, falling back to v3: {err:?}");
                 let primary_formats = renderer.dmabuf_formats();
-                niri.dmabuf_state
-                    .create_global::<State>(&niri.display_handle, primary_formats)
+                arbor
+                    .dmabuf_state
+                    .create_global::<State>(&arbor.display_handle, primary_formats)
             }
         };
         assert!(self.dmabuf_global.replace(dmabuf_global).is_none());
@@ -221,7 +222,7 @@ impl Winit {
         Some(f(self.backend.renderer()))
     }
 
-    pub fn render(&mut self, niri: &mut Niri, output: &Output) -> RenderResult {
+    pub fn render(&mut self, arbor: &mut Arbor, output: &Output) -> RenderResult {
         let _span = tracy_client::span!("Winit::render");
 
         // Render the elements.
@@ -230,11 +231,11 @@ impl Winit {
             target: RenderTarget::Output,
             xray: None,
         };
-        let mut elements = niri.render_to_vec(ctx, output, true);
+        let mut elements = arbor.render_to_vec(ctx, output, true);
 
         // Visualize the damage, if enabled.
-        if niri.debug_draw_damage {
-            let output_state = niri.output_state.get_mut(output).unwrap();
+        if arbor.debug_draw_damage {
+            let output_state = arbor.output_state.get_mut(output).unwrap();
             draw_damage(&mut output_state.debug_damage_tracker, &mut elements);
         }
 
@@ -250,7 +251,7 @@ impl Winit {
                 .unwrap()
         };
 
-        niri.update_primary_scanout_output(output, &res.states);
+        arbor.update_primary_scanout_output(output, &res.states);
 
         let rv;
         if let Some(damage) = res.damage {
@@ -268,7 +269,7 @@ impl Winit {
 
             self.backend.submit(Some(damage)).unwrap();
 
-            let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &res.states);
+            let mut presentation_feedbacks = arbor.take_presentation_feedbacks(output, &res.states);
             presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
                 get_monotonic_time(),
                 Refresh::Unknown,
@@ -281,7 +282,7 @@ impl Winit {
             rv = RenderResult::NoDamage;
         }
 
-        let output_state = niri.output_state.get_mut(output).unwrap();
+        let output_state = arbor.output_state.get_mut(output).unwrap();
         match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {
             RedrawState::Idle => unreachable!(),
             RedrawState::Queued => (),

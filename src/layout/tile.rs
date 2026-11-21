@@ -17,15 +17,15 @@ use super::{
     SizeFrac, RESIZE_ANIMATION_THRESHOLD,
 };
 use crate::animation::{Animation, Clock};
+use crate::arbor_render_elements;
 use crate::layout::SizingMode;
-use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::clipped_surface::{ClippedSurfaceRenderElement, RoundedCornerDamage};
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
@@ -129,7 +129,7 @@ pub struct Tile<W: LayoutElement> {
     pub(super) options: Rc<Options>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     TileRenderElement<R> => {
         LayoutElement = LayoutElementRenderElement<R>,
         FocusRing = FocusRingRenderElement,
@@ -1116,7 +1116,7 @@ impl<W: LayoutElement> Tile<W> {
         Point::from((0., y))
     }
 
-    fn render_inner<R: NiriRenderer>(
+    fn render_inner<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -1416,7 +1416,7 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
-    pub fn render<R: NiriRenderer>(
+    pub fn render<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,

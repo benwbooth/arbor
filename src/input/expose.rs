@@ -20,8 +20,8 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Serial};
 
+use crate::arbor::State;
 use crate::layout::expose::ExposeHit;
-use crate::niri::State;
 
 /// Pointer movement that turns a press on a window into a drag.
 const DRAG_THRESHOLD: f64 = 8.;
@@ -34,31 +34,31 @@ impl State {
         button_code: u32,
         serial: Serial,
     ) -> bool {
-        let pointer = self.niri.seat.get_pointer().unwrap();
-        if !self.niri.layout.is_overview_open() || pointer.is_grabbed() {
+        let pointer = self.arbor.seat.get_pointer().unwrap();
+        if !self.arbor.layout.is_overview_open() || pointer.is_grabbed() {
             return false;
         }
-        if self.niri.is_locked()
-            || self.niri.screenshot_ui.is_open()
+        if self.arbor.is_locked()
+            || self.arbor.screenshot_ui.is_open()
             // Panels (top layer) stay clickable above the overview.
-            || self.niri.pointer_contents.layer.is_some()
+            || self.arbor.pointer_contents.layer.is_some()
         {
             return false;
         }
 
         let location = pointer.current_location();
-        let Some((output, pos)) = self.niri.output_under(location) else {
+        let Some((output, pos)) = self.arbor.output_under(location) else {
             return false;
         };
         let output = output.clone();
-        let Some(hit) = self.niri.layout.expose_hit(&output, pos) else {
+        let Some(hit) = self.arbor.layout.expose_hit(&output, pos) else {
             return false;
         };
 
         match (button, hit) {
             (Some(MouseButton::Left), ExposeHit::Window { id, close: true })
             | (Some(MouseButton::Middle), ExposeHit::Window { id, .. }) => {
-                if let Some((_, mapped)) = self.niri.layout.windows().find(|(_, m)| m.window == id)
+                if let Some((_, mapped)) = self.arbor.layout.windows().find(|(_, m)| m.window == id)
                 {
                     mapped.toplevel().send_close();
                 }
@@ -73,40 +73,40 @@ impl State {
                 pointer.set_grab(self, grab, serial, Focus::Clear);
             }
             (Some(MouseButton::Left), ExposeHit::Workspace(idx)) => {
-                self.niri.layout.focus_output(&output);
-                self.niri.layout.switch_workspace(idx);
+                self.arbor.layout.focus_output(&output);
+                self.arbor.layout.switch_workspace(idx);
             }
             (Some(MouseButton::Left), ExposeHit::Empty) => {
-                self.niri.layout.close_overview();
+                self.arbor.layout.close_overview();
             }
             // Other buttons do nothing over the exposé.
             _ => (),
         }
 
-        self.niri.queue_redraw_all();
+        self.arbor.queue_redraw_all();
         true
     }
 
     /// Hover highlight and close button in the overview.
     pub(super) fn update_expose_pointer(&mut self) {
-        let pointer = self.niri.seat.get_pointer().unwrap();
+        let pointer = self.arbor.seat.get_pointer().unwrap();
         if pointer.is_grabbed() {
             // A drag updates the exposé itself.
             return;
         }
-        let target = if self.niri.pointer_contents.layer.is_some() {
+        let target = if self.arbor.pointer_contents.layer.is_some() {
             None
         } else {
-            self.niri
+            self.arbor
                 .output_under(pointer.current_location())
                 .map(|(output, pos)| (output.clone(), pos))
         };
         let changed = self
-            .niri
+            .arbor
             .layout
             .expose_set_pointer(target.as_ref().map(|(output, pos)| (output, *pos)));
         if changed {
-            self.niri.queue_redraw_all();
+            self.arbor.queue_redraw_all();
         }
     }
 }
@@ -131,7 +131,7 @@ impl ExposeGrab {
     }
 
     fn on_motion(&mut self, state: &mut State, location: Point<f64, Logical>) {
-        let Some(geo) = state.niri.global_space.output_geometry(&self.output) else {
+        let Some(geo) = state.arbor.global_space.output_geometry(&self.output) else {
             return;
         };
         let pos = location - geo.loc.to_f64();
@@ -143,24 +143,24 @@ impl ExposeGrab {
             }
             self.dragging = true;
             state
-                .niri
+                .arbor
                 .layout
                 .expose_drag_begin(&self.output, &self.window, pos);
             state
-                .niri
+                .arbor
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
         }
-        state.niri.layout.expose_drag_update(&self.output, pos);
-        state.niri.queue_redraw(&self.output);
+        state.arbor.layout.expose_drag_update(&self.output, pos);
+        state.arbor.queue_redraw(&self.output);
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
-        let layout = &mut state.niri.layout;
+        let layout = &mut state.arbor.layout;
         if self.dragging {
             layout.expose_drag_end();
             state
-                .niri
+                .arbor
                 .cursor_manager
                 .set_cursor_image(CursorImageStatus::default_named());
         } else {
@@ -179,7 +179,7 @@ impl ExposeGrab {
             }
             layout.activate_window(&self.window);
         }
-        state.niri.queue_redraw_all();
+        state.arbor.queue_redraw_all();
     }
 }
 

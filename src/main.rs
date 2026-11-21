@@ -10,16 +10,11 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::{env, mem};
 
-use calloop::EventLoop;
-use clap::{CommandFactory, Parser};
-use clap_complete::Shell;
-use clap_complete_nushell::Nushell;
-use directories::ProjectDirs;
+use arbor::arbor::State;
 use arbor::cli::{Cli, CompletionShell, Sub};
 #[cfg(feature = "dbus")]
 use arbor::dbus;
 use arbor::ipc::client::handle_msg;
-use arbor::niri::State;
 use arbor::utils::spawning::{
     spawn, spawn_sh, store_and_increase_nofile_rlimit, CHILD_DISPLAY, CHILD_ENV,
     REMOVE_ENV_RUST_BACKTRACE, REMOVE_ENV_RUST_LIB_BACKTRACE,
@@ -27,11 +22,16 @@ use arbor::utils::spawning::{
 use arbor::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
 use arbor_config::{Config, ConfigPath};
 use arbor_ipc::socket::{COMPAT_SOCKET_PATH_ENV, SOCKET_PATH_ENV};
+use calloop::EventLoop;
+use clap::{CommandFactory, Parser};
+use clap_complete::Shell;
+use clap_complete_nushell::Nushell;
+use directories::ProjectDirs;
 use sd_notify::NotifyState;
 use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
 
-// `niri` is the library crate (most of the code), `arbor` the binary.
+// The `arbor` library crate holds most of the code; this is the binary.
 const DEFAULT_LOG_FILTER: &str = "arbor=debug,smithay::backend::renderer::gles=error";
 
 #[cfg(feature = "profile-with-tracy-allocations")]
@@ -187,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .unwrap();
 
     // Set WAYLAND_DISPLAY for children.
-    let socket_name = state.niri.socket_name.as_deref().unwrap();
+    let socket_name = state.arbor.socket_name.as_deref().unwrap();
     env::set_var("WAYLAND_DISPLAY", socket_name);
     info!(
         "listening on Wayland socket: {}",
@@ -195,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Set ARBOR_SOCKET for children, and NIRI_SOCKET to the same path for tools written for niri.
-    if let Some(ipc) = &state.niri.ipc_server {
+    if let Some(ipc) = &state.arbor.ipc_server {
         let socket_path = ipc.socket_path.as_deref().unwrap();
         env::set_var(SOCKET_PATH_ENV, socket_path);
         env::set_var(COMPAT_SOCKET_PATH_ENV, socket_path);
@@ -204,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup xwayland-satellite integration.
     xwayland::satellite::setup(&mut state);
-    if let Some(satellite) = &state.niri.satellite {
+    if let Some(satellite) = &state.arbor.satellite {
         let name = satellite.display_name();
         *CHILD_DISPLAY.write().unwrap() = Some(name.to_owned());
         env::set_var("DISPLAY", name);
@@ -220,8 +220,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Inhibit power key handling so we can suspend on it.
         #[cfg(feature = "dbus")]
-        if !state.niri.config.borrow().input.disable_power_key_handling {
-            if let Err(err) = state.niri.inhibit_power_key() {
+        if !state.arbor.config.borrow().input.disable_power_key_handling {
+            if let Err(err) = state.arbor.inhibit_power_key() {
                 warn!("error inhibiting power key: {err:?}");
             }
         }
@@ -232,7 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "dbus")]
     if cli.session {
-        state.niri.a11y.start();
+        state.arbor.a11y.start();
     }
 
     if env::var_os("ARBOR_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
@@ -261,10 +261,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show the config error notification right away if needed.
     if config_errored {
-        state.niri.config_error_notification.show();
+        state.arbor.config_error_notification.show();
         state.ipc_config_loaded(true);
     } else if let Some(path) = config_created_at {
-        state.niri.config_error_notification.show_created(path);
+        state.arbor.config_error_notification.show_created(path);
     }
 
     // Run the compositor.

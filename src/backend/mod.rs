@@ -8,7 +8,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
-use crate::niri::Niri;
+use crate::arbor::Arbor;
 use crate::utils::id::IdCounter;
 
 pub mod color;
@@ -56,12 +56,12 @@ impl OutputId {
 }
 
 impl Backend {
-    pub fn init(&mut self, niri: &mut Niri) {
+    pub fn init(&mut self, arbor: &mut Arbor) {
         let _span = tracy_client::span!("Backend::init");
         match self {
-            Backend::Tty(tty) => tty.init(niri),
-            Backend::Winit(winit) => winit.init(niri),
-            Backend::Headless(headless) => headless.init(niri),
+            Backend::Tty(tty) => tty.init(arbor),
+            Backend::Winit(winit) => winit.init(arbor),
+            Backend::Headless(headless) => headless.init(arbor),
         }
     }
 
@@ -86,14 +86,14 @@ impl Backend {
 
     pub fn render(
         &mut self,
-        niri: &mut Niri,
+        arbor: &mut Arbor,
         output: &Output,
         target_presentation_time: Duration,
     ) -> RenderResult {
         match self {
-            Backend::Tty(tty) => tty.render(niri, output, target_presentation_time),
-            Backend::Winit(winit) => winit.render(niri, output),
-            Backend::Headless(headless) => headless.render(niri, output),
+            Backend::Tty(tty) => tty.render(arbor, output, target_presentation_time),
+            Backend::Winit(winit) => winit.render(arbor, output),
+            Backend::Headless(headless) => headless.render(arbor, output),
         }
     }
 
@@ -178,25 +178,30 @@ impl Backend {
         }
     }
 
-    pub fn set_output_on_demand_vrr(&mut self, niri: &mut Niri, output: &Output, enable_vrr: bool) {
+    pub fn set_output_on_demand_vrr(
+        &mut self,
+        arbor: &mut Arbor,
+        output: &Output,
+        enable_vrr: bool,
+    ) {
         match self {
-            Backend::Tty(tty) => tty.set_output_on_demand_vrr(niri, output, enable_vrr),
+            Backend::Tty(tty) => tty.set_output_on_demand_vrr(arbor, output, enable_vrr),
             Backend::Winit(_) => (),
             Backend::Headless(_) => (),
         }
     }
 
-    pub fn update_ignored_nodes_config(&mut self, niri: &mut Niri) {
+    pub fn update_ignored_nodes_config(&mut self, arbor: &mut Arbor) {
         match self {
-            Backend::Tty(tty) => tty.update_ignored_nodes_config(niri),
+            Backend::Tty(tty) => tty.update_ignored_nodes_config(arbor),
             Backend::Winit(_) => (),
             Backend::Headless(_) => (),
         }
     }
 
-    pub fn on_output_config_changed(&mut self, niri: &mut Niri) {
+    pub fn on_output_config_changed(&mut self, arbor: &mut Arbor) {
         match self {
-            Backend::Tty(tty) => tty.on_output_config_changed(niri),
+            Backend::Tty(tty) => tty.on_output_config_changed(arbor),
             Backend::Winit(_) => (),
             Backend::Headless(_) => (),
         }

@@ -8,15 +8,15 @@ use zbus::zvariant::{SerializeDict, Type, Value};
 use super::Start;
 
 pub struct Introspect {
-    to_niri: calloop::channel::Sender<IntrospectToNiri>,
-    from_niri: async_channel::Receiver<NiriToIntrospect>,
+    to_arbor: calloop::channel::Sender<IntrospectToArbor>,
+    from_arbor: async_channel::Receiver<ArborToIntrospect>,
 }
 
-pub enum IntrospectToNiri {
+pub enum IntrospectToArbor {
     GetWindows,
 }
 
-pub enum NiriToIntrospect {
+pub enum ArborToIntrospect {
     Windows(HashMap<u64, WindowProperties>),
 }
 
@@ -37,13 +37,13 @@ pub struct WindowProperties {
 #[interface(name = "org.gnome.Shell.Introspect")]
 impl Introspect {
     async fn get_windows(&self) -> fdo::Result<HashMap<u64, WindowProperties>> {
-        if let Err(err) = self.to_niri.send(IntrospectToNiri::GetWindows) {
+        if let Err(err) = self.to_arbor.send(IntrospectToArbor::GetWindows) {
             warn!("error sending message to the compositor: {err:?}");
             return Err(fdo::Error::Failed("internal error".to_owned()));
         }
 
-        match self.from_niri.recv().await {
-            Ok(NiriToIntrospect::Windows(windows)) => Ok(windows),
+        match self.from_arbor.recv().await {
+            Ok(ArborToIntrospect::Windows(windows)) => Ok(windows),
             Err(err) => {
                 warn!("error receiving message from the compositor: {err:?}");
                 Err(fdo::Error::Failed("internal error".to_owned()))
@@ -59,10 +59,13 @@ impl Introspect {
 
 impl Introspect {
     pub fn new(
-        to_niri: calloop::channel::Sender<IntrospectToNiri>,
-        from_niri: async_channel::Receiver<NiriToIntrospect>,
+        to_arbor: calloop::channel::Sender<IntrospectToArbor>,
+        from_arbor: async_channel::Receiver<ArborToIntrospect>,
     ) -> Self {
-        Self { to_niri, from_niri }
+        Self {
+            to_arbor,
+            from_arbor,
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
+use arbor_ipc::{ConfiguredMode, HSyncPolarity, Transform, VSyncPolarity};
 use knuffel::ast::SpannedNode;
 use knuffel::decode::Context;
 use knuffel::errors::DecodeError;
 use knuffel::traits::ErrorSpan;
 use knuffel::Decode;
-use arbor_ipc::{ConfiguredMode, HSyncPolarity, Transform, VSyncPolarity};
 
 use crate::gestures::HotCorners;
 use crate::{Color, FloatOrInt, LayoutPart};
@@ -261,7 +261,7 @@ impl OutputName {
 
         // If no other fields are available, don't try to match by them.
         //
-        // This is used by niri msg output.
+        // This is used by arbor msg output.
         if self.make.is_none() && self.model.is_none() && self.serial.is_none() {
             return false;
         }

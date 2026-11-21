@@ -10,9 +10,8 @@ use smithay::backend::renderer::element::utils::{
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::dock::DockInsert;
+use super::dock::{DockInsert, MovedTile};
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
-use super::dock::MovedTile;
 use super::sizing::ColumnWidth;
 use super::tile::Tile;
 use super::workspace::{
@@ -21,9 +20,9 @@ use super::workspace::{
 };
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
+use crate::arbor_render_elements;
 use crate::input::swipe_tracker::SwipeTracker;
-use crate::niri_render_elements;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::XrayPos;
@@ -194,7 +193,7 @@ impl<'a, W: LayoutElement> Clone for MonitorAddWindowTarget<'a, W> {
     }
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     MonitorInnerRenderElement<R> => {
         Workspace = CropRenderElement<WorkspaceRenderElement<R>>,
         InsertHint = CropRenderElement<InsertHintRenderElement>,
@@ -1254,7 +1253,10 @@ impl<W: LayoutElement> Monitor<W> {
         self.options = options;
     }
 
-    pub fn update_layout_config(&mut self, layout_config: Option<arbor_config::LayoutPart>) -> bool {
+    pub fn update_layout_config(
+        &mut self,
+        layout_config: Option<arbor_config::LayoutPart>,
+    ) -> bool {
         if self.layout_config == layout_config {
             return false;
         }
@@ -1711,7 +1713,7 @@ impl<W: LayoutElement> Monitor<W> {
         ws.render_above_top_layer()
     }
 
-    pub fn render_insert_hint_between_workspaces<R: NiriRenderer>(
+    pub fn render_insert_hint_between_workspaces<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
@@ -1736,7 +1738,7 @@ impl<W: LayoutElement> Monitor<W> {
             });
     }
 
-    pub fn render_workspaces<R: NiriRenderer>(
+    pub fn render_workspaces<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         focus_ring: bool,
@@ -1823,7 +1825,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn render_workspace_shadows<R: NiriRenderer>(
+    pub fn render_workspace_shadows<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         push: &mut dyn FnMut(MonitorRenderElement<R>),

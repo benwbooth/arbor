@@ -19,7 +19,7 @@ use smithay::utils::Size;
 use smithay::wayland::presentation::Refresh;
 
 use super::{IpcOutputMap, OutputId, RenderResult};
-use crate::niri::{Niri, RedrawState};
+use crate::arbor::{Arbor, RedrawState};
 use crate::render_helpers::{resources, shaders};
 use crate::utils::{get_monotonic_time, logical_output};
 
@@ -36,7 +36,7 @@ impl Headless {
         }
     }
 
-    pub fn init(&mut self, _niri: &mut Niri) {}
+    pub fn init(&mut self, _arbor: &mut Arbor) {}
 
     pub fn add_renderer(&mut self) -> anyhow::Result<()> {
         if self.renderer.is_some() {
@@ -58,7 +58,7 @@ impl Headless {
         Ok(())
     }
 
-    pub fn add_output(&mut self, niri: &mut Niri, n: u8, size: (u16, u16)) {
+    pub fn add_output(&mut self, arbor: &mut Arbor, n: u8, size: (u16, u16)) {
         let connector = format!("headless-{n}");
         let make = "arbor".to_string();
         let model = "headless".to_string();
@@ -112,7 +112,7 @@ impl Headless {
             },
         );
 
-        niri.add_output(output, None, false);
+        arbor.add_output(output, None, false);
     }
 
     pub fn seat_name(&self) -> String {
@@ -126,9 +126,9 @@ impl Headless {
         self.renderer.as_mut().map(f)
     }
 
-    pub fn render(&mut self, niri: &mut Niri, output: &Output) -> RenderResult {
+    pub fn render(&mut self, arbor: &mut Arbor, output: &Output) -> RenderResult {
         let states = RenderElementStates::default();
-        let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
+        let mut presentation_feedbacks = arbor.take_presentation_feedbacks(output, &states);
         presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
             get_monotonic_time(),
             Refresh::Unknown,
@@ -136,7 +136,7 @@ impl Headless {
             wp_presentation_feedback::Kind::empty(),
         );
 
-        let output_state = niri.output_state.get_mut(output).unwrap();
+        let output_state = arbor.output_state.get_mut(output).unwrap();
         match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {
             RedrawState::Idle => unreachable!(),
             RedrawState::Queued => (),

@@ -31,7 +31,7 @@ use crate::layout::workspace::Workspace;
 use crate::layout::LayoutElement;
 use crate::render_helpers::memory::MemoryBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::xray::XrayPos;
@@ -387,7 +387,7 @@ impl<W: LayoutElement> Monitor<W> {
     // Rendering.
 
     /// Draws the exposé in place of the workspaces.
-    pub(super) fn render_expose<R: NiriRenderer>(
+    pub(super) fn render_expose<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
@@ -557,7 +557,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.expose.textures.borrow_mut().retain(|_, tex| tex.used);
     }
 
-    fn push_expose_tile<R: NiriRenderer>(
+    fn push_expose_tile<R: ArborRenderer>(
         &self,
         ctx: RenderCtx<R>,
         tile: &Tile<W>,
@@ -629,7 +629,7 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    fn expose_texture<R: NiriRenderer>(
+    fn expose_texture<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         key: TexKey,
@@ -676,7 +676,7 @@ impl<W: LayoutElement> Monitor<W> {
 }
 
 /// A texture placed in logical output coordinates.
-fn tex_elem<R: NiriRenderer>(elem: PrimaryGpuTextureRenderElement) -> MonitorRenderElement<R> {
+fn tex_elem<R: ArborRenderer>(elem: PrimaryGpuTextureRenderElement) -> MonitorRenderElement<R> {
     let elem = MonitorInnerRenderElement::ExposeTexture(elem);
     let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), 1.);
     RelocateRenderElement::from_element(elem, Point::from((0, 0)), Relocate::Relative)

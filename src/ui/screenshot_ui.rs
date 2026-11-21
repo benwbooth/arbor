@@ -6,9 +6,9 @@ use std::iter::zip;
 use std::rc::Rc;
 
 use anyhow::Context;
-use arrayvec::ArrayVec;
 use arbor_config::{Action, Config};
 use arbor_ipc::SizeChange;
+use arrayvec::ArrayVec;
 use pango::{Alignment, FontDescription};
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
@@ -22,8 +22,8 @@ use smithay::output::{Output, WeakOutput};
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
+use crate::arbor_render_elements;
 use crate::layout::floating::DIRECTIONAL_MOVE_PX;
-use crate::niri_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
@@ -103,7 +103,7 @@ pub struct OutputScreenshot {
     pointer: Option<PrimaryGpuTextureRenderElement>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     ScreenshotUiRenderElement => {
         Screenshot = PrimaryGpuTextureRenderElement,
         SolidColor = SolidColorRenderElement,

@@ -10,10 +10,10 @@ use std::time::Duration;
 use std::{f64, fmt};
 
 use anyhow::{ensure, Context};
+use arbor_config::{Config, OutputName};
 use bitflags::bitflags;
 use directories::UserDirs;
 use git_version::git_version;
-use arbor_config::{Config, OutputName};
 use smithay::backend::renderer::utils::{
     with_renderer_surface_state, RendererSurfaceStateUserData,
 };
@@ -33,8 +33,8 @@ use smithay::wayland::shell::xdg::{
 };
 use wayland_backend::server::Credentials;
 
+use crate::arbor::ClientState;
 use crate::handlers::KdeDecorationsModeState;
-use crate::niri::ClientState;
 
 pub mod id;
 pub mod region;

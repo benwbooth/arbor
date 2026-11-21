@@ -9,8 +9,8 @@ use smithay::utils::Serial;
 
 use super::move_grab::MoveGrab;
 use super::{PointerOrTouchStartData, DOUBLE_CLICK_TIME};
+use crate::arbor::State;
 use crate::layout::title_bar::TitleBarHit;
-use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
 impl State {
@@ -21,24 +21,24 @@ impl State {
         button_code: u32,
         serial: Serial,
     ) -> bool {
-        let pointer = self.niri.seat.get_pointer().unwrap();
+        let pointer = self.arbor.seat.get_pointer().unwrap();
         if button != Some(MouseButton::Left) || pointer.is_grabbed() {
             return false;
         }
-        if self.niri.is_locked()
-            || self.niri.screenshot_ui.is_open()
-            || self.niri.pointer_contents.layer.is_some()
+        if self.arbor.is_locked()
+            || self.arbor.screenshot_ui.is_open()
+            || self.arbor.pointer_contents.layer.is_some()
         {
             return false;
         }
 
         let location = pointer.current_location();
-        let Some((output, pos_within_output)) = self.niri.output_under(location) else {
+        let Some((output, pos_within_output)) = self.arbor.output_under(location) else {
             return false;
         };
         let output = output.clone();
         let Some((window, hit)) = self
-            .niri
+            .arbor
             .layout
             .title_bar_under(&output, pos_within_output)
             .map(|(mapped, hit)| (mapped.window.clone(), hit))
@@ -48,30 +48,33 @@ impl State {
 
         match hit {
             TitleBarHit::Close => {
-                if let Some((_, mapped)) =
-                    self.niri.layout.windows().find(|(_, m)| m.window == window)
+                if let Some((_, mapped)) = self
+                    .arbor
+                    .layout
+                    .windows()
+                    .find(|(_, m)| m.window == window)
                 {
                     mapped.toplevel().send_close();
                 }
             }
-            TitleBarHit::Minimize => self.niri.layout.minimize_window(Some(&window)),
+            TitleBarHit::Minimize => self.arbor.layout.minimize_window(Some(&window)),
             TitleBarHit::Zoom => {
-                self.niri.layout.activate_window(&window);
-                self.niri.layout.toggle_maximized(&window);
+                self.arbor.layout.activate_window(&window);
+                self.arbor.layout.toggle_maximized(&window);
             }
             TitleBarHit::Bar => {
-                self.niri.layout.activate_window(&window);
+                self.arbor.layout.activate_window(&window);
 
                 let now = get_monotonic_time();
-                let is_double = self.niri.title_bar_last_click.take().is_some_and(
+                let is_double = self.arbor.title_bar_last_click.take().is_some_and(
                     |(time, win): (Duration, Window)| {
                         win == window && now.saturating_sub(time) <= DOUBLE_CLICK_TIME
                     },
                 );
                 if is_double {
-                    self.niri.layout.toggle_maximized(&window);
+                    self.arbor.layout.toggle_maximized(&window);
                 } else {
-                    self.niri.title_bar_last_click = Some((now, window.clone()));
+                    self.arbor.title_bar_last_click = Some((now, window.clone()));
 
                     // Drag to move (and to dock).
                     let start_data = PointerGrabStartData {
@@ -89,25 +92,25 @@ impl State {
             }
         }
 
-        self.niri.queue_redraw_all();
+        self.arbor.queue_redraw_all();
         true
     }
 
     /// Shows the title bar button symbols while the pointer is over them.
     pub(super) fn update_title_bar_hover(&mut self) {
-        let pointer = self.niri.seat.get_pointer().unwrap();
+        let pointer = self.arbor.seat.get_pointer().unwrap();
         let target = if pointer.is_grabbed() {
             None
         } else {
-            self.niri.output_under(pointer.current_location())
+            self.arbor.output_under(pointer.current_location())
         };
         let target = target.map(|(output, pos)| (output.clone(), pos));
         let changed = self
-            .niri
+            .arbor
             .layout
             .update_title_bar_hover(target.as_ref().map(|(output, pos)| (output, *pos)));
         if changed {
-            self.niri.queue_redraw_all();
+            self.arbor.queue_redraw_all();
         }
     }
 }

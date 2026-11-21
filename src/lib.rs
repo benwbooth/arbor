@@ -4,6 +4,7 @@ extern crate tracing;
 #[cfg(feature = "dbus")]
 pub mod a11y;
 pub mod animation;
+pub mod arbor;
 pub mod backend;
 pub mod cli;
 pub mod cursor;
@@ -15,7 +16,6 @@ pub mod input;
 pub mod ipc;
 pub mod layer;
 pub mod layout;
-pub mod niri;
 pub mod protocols;
 pub mod render_helpers;
 pub mod rubber_band;

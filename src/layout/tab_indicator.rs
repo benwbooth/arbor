@@ -7,9 +7,9 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use super::tile::Tile;
 use super::LayoutElement;
 use crate::animation::{Animation, Clock};
-use crate::niri_render_elements;
+use crate::arbor_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::utils::{
     floor_logical_in_physical_max1, round_logical_in_physical, round_logical_in_physical_max1,
 };
@@ -30,7 +30,7 @@ pub struct TabInfo {
     pub geometry: Rectangle<f64, Logical>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     TabIndicatorRenderElement => {
         Gradient = BorderRenderElement,
     }
@@ -292,7 +292,7 @@ impl TabIndicator {
 
     pub fn render(
         &self,
-        renderer: &mut impl NiriRenderer,
+        renderer: &mut impl ArborRenderer,
         pos: Point<f64, Logical>,
         push: &mut dyn FnMut(TabIndicatorRenderElement),
     ) {

@@ -1,4 +1,4 @@
-//! niri config parsing.
+//! arbor config parsing.
 //!
 //! The config can be constructed from multiple files (includes). To support this, many types are
 //! split into two. For example, `Layout` and `LayoutPart` where `Layout` is the final config and
@@ -110,9 +110,9 @@ pub enum ConfigPath {
     /// Prioritize the user path, fallback to the system path, fallback to creating the user path
     /// at compositor startup.
     Regular {
-        /// User config path, usually `$XDG_CONFIG_HOME/niri/config.kdl`.
+        /// User config path, usually `$XDG_CONFIG_HOME/arbor/config.kdl`.
         user_path: PathBuf,
-        /// System config path, usually `/etc/niri/config.kdl`.
+        /// System config path, usually `/etc/arbor/config.kdl`.
         system_path: PathBuf,
     },
 }
@@ -2484,7 +2484,7 @@ mod tests {
     #[test]
     fn diff_empty_to_default() {
         // We try to write the config defaults in such a way that empty sections (and an empty
-        // config) give the same outcome as the default config bundled with niri. This test
+        // config) give the same outcome as the default config bundled with arbor. This test
         // verifies the actual differences between the two.
         let mut default_config = Config::load_default();
         let empty_config = Config::parse_mem("").unwrap();

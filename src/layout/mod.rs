@@ -1,18 +1,14 @@
 //! Window layout logic.
 //!
-//! Niri implements scrollable tiling with dynamic workspaces. The scrollable tiling is mostly
-//! orthogonal to any particular workspace system, though outputs living in separate coordinate
-//! spaces suggest per-output workspaces.
-//!
-//! I chose a dynamic workspace system because I think it works very well. In particular, it works
-//! naturally across outputs getting added and removed, since workspaces can move between outputs
-//! as necessary.
+//! Each workspace holds a dock tree (`dock.rs`, nested splits and tab groups under a zoomable
+//! camera) and a floating space (the Desktop). Workspaces are dynamic: they come and go as
+//! needed and move between outputs as outputs are added and removed.
 //!
 //! In the layout, one output (the first one to be added) is designated as *primary*. This is where
 //! workspaces from disconnected outputs will move. Currently, the primary output has no other
 //! distinction from other outputs.
 //!
-//! Where possible, niri tries to follow these principles with regards to outputs:
+//! Where possible, arbor tries to follow these principles with regards to outputs:
 //!
 //! 1. Disconnecting and reconnecting the same output must not change the layout.
 //!    * This includes both secondary outputs and the primary output.
@@ -36,13 +32,13 @@ use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
-use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use arbor_config::utils::MergeWith as _;
 use arbor_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use arbor_ipc::{PositionChange, SizeChange, WindowLayout};
 use dock::MovedTile;
+use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use sizing::ColumnWidth;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
@@ -57,12 +53,12 @@ pub use self::monitor::MonitorRenderElement;
 use self::monitor::{Monitor, WorkspaceSwitch};
 use self::workspace::{OutputId, Workspace};
 use crate::animation::{Animation, Clock};
+use crate::arbor_render_elements;
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::sizing::ScrollDirection;
-use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::offscreen::OffscreenData;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::TextureBuffer;
@@ -76,10 +72,10 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
-mod arbor;
 pub mod camera;
 pub mod closing_window;
 pub mod dock;
+mod dock_ops;
 pub mod expose;
 pub mod floating;
 pub mod focus_ring;
@@ -87,8 +83,8 @@ pub mod icon_tile;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
-pub mod sizing;
 pub mod shadow;
+pub mod sizing;
 pub mod tab_indicator;
 pub mod tile;
 pub mod title_bar;
@@ -117,7 +113,7 @@ const OVERVIEW_GESTURE_RUBBER_BAND: RubberBand = RubberBand {
 /// Size-relative units.
 pub struct SizeFrac;
 
-niri_render_elements! {
+arbor_render_elements! {
     LayoutElementRenderElement<R> => {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
@@ -167,7 +163,7 @@ pub trait LayoutElement {
     ///
     /// The element should be rendered in such a way that its visual geometry ends up at the given
     /// location.
-    fn render<R: NiriRenderer>(
+    fn render<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -181,7 +177,7 @@ pub trait LayoutElement {
     }
 
     /// Renders the non-popup parts of the element.
-    fn render_normal<R: NiriRenderer>(
+    fn render_normal<R: ArborRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -193,7 +189,7 @@ pub trait LayoutElement {
     }
 
     /// Renders the popups of the element.
-    fn render_popups<R: NiriRenderer>(
+    fn render_popups<R: ArborRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -1796,8 +1792,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.move_right();
     }
 
-
-
     pub fn move_column_left_or_to_output(&mut self, output: &Output) -> bool {
         if let Some(workspace) = self.active_workspace_mut() {
             if workspace.move_left() {
@@ -1819,7 +1813,6 @@ impl<W: LayoutElement> Layout<W> {
         self.move_column_to_output(output, None, true);
         true
     }
-
 
     pub fn move_down(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -1987,7 +1980,6 @@ impl<W: LayoutElement> Layout<W> {
         self.focus_output(output);
         true
     }
-
 
     pub fn focus_down(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -2195,8 +2187,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.swap_window_in_direction(direction);
     }
 
-
-
     pub fn center_column(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
             return;
@@ -2222,7 +2212,6 @@ impl<W: LayoutElement> Layout<W> {
         };
         workspace.center_window(id);
     }
-
 
     pub fn focus(&self) -> Option<&W> {
         self.focus_with_output().map(|(win, _out)| win)
@@ -2458,7 +2447,6 @@ impl<W: LayoutElement> Layout<W> {
         assert!(primary_idx < monitors.len());
         assert!(active_monitor_idx < monitors.len());
 
-
         for (idx, monitor) in monitors.iter().enumerate() {
             assert_eq!(self.clock, monitor.clock);
             assert_eq!(
@@ -2519,7 +2507,6 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 workspace.verify_invariants(move_win_id.as_ref());
-
             }
         }
     }
@@ -2959,7 +2946,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.toggle_window_height(window, forwards);
     }
 
-
     pub fn set_column_width(&mut self, change: SizeChange) {
         let Some(workspace) = self.active_workspace_mut() else {
             return;
@@ -3035,7 +3021,6 @@ impl<W: LayoutElement> Layout<W> {
         };
         workspace.reset_window_height(window);
     }
-
 
     pub fn toggle_window_floating(&mut self, window: Option<&W::Id>) {
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
@@ -3923,7 +3908,6 @@ impl<W: LayoutElement> Layout<W> {
                         tile.interactive_move_offset = Point::from((0., 0.));
                         tile.animate_move_from(offset);
                     }
-
                 }
 
                 return;
@@ -3945,7 +3929,6 @@ impl<W: LayoutElement> Layout<W> {
 
         // Unlock the view on the workspaces.
         if !move_.is_floating {
-
             // Also animate the tile back to opaque.
             move_.tile.animate_alpha(
                 INTERACTIVE_MOVE_ALPHA,
@@ -4602,7 +4585,7 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn render_interactive_move_for_output<R: NiriRenderer>(
+    pub fn render_interactive_move_for_output<R: ArborRenderer>(
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
@@ -4801,7 +4784,7 @@ fn compute_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f
 }
 
 #[allow(dead_code)] // arbor: niri's zoomed-out overview, kept for rebases.
-fn compute_niri_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
+fn compute_arbor_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
     // Clamp to some sane values.
     let zoom = options.overview.zoom.clamp(0.0001, 0.75);
 

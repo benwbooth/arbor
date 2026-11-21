@@ -1,14 +1,14 @@
-use futures_util::StreamExt;
 use arbor_config::Xkb;
+use futures_util::StreamExt;
 use zbus::names::InterfaceName;
 use zbus::{fdo, zvariant};
 
-pub enum Locale1ToNiri {
+pub enum Locale1ToArbor {
     XkbChanged(Xkb),
 }
 
 pub fn start(
-    to_niri: calloop::channel::Sender<Locale1ToNiri>,
+    to_arbor: calloop::channel::Sender<Locale1ToArbor>,
 ) -> anyhow::Result<zbus::blocking::Connection> {
     let conn = zbus::blocking::Connection::system()?;
 
@@ -69,7 +69,7 @@ pub fn start(
         };
 
         // Send the initial properties.
-        if let Err(err) = to_niri.send(Locale1ToNiri::XkbChanged(xkb.clone())) {
+        if let Err(err) = to_arbor.send(Locale1ToArbor::XkbChanged(xkb.clone())) {
             warn!("error sending message to the compositor: {err:?}");
             return;
         };
@@ -127,7 +127,7 @@ pub fn start(
                 continue;
             }
 
-            if let Err(err) = to_niri.send(Locale1ToNiri::XkbChanged(xkb.clone())) {
+            if let Err(err) = to_arbor.send(Locale1ToArbor::XkbChanged(xkb.clone())) {
                 warn!("error sending message to the compositor: {err:?}");
                 return;
             };

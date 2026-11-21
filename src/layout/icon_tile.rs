@@ -22,7 +22,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 
 use crate::render_helpers::memory::MemoryBuffer;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::utils::to_physical_precise_round;
 
@@ -402,7 +402,7 @@ impl std::fmt::Debug for IconTiles {
 impl IconTiles {
     /// Renders an icon tile with id `id` in `rect` (view coordinates).
     #[allow(clippy::too_many_arguments)]
-    pub fn render<R: NiriRenderer>(
+    pub fn render<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         id: u64,

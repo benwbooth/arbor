@@ -471,7 +471,7 @@ fn layout_ops_drag_to_dock() {
 
     let layout = check_ops(ops);
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "V[1,2]");
+    assert_eq!(ws.dock().tree_string(), "V[1,2]");
 }
 
 #[test]
@@ -535,7 +535,7 @@ fn toggle_floating_docks_right_of_last_docked() {
 
     let mut layout = check_ops(ops);
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "H[1,3,2]");
+    assert_eq!(ws.dock().tree_string(), "H[1,3,2]");
     assert!(!ws.is_floating(&3));
 
     // And back out to the Desktop.
@@ -547,7 +547,7 @@ fn toggle_floating_docks_right_of_last_docked() {
         }],
     );
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "H[1,2]");
+    assert_eq!(ws.dock().tree_string(), "H[1,2]");
     assert!(ws.is_floating(&3));
 }
 
@@ -597,21 +597,21 @@ fn floating_drag_docks_only_on_dock_zones() {
     // Dropping a floating window in the middle of a docked window keeps it floating.
     check_ops_on_layout(&mut layout, floating_drag(3, (640., 360.), (600., 300.)));
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "1");
+    assert_eq!(ws.dock().tree_string(), "1");
     assert!(ws.is_floating(&3));
 
     // Dropping at the screen edge docks beside everything.
     check_ops_on_layout(&mut layout, floating_drag(2, (640., 360.), (10., 360.)));
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "H[2,1]");
+    assert_eq!(ws.dock().tree_string(), "H[2,1]");
     assert!(!ws.is_floating(&2));
 
     // Dropping on the bottom edge band of a docked window docks below it.
-    let r1 = ws.scrolling().window_rect(&1).unwrap();
+    let r1 = ws.dock().window_rect(&1).unwrap();
     let to = (r1.loc.x + r1.size.w / 2., r1.loc.y + r1.size.h - 60.);
     check_ops_on_layout(&mut layout, floating_drag(3, (640., 360.), to));
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "H[2,V[1,3]]");
+    assert_eq!(ws.dock().tree_string(), "H[2,V[1,3]]");
 }
 
 #[test]
@@ -1056,7 +1056,7 @@ fn drag_to_center_creates_tab_group_and_tear_off() {
     }
     check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 2 }]);
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
+    assert_eq!(ws.dock().tree_string(), "T[1,*2]");
 
     // Tear tab 1 off to the right side of the screen.
     check_ops_on_layout(
@@ -1088,7 +1088,7 @@ fn drag_to_center_creates_tab_group_and_tear_off() {
         ],
     );
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "H[2,1]");
+    assert_eq!(ws.dock().tree_string(), "H[2,1]");
 }
 
 #[test]
@@ -1205,7 +1205,7 @@ fn floating_drag_rests_into_tab_group() {
         ],
     );
     let ws = layout.active_workspace().unwrap();
-    assert_eq!(ws.scrolling().tree_string(), "T[1,*2]");
+    assert_eq!(ws.dock().tree_string(), "T[1,*2]");
 }
 
 fn camera_space() -> DockSpace<TestWindow> {

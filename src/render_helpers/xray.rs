@@ -2,8 +2,8 @@ use std::array;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use glam::{Mat3, Vec2};
 use arbor_config::CornerRadius;
+use glam::{Mat3, Vec2};
 use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform,
@@ -140,7 +140,7 @@ impl Xray {
                 // covered.
                 //
                 // FIXME: also implement some way to check if the background elements are fully
-                // covered in opaque regions, and not just the niri background color is opaque
+                // covered in opaque regions, and not just the arbor background color is opaque
                 let crop = if bg_color.is_opaque() && ws_geo.contains_rect(geo_in_backdrop) {
                     skip_backdrop = true;
                     // No need to intersect, we know it's fully covered.

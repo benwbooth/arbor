@@ -8,18 +8,18 @@ use std::sync::{Arc, Mutex};
 use std::{env, io, process};
 
 use anyhow::Context;
-use async_channel::{Receiver, Sender, TrySendError};
-use calloop::futures::Scheduler;
-use calloop::io::Async;
-use directories::BaseDirs;
-use futures_util::io::{AsyncReadExt, BufReader};
-use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
 use arbor_config::OutputName;
 use arbor_ipc::state::{EventStreamState, EventStreamStatePart as _};
 use arbor_ipc::{
     Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request, Response,
     Timestamp, WindowLayout, Workspace,
 };
+use async_channel::{Receiver, Sender, TrySendError};
+use calloop::futures::Scheduler;
+use calloop::io::Async;
+use directories::BaseDirs;
+use futures_util::io::{AsyncReadExt, BufReader};
+use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData,
@@ -30,10 +30,10 @@ use smithay::reexports::rustix::fs::unlink;
 use smithay::utils::SERIAL_COUNTER;
 use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
+use crate::arbor::State;
 use crate::backend::IpcOutputMap;
 use crate::input::pick_window_grab::PickWindowGrab;
 use crate::layout::workspace::WorkspaceId;
-use crate::niri::State;
 use crate::protocols::kde_appmenu::app_menu_address;
 use crate::utils::{version, with_toplevel_role};
 use crate::window::Mapped;
@@ -157,7 +157,7 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
     let _span = tracy_client::span!("on_new_ipc_client");
     trace!("new IPC client connected");
 
-    let stream = match state.niri.event_loop.adapt_io(stream) {
+    let stream = match state.arbor.event_loop.adapt_io(stream) {
         Ok(stream) => stream,
         Err(err) => {
             warn!("error making IPC stream async: {err:?}");
@@ -165,11 +165,11 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
         }
     };
 
-    let ipc_server = state.niri.ipc_server.as_ref().unwrap();
+    let ipc_server = state.arbor.ipc_server.as_ref().unwrap();
 
     let ctx = ClientCtx {
-        event_loop: state.niri.event_loop.clone(),
-        scheduler: state.niri.scheduler.clone(),
+        event_loop: state.arbor.event_loop.clone(),
+        scheduler: state.arbor.scheduler.clone(),
         ipc_outputs: state.backend.ipc_outputs(),
         event_streams: ipc_server.event_streams.clone(),
         event_stream_state: ipc_server.event_stream_state.clone(),
@@ -180,7 +180,7 @@ fn on_new_ipc_client(state: &mut State, stream: UnixStream) {
             warn!("error handling IPC client: {err:?}");
         }
     };
-    if let Err(err) = state.niri.scheduler.schedule(future) {
+    if let Err(err) = state.arbor.scheduler.schedule(future) {
         warn!("error scheduling IPC stream future: {err:?}");
     }
 }
@@ -292,7 +292,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
                 let mut layers = Vec::new();
-                for output in state.niri.global_space.outputs() {
+                for output in state.arbor.global_space.outputs() {
                     let name = output.name();
                     for surface in layer_map_for_output(output).layers() {
                         let layer = match surface.layer() {
@@ -344,7 +344,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::PickWindow => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
-                let pointer = state.niri.seat.get_pointer().unwrap();
+                let pointer = state.arbor.seat.get_pointer().unwrap();
                 let start_data = PointerGrabStartData {
                     focus: None,
                     button: 0,
@@ -354,13 +354,13 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 // The `WindowPickGrab` ungrab handler will cancel the previous ongoing pick, if
                 // any.
                 pointer.set_grab(state, grab, SERIAL_COUNTER.next_serial(), Focus::Clear);
-                state.niri.pick_window = Some(tx);
+                state.arbor.pick_window = Some(tx);
                 state
-                    .niri
+                    .arbor
                     .cursor_manager
                     .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
                 // Redraw to update the cursor.
-                state.niri.queue_redraw_all();
+                state.arbor.queue_redraw_all();
             });
             let result = rx.recv().await;
             let id = result.map_err(|_| String::from("error getting picked window info"))?;
@@ -388,7 +388,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             ctx.event_loop.insert_idle(move |state| {
                 // Make sure some logic like workspace clean-up has a chance to run before doing
                 // actions.
-                state.niri.advance_animations();
+                state.arbor.advance_animations();
                 state.do_action(action, false);
                 let _ = tx.send_blocking(());
             });
@@ -423,7 +423,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
                 let active_output = state
-                    .niri
+                    .arbor
                     .layout
                     .active_output()
                     .map(|output| output.name());
@@ -545,7 +545,7 @@ fn ipc_app_menu(mapped: &Mapped) -> Option<arbor_ipc::AppMenu> {
 
 impl State {
     pub fn ipc_keyboard_layouts_changed(&mut self) {
-        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        let keyboard = self.arbor.seat.get_keyboard().unwrap();
         let keyboard_layouts = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap();
             let layouts = xkb.layouts();
@@ -557,7 +557,7 @@ impl State {
             }
         });
 
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
@@ -570,13 +570,13 @@ impl State {
     }
 
     pub fn ipc_refresh_keyboard_layout_index(&mut self) {
-        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        let keyboard = self.arbor.seat.get_keyboard().unwrap();
         let idx = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap();
             xkb.active_layout().0 as u8
         });
 
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
@@ -599,7 +599,7 @@ impl State {
     }
 
     fn ipc_refresh_workspaces(&mut self) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
@@ -609,7 +609,7 @@ impl State {
         let state = &mut state.workspaces;
 
         let mut events = Vec::new();
-        let layout = &self.niri.layout;
+        let layout = &self.arbor.layout;
         let focused_ws_id = layout.active_workspace().map(|ws| ws.id().get());
 
         // Check for workspace changes.
@@ -698,7 +698,7 @@ impl State {
     }
 
     fn ipc_refresh_windows(&mut self) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
@@ -708,7 +708,7 @@ impl State {
         let state = &mut state.windows;
 
         let mut events = Vec::new();
-        let layout = &self.niri.layout;
+        let layout = &self.arbor.layout;
 
         let mut batch_change_layouts: Vec<(u64, WindowLayout)> = Vec::new();
 
@@ -803,13 +803,13 @@ impl State {
     }
 
     pub fn ipc_refresh_overview(&mut self) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
         let mut state = server.event_stream_state.borrow_mut();
         let state = &mut state.overview;
-        let is_open = self.niri.layout.is_overview_open();
+        let is_open = self.arbor.layout.is_overview_open();
 
         if state.is_open == is_open {
             return;
@@ -821,7 +821,7 @@ impl State {
     }
 
     pub fn ipc_refresh_casts(&mut self) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
 
@@ -837,7 +837,7 @@ impl State {
         #[cfg(feature = "xdp-gnome-screencast")]
         {
             // Check pending dynamic casts.
-            for pending in &self.niri.casting.pending_dynamic_casts {
+            for pending in &self.arbor.casting.pending_dynamic_casts {
                 let stream_id = pending.stream_id.get();
                 seen.insert(stream_id);
 
@@ -859,7 +859,7 @@ impl State {
             }
 
             // Check active casts.
-            for cast in &self.niri.casting.casts {
+            for cast in &self.arbor.casting.casts {
                 let stream_id = cast.stream_id.get();
                 seen.insert(stream_id);
 
@@ -889,9 +889,9 @@ impl State {
         //
         // First, clear expired casts. Ideally we'd have a deadline timer, but our 1 second frame
         // callback timer calls refresh regularly, so that's fine as is.
-        self.niri.screencopy_state.clear_expired_casts();
+        self.arbor.screencopy_state.clear_expired_casts();
 
-        for queue in self.niri.screencopy_state.queues() {
+        for queue in self.arbor.screencopy_state.queues() {
             if let Some(cast_info) = queue.cast() {
                 let stream_id = cast_info.stream_id.get();
                 seen.insert(stream_id);
@@ -936,7 +936,7 @@ impl State {
     }
 
     pub fn ipc_config_loaded(&mut self, failed: bool) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
         let mut state = server.event_stream_state.borrow_mut();
@@ -947,7 +947,7 @@ impl State {
     }
 
     pub fn ipc_screenshot_taken(&mut self, path: Option<String>) {
-        let Some(server) = &self.niri.ipc_server else {
+        let Some(server) = &self.arbor.ipc_server else {
             return;
         };
         let mut state = server.event_stream_state.borrow_mut();

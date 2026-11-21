@@ -3,7 +3,7 @@ use crate::ipc::server::make_ipc_window;
 
 fn window_app_menu(f: &mut Fixture) -> Option<arbor_ipc::AppMenu> {
     let mut menus = Vec::new();
-    f.niri().layout.with_windows(|mapped, _, ws_id, layout| {
+    f.arbor().layout.with_windows(|mapped, _, ws_id, layout| {
         menus.push(make_ipc_window(mapped, ws_id, layout).app_menu)
     });
     assert_eq!(menus.len(), 1);

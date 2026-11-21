@@ -20,8 +20,8 @@ use zwlr_output_head_v1::{AdaptiveSyncState, ZwlrOutputHeadV1};
 use zwlr_output_manager_v1::ZwlrOutputManagerV1;
 use zwlr_output_mode_v1::ZwlrOutputModeV1;
 
+use crate::arbor::State;
 use crate::backend::OutputId;
-use crate::niri::State;
 use crate::utils::ipc_transform_to_smithay;
 
 const VERSION: u32 = 4;

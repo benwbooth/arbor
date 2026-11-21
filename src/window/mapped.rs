@@ -22,16 +22,16 @@ use smithay::wayland::shell::xdg::{
 use wayland_backend::server::Credentials;
 
 use super::{ResolvedWindowRules, WindowRef};
+use crate::arbor_render_elements;
 use crate::handlers::KdeDecorationsModeState;
 use crate::layout::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, LayoutElementRenderElement,
     LayoutElementRenderSnapshot, SizingMode,
 };
-use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
-use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::{
@@ -198,7 +198,7 @@ pub struct Mapped {
     focus_timestamp: Option<Duration>,
 }
 
-niri_render_elements! {
+arbor_render_elements! {
     WindowCastRenderElements<R> => {
         Layout = LayoutElementRenderElement<R>,
         // Blocked-out window with rounded corners.
@@ -230,8 +230,8 @@ impl MappedId {
     /// That way, clients can associate a foreign toplevel handle with an IPC window ID.
     ///
     /// We use the decimal representation of the ID, which is up to 20 characters long for u64::MAX.
-    /// This is within the 32-character limit, and is nice because it matches up with how `niri msg`
-    /// prints the IDs to the console.
+    /// This is within the 32-character limit, and is nice because it matches up with how `arbor
+    /// msg` prints the IDs to the console.
     ///
     /// This namespace can be extended in the future, with any non-numeric prefix to disambiguate.
     pub fn to_protocol_identifier(self) -> String {
@@ -503,7 +503,7 @@ impl Mapped {
         &self.last_interactive_resize_start
     }
 
-    pub fn render_for_screen_cast<R: NiriRenderer>(
+    pub fn render_for_screen_cast<R: ArborRenderer>(
         &self,
         renderer: &mut R,
         scale: Scale<f64>,
@@ -651,7 +651,7 @@ impl LayoutElement for Mapped {
         self.window.is_in_input_region(&surface_local)
     }
 
-    fn render_normal<R: NiriRenderer>(
+    fn render_normal<R: ArborRenderer>(
         &self,
         ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -681,7 +681,7 @@ impl LayoutElement for Mapped {
         }
     }
 
-    fn render_popups<R: NiriRenderer>(
+    fn render_popups<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
