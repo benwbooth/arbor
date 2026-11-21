@@ -79,6 +79,7 @@ mod arbor;
 pub mod camera;
 pub mod closing_window;
 pub mod dock;
+pub mod expose;
 pub mod floating;
 pub mod focus_ring;
 pub mod icon_tile;
