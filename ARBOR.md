@@ -68,11 +68,11 @@ An arbor session sets `XDG_CURRENT_DESKTOP=arbor:KDE`.
     unaffected). Add your own Plasma-only entries to that list.
   - xdg-utils (`xdg-open`) matches the whole variable (`KDE)` in a `case`), so it behaves as
     before (generic, not kde-open).
-  - Qt only picks its KDE platform theme for the exact value `KDE`; set
-    `QT_QPA_PLATFORMTHEME` if you want it.
-  - Chromium/Electron split the list and see KDE: Brave/Chrome default to the kwallet password
-    store and may offer the Qt theme; pass `--password-store=kwallet6` explicitly (already in
-    use here).
+  - Qt's choice of platform theme may or may not treat `arbor:KDE` as KDE (not verified);
+    set `QT_QPA_PLATFORMTHEME=kde` to get the Plasma integration theme for sure.
+  - Chromium/Electron split the list and can see KDE: Brave/Chrome may then default to the
+    kwallet password store and offer the Qt theme; pass `--password-store=kwallet6`
+    explicitly (already in use here).
   - `KDE_FULL_SESSION` and `KDE_SESSION_VERSION` are not set, so KDE apps don't assume
     Plasma (no KWin-only paths).
 
