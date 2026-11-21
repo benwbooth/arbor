@@ -1419,7 +1419,8 @@ impl<W: LayoutElement> Monitor<W> {
 
     fn workspace_size_with_gap(&self, zoom: f64) -> Size<f64, Logical> {
         let gap = self.workspace_gap(zoom);
-        self.workspace_size(zoom) + Size::from((0., gap))
+        // arbor: workspaces sit side by side, left to right.
+        self.workspace_size(zoom) + Size::from((gap, 0.))
     }
 
     pub fn overview_zoom(&self) -> f64 {
@@ -1504,10 +1505,10 @@ impl<W: LayoutElement> Monitor<W> {
                 // - first_y = -switch_anim.value() * from_height + to * (from_height - current_height)
                 let from = progress_anim.from();
                 let from_zoom = compute_overview_zoom(&self.options, Some(from));
-                let from_ws_height_with_gap = self.workspace_size_with_gap(from_zoom).h;
+                let from_ws_height_with_gap = self.workspace_size_with_gap(from_zoom).w;
 
                 let zoom = self.overview_zoom();
-                let ws_height_with_gap = self.workspace_size_with_gap(zoom).h;
+                let ws_height_with_gap = self.workspace_size_with_gap(zoom).w;
 
                 let first_ws_y = -switch_anim.value() * from_ws_height_with_gap
                     + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
@@ -1529,7 +1530,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         let ws_size = self.workspace_size(zoom);
         let gap = self.workspace_gap(zoom);
-        let ws_height_with_gap = ws_size.h + gap;
+        // arbor: left to right (the "height" names are niri's, from its vertical stack).
+        let ws_height_with_gap = ws_size.w + gap;
 
         let static_offset = (self.view_size.to_point() - ws_size.to_point()).downscale(2.);
         let static_offset = static_offset
@@ -1541,8 +1543,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         // Return position for one-past-last workspace too.
         (0..=self.workspaces.len()).map(move |idx| {
-            let y = first_ws_y + idx as f64 * ws_height_with_gap;
-            let loc = Point::from((0., y)) + static_offset;
+            let x = first_ws_y + idx as f64 * ws_height_with_gap;
+            let loc = Point::from((x, 0.)) + static_offset;
 
             // Even though all components that go into loc are rounded to physical pixels, the
             // floating point addition may lose precision. This can result for example in the
@@ -1593,9 +1595,9 @@ impl<W: LayoutElement> Monitor<W> {
         pos_within_output: Point<f64, Logical>,
     ) -> Option<(&Workspace<W>, Rectangle<f64, Logical>)> {
         let (ws, geo) = self.workspaces_with_render_geo().find_map(|(ws, geo)| {
-            // Extend width to entire output.
-            let loc = Point::from((0., geo.loc.y));
-            let size = Size::from((self.view_size.w, geo.size.h));
+            // Extend height to entire output.
+            let loc = Point::from((geo.loc.x, 0.));
+            let size = Size::from((geo.size.w, self.view_size.h));
             let bounds = Rectangle::new(loc, size);
 
             bounds.contains(pos_within_output).then_some((ws, geo))
@@ -1671,13 +1673,13 @@ impl<W: LayoutElement> Monitor<W> {
         // Monitors always have at least one workspace.
         let ((idx, ws), geo) = iter.next().unwrap();
 
-        // Check if above first.
-        if pos_within_output.y < geo.loc.y {
+        // Check if left of first.
+        if pos_within_output.x < geo.loc.x {
             return (InsertWorkspace::NewAt(idx), dummy);
         }
 
         let contains = move |geo: Rectangle<f64, Logical>| {
-            geo.loc.y <= pos_within_output.y && pos_within_output.y < geo.loc.y + geo.size.h
+            geo.loc.x <= pos_within_output.x && pos_within_output.x < geo.loc.x + geo.size.w
         };
 
         // Check first.
@@ -1689,8 +1691,8 @@ impl<W: LayoutElement> Monitor<W> {
         let mut last_idx = idx;
         for ((idx, ws), geo) in iter {
             // Check gap above.
-            let gap_loc = Point::from((last_geo.loc.x, last_geo.loc.y + last_geo.size.h));
-            let gap_size = Size::from((geo.size.w, geo.loc.y - gap_loc.y));
+            let gap_loc = Point::from((last_geo.loc.x + last_geo.size.w, last_geo.loc.y));
+            let gap_size = Size::from((geo.loc.x - gap_loc.x, geo.size.h));
             let gap_geo = Rectangle::new(gap_loc, gap_size);
             if contains(gap_geo) {
                 return (InsertWorkspace::NewAt(idx), dummy);
@@ -1933,7 +1935,7 @@ impl<W: LayoutElement> Monitor<W> {
         let total_height = if gesture.is_touchpad {
             WORKSPACE_GESTURE_MOVEMENT
         } else {
-            self.workspace_size_with_gap(1.).h
+            self.workspace_size_with_gap(1.).w
         };
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
@@ -2067,7 +2069,7 @@ impl<W: LayoutElement> Monitor<W> {
         } else if gesture.is_touchpad {
             WORKSPACE_GESTURE_MOVEMENT
         } else {
-            self.workspace_size_with_gap(1.).h
+            self.workspace_size_with_gap(1.).w
         };
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {

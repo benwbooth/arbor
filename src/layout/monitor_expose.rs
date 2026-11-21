@@ -29,7 +29,7 @@ use super::{Monitor, MonitorInnerRenderElement, MonitorRenderElement};
 use crate::layout::expose::{self, lerp, ExposeHit, ExposeParams, ExposeSlot};
 use crate::layout::icon_tile::{app_color, app_icon, app_letter, paint_icon, rounded_rect};
 use crate::layout::tile::Tile;
-use crate::layout::workspace::Workspace;
+use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::LayoutElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::memory::MemoryBuffer;
@@ -129,6 +129,11 @@ pub(super) struct ExposeUi<Id> {
     /// thumbnail's new look (hovered, a window moved...) is still being drawn, the old one stays
     /// on screen instead of the thumbnail blinking out for a frame or two.
     shown_thumbs: RefCell<HashMap<usize, TexKey>>,
+    /// Each workspace's window slots from the last layout while the overview was open. Closing
+    /// reuses them: picking a window raises it and moves the camera to it, and laying the
+    /// windows out again from those new places would swap their slots mid-animation, so a
+    /// different window would fly forward before the picked one snapped into place.
+    slots: RefCell<HashMap<WorkspaceId, Vec<(Id, ExposeSlot)>>>,
     dim: RefCell<SolidColorBuffer>,
 }
 
@@ -142,6 +147,7 @@ impl<Id> Default for ExposeUi<Id> {
             drawn: Arc::new(Mutex::new(Vec::new())),
             outlines: RefCell::new(Vec::new()),
             shown_thumbs: RefCell::new(HashMap::new()),
+            slots: RefCell::new(HashMap::new()),
             dim: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
         }
     }
@@ -271,7 +277,32 @@ impl<W: LayoutElement> Monitor<W> {
                 Rect::new(center - Point::from((size.w / 2., size.h / 2.)), size)
             })
             .collect();
-        let slots = expose::layout(&windows, self.expose_area(), &params());
+        let ids: Vec<&W::Id> = tiles.iter().map(|(tile, _, _)| tile.window().id()).collect();
+
+        // While closing, keep the slots the windows had while open (unless a window appeared
+        // since, which needs a fresh layout).
+        let mut cache = self.expose.slots.borrow_mut();
+        let kept = (!self.overview_open)
+            .then(|| cache.get(&ws.id()))
+            .flatten()
+            .and_then(|cached| {
+                ids.iter()
+                    .map(|id| cached.iter().find(|(c, _)| c == *id).map(|(_, slot)| *slot))
+                    .collect::<Option<Vec<_>>>()
+            });
+        let slots = match kept {
+            Some(slots) => slots,
+            None => {
+                let slots = expose::layout(&windows, self.expose_area(), &params());
+                if self.overview_open {
+                    let entry = ids.iter().map(|id| (*id).clone()).zip(slots.iter().copied());
+                    cache.insert(ws.id(), entry.collect());
+                }
+                slots
+            }
+        };
+        drop(cache);
+
         tiles
             .into_iter()
             .zip(slots)
@@ -593,6 +624,11 @@ impl<W: LayoutElement> Monitor<W> {
         ));
 
         self.expose.textures.borrow_mut().retain(|_, tex| tex.used);
+        // Forget slots of workspaces that are gone (they hold window ids).
+        self.expose
+            .slots
+            .borrow_mut()
+            .retain(|id, _| self.workspaces.iter().any(|ws| ws.id() == *id));
     }
 
     /// Rounded outlines drawn by the border shader: no CPU rasterizing, whatever their size.
