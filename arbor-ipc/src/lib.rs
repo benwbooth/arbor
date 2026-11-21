@@ -128,6 +128,21 @@ pub enum Request {
     /// ([`SetGlass::namespace`], [`SetGlass::output`], [`SetGlass::popup`], [`SetGlass::key`]);
     /// an empty `shapes` list clears them. Replies [`Response::Handled`].
     SetGlass(SetGlass),
+    /// List the global shortcuts that apps registered through the GlobalShortcuts portal.
+    GlobalShortcuts,
+    /// Change or clear the trigger of a portal global shortcut.
+    ///
+    /// The change is persisted and the app is told through the portal's ShortcutsChanged signal.
+    SetGlobalShortcut {
+        /// App id the shortcut belongs to (may be empty for unsandboxed apps the portal couldn't
+        /// identify).
+        app_id: String,
+        /// The app's shortcut id.
+        id: String,
+        /// New trigger in arbor key syntax (`Ctrl+Alt+R`, `Mod+Shift+T`) or the XDG shortcuts
+        /// format (`CTRL+ALT+r`); `None` clears the assignment.
+        trigger: Option<String>,
+    },
 }
 
 /// Liquid-glass shapes for one layer-shell surface (or its pop-ups), see [`Request::SetGlass`].
@@ -338,6 +353,26 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
+    /// Global shortcuts registered through the GlobalShortcuts portal.
+    GlobalShortcuts(Vec<GlobalShortcut>),
+}
+
+/// A global shortcut registered by an app through the GlobalShortcuts portal.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GlobalShortcut {
+    /// App id the shortcut belongs to (may be empty).
+    pub app_id: String,
+    /// The app's shortcut id.
+    pub id: String,
+    /// The app's description of the shortcut.
+    pub description: String,
+    /// Assigned trigger in arbor key syntax, `None` when unassigned.
+    pub trigger: Option<String>,
+    /// Trigger the app asked for, if any.
+    pub preferred_trigger: Option<String>,
+    /// Whether a running app currently listens to this shortcut.
+    pub active: bool,
 }
 
 /// Overview information.

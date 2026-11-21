@@ -524,6 +524,12 @@ impl State {
                     this.arbor.screenshot_ui.set_space_down(pressed);
                 }
 
+                // Release of a key that activated a portal global shortcut.
+                if !pressed && this.arbor.global_shortcuts.release(key_code, time) {
+                    this.arbor.suppressed_keys.remove(&key_code);
+                    return FilterResult::Intercept(None);
+                }
+
                 let res = {
                     let config = this.arbor.config.borrow();
                     let bindings =
@@ -545,6 +551,21 @@ impl State {
                 };
 
                 if matches!(res, FilterResult::Forward) {
+                    // No config bind took it: try the shortcuts apps registered through the
+                    // GlobalShortcuts portal. Config binds always win.
+                    if pressed && !is_inhibiting_shortcuts && !this.arbor.is_locked() {
+                        if let Some(raw) = raw {
+                            if this
+                                .arbor
+                                .global_shortcuts
+                                .press(key_code, mod_key, raw, modifiers, time)
+                            {
+                                this.arbor.suppressed_keys.insert(key_code);
+                                return FilterResult::Intercept(None);
+                            }
+                        }
+                    }
+
                     // If we didn't find any bind, try other hardcoded keys.
                     if this.arbor.keyboard_focus.is_overview() && pressed {
                         if let Some(bind) = raw.and_then(|raw| hardcoded_overview_bind(raw, *mods))
@@ -4526,31 +4547,11 @@ fn find_configured_bind<'a>(
     mods: ModifiersState,
 ) -> Option<Bind> {
     // Handle configured binds.
-    let mut modifiers = modifiers_from_state(mods);
-
-    let mod_down = modifiers_from_state(mods).contains(mod_key.to_modifiers());
-    if mod_down {
-        modifiers |= Modifiers::COMPOSITOR;
-    }
-
-    for bind in bindings {
-        if bind.key.trigger != trigger {
-            continue;
-        }
-
-        let mut bind_modifiers = bind.key.modifiers;
-        if bind_modifiers.contains(Modifiers::COMPOSITOR) {
-            bind_modifiers |= mod_key.to_modifiers();
-        } else if bind_modifiers.contains(mod_key.to_modifiers()) {
-            bind_modifiers |= Modifiers::COMPOSITOR;
-        }
-
-        if bind_modifiers == modifiers {
-            return Some(bind.clone());
-        }
-    }
-
-    None
+    let modifiers = modifiers_from_state(mods);
+    bindings
+        .into_iter()
+        .find(|bind| crate::global_shortcuts::key_matches(&bind.key, mod_key, trigger, modifiers))
+        .cloned()
 }
 
 fn find_configured_switch_action(

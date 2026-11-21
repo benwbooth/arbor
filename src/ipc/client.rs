@@ -75,6 +75,17 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 })
                 .collect(),
         }),
+        Msg::GlobalShortcuts => Request::GlobalShortcuts,
+        Msg::SetGlobalShortcut {
+            app_id,
+            id,
+            trigger,
+            clear: _,
+        } => Request::SetGlobalShortcut {
+            app_id: app_id.clone(),
+            id: id.clone(),
+            trigger: trigger.clone(),
+        },
     };
 
     let mut socket = Socket::connect().context("error connecting to the arbor socket")?;
@@ -575,6 +586,53 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 print_cast(&cast);
                 println!();
             }
+        }
+        Msg::GlobalShortcuts => {
+            let Response::GlobalShortcuts(shortcuts) = response else {
+                bail!("unexpected response: expected GlobalShortcuts, got {response:?}");
+            };
+
+            if json {
+                let shortcuts =
+                    serde_json::to_string(&shortcuts).context("error formatting response")?;
+                println!("{shortcuts}");
+                return Ok(());
+            }
+
+            if shortcuts.is_empty() {
+                println!("No global shortcuts from apps.");
+                return Ok(());
+            }
+
+            let mut last_app = None;
+            for s in shortcuts {
+                if last_app.as_ref() != Some(&s.app_id) {
+                    if last_app.is_some() {
+                        println!();
+                    }
+                    let name = if s.app_id.is_empty() {
+                        "(unknown app)"
+                    } else {
+                        &s.app_id
+                    };
+                    println!("App \"{name}\":");
+                    last_app = Some(s.app_id.clone());
+                }
+                let trigger = s.trigger.as_deref().unwrap_or("unassigned");
+                let active = if s.active { "" } else { " (app not running)" };
+                println!("  {}: {trigger}{active}", s.id);
+                if !s.description.is_empty() {
+                    println!("    {}", s.description);
+                }
+                if let Some(preferred) = &s.preferred_trigger {
+                    println!("    Preferred: {preferred}");
+                }
+            }
+        }
+        Msg::SetGlobalShortcut { .. } => {
+            let Response::Handled = response else {
+                bail!("unexpected response: expected Handled, got {response:?}");
+            };
         }
     }
 

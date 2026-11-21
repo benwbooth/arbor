@@ -11,6 +11,7 @@ pub mod gnome_shell_introspect;
 pub mod gnome_shell_screenshot;
 pub mod mutter_display_config;
 pub mod mutter_service_channel;
+pub mod portal_global_shortcuts;
 
 #[cfg(feature = "xdp-gnome-screencast")]
 pub mod mutter_screen_cast;
@@ -39,6 +40,7 @@ pub struct DBusServers {
     pub conn_login1: Option<Connection>,
     pub conn_locale1: Option<Connection>,
     pub conn_keyboard_monitor: Option<Connection>,
+    pub conn_global_shortcuts: Option<Connection>,
 }
 
 impl DBusServers {
@@ -135,6 +137,9 @@ impl DBusServers {
                 let screen_cast = ScreenCast::new(backend.ipc_outputs(), to_arbor);
                 dbus.conn_screen_cast = try_start(screen_cast);
             }
+
+            dbus.conn_global_shortcuts =
+                portal_global_shortcuts::start(&arbor.event_loop, &mut arbor.global_shortcuts);
 
             let keyboard_monitor = KeyboardMonitor::new();
             if let Some(x) = try_start(keyboard_monitor.clone()) {

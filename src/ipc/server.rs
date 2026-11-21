@@ -467,6 +467,38 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let casts = state.casts.casts.values().cloned().collect();
             Response::Casts(casts)
         }
+        Request::GlobalShortcuts => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let _ = tx.send_blocking(state.arbor.global_shortcuts.all());
+            });
+            let result = rx.recv().await;
+            let shortcuts =
+                result.map_err(|_| String::from("error getting the portal shortcuts"))?;
+            Response::GlobalShortcuts(shortcuts)
+        }
+        Request::SetGlobalShortcut {
+            app_id,
+            id,
+            trigger,
+        } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let config = state.arbor.config.borrow();
+                let mod_key = state.backend.mod_key(&config);
+                let res = state.arbor.global_shortcuts.set_trigger(
+                    &app_id,
+                    &id,
+                    trigger.as_deref(),
+                    &config.binds.0,
+                    mod_key,
+                );
+                let _ = tx.send_blocking(res.map_err(|err| err.to_string()));
+            });
+            let result = rx.recv().await;
+            result.map_err(|_| String::from("error changing the portal shortcut"))??;
+            Response::Handled
+        }
     };
 
     Ok(response)

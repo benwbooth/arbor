@@ -140,6 +140,21 @@ pub enum Msg {
         #[arg(long)]
         blur_radius: Option<f64>,
     },
+    /// List the global shortcuts apps registered through the GlobalShortcuts portal.
+    GlobalShortcuts,
+    /// Change or clear the trigger of an app's portal global shortcut.
+    SetGlobalShortcut {
+        /// App id of the shortcut (see `arbor msg global-shortcuts`; may be "").
+        app_id: String,
+        /// The app's shortcut id.
+        id: String,
+        /// New trigger, e.g. `Ctrl+Alt+R` or `Mod+Shift+T`.
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        trigger: Option<String>,
+        /// Remove the assignment instead.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
