@@ -10,7 +10,6 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
-use crate::layout::workspace::WorkspaceId;
 use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
@@ -18,7 +17,6 @@ pub struct SpatialMovementGrab {
     start_data: PointerGrabStartData<State>,
     last_location: Point<f64, Logical>,
     output: Output,
-    workspace_id: WorkspaceId,
     gesture: GestureState,
 
     // Accumulated and applied in frame().
@@ -30,38 +28,22 @@ pub struct SpatialMovementGrab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GestureState {
     Recognizing,
-    ViewOffset,
     WorkspaceSwitch,
 }
 
 impl SpatialMovementGrab {
-    pub fn new(
-        start_data: PointerGrabStartData<State>,
-        output: Output,
-        workspace_id: WorkspaceId,
-        is_view_offset: bool,
-    ) -> Self {
+    pub fn new(start_data: PointerGrabStartData<State>, output: Output) -> Self {
         let location = start_data.location;
-        let gesture = if is_view_offset {
-            GestureState::ViewOffset
-        } else {
-            GestureState::Recognizing
-        };
 
         Self {
             last_location: location,
             start_data,
             output,
-            workspace_id,
-            gesture,
+            gesture: GestureState::Recognizing,
             new_location: location,
             event_timestamp: None,
             relative_delta: None,
         }
-    }
-
-    pub fn view_offset_output(&self) -> Option<&Output> {
-        (self.gesture == GestureState::ViewOffset).then_some(&self.output)
     }
 
     pub fn workspace_switch_output(&self) -> Option<&Output> {
@@ -86,29 +68,12 @@ impl SpatialMovementGrab {
 
                 // Check if the gesture moved far enough to decide. Threshold copied from GTK 4.
                 if c.x * c.x + c.y * c.y >= 8. * 8. {
-                    if c.x.abs() > c.y.abs() {
-                        self.gesture = GestureState::ViewOffset;
-                        if let Some((ws_idx, ws)) = layout.find_workspace_by_id(self.workspace_id) {
-                            if ws.current_output() == Some(&self.output) {
-                                layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
-                                layout.view_offset_gesture_update(-c.x, timestamp, false)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        self.gesture = GestureState::WorkspaceSwitch;
-                        layout.workspace_switch_gesture_begin(&self.output, false);
-                        layout.workspace_switch_gesture_update(-c.y, timestamp, false)
-                    }
+                    self.gesture = GestureState::WorkspaceSwitch;
+                    layout.workspace_switch_gesture_begin(&self.output, false);
+                    layout.workspace_switch_gesture_update(-c.y, timestamp, false)
                 } else {
                     Some(None)
                 }
-            }
-            GestureState::ViewOffset => {
-                layout.view_offset_gesture_update(-delta.x, timestamp, false)
             }
             GestureState::WorkspaceSwitch => {
                 layout.workspace_switch_gesture_update(-delta.y, timestamp, false)
@@ -129,7 +94,6 @@ impl SpatialMovementGrab {
         let layout = &mut state.niri.layout;
         let res = match self.gesture {
             GestureState::Recognizing => None,
-            GestureState::ViewOffset => layout.view_offset_gesture_end(Some(false)),
             GestureState::WorkspaceSwitch => layout.workspace_switch_gesture_end(Some(false)),
         };
 

@@ -31,7 +31,6 @@ pub struct TouchOverviewGrab {
 #[derive(Debug, Clone, Copy)]
 enum GestureState {
     Recognizing,
-    ViewOffset,
     WorkspaceSwitch,
     InteractiveMove,
 }
@@ -97,9 +96,6 @@ impl TouchOverviewGrab {
                 if let Some(window) = self.window.as_ref() {
                     layout.activate_window(window);
                 }
-            }
-            GestureState::ViewOffset => {
-                layout.view_offset_gesture_end(Some(false));
             }
             GestureState::WorkspaceSwitch => {
                 layout.workspace_switch_gesture_end(Some(false));
@@ -191,19 +187,8 @@ impl TouchGrab<State> for TouchOverviewGrab {
 
             // Check if the gesture moved far enough to decide. Threshold copied from libadwaita.
             if c.x * c.x + c.y * c.y >= 16. * 16. {
-                if let Some(ws_id) = self.workspace_id.filter(|_| c.x.abs() > c.y.abs()) {
-                    if let Some((ws_idx, ws)) = layout.find_workspace_by_id(ws_id) {
-                        if ws.current_output() == Some(&self.output) {
-                            layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
-                            self.gesture = GestureState::ViewOffset;
-                        }
-                    }
-                }
-
-                if matches!(self.gesture, GestureState::Recognizing) {
-                    layout.workspace_switch_gesture_begin(&self.output, false);
-                    self.gesture = GestureState::WorkspaceSwitch;
-                }
+                layout.workspace_switch_gesture_begin(&self.output, false);
+                self.gesture = GestureState::WorkspaceSwitch;
             }
         }
 
@@ -217,9 +202,6 @@ impl TouchGrab<State> for TouchOverviewGrab {
 
         let ongoing = match self.gesture {
             GestureState::Recognizing => unreachable!(),
-            GestureState::ViewOffset => layout
-                .view_offset_gesture_update(-delta.x, timestamp, false)
-                .is_some(),
             GestureState::WorkspaceSwitch => layout
                 .workspace_switch_gesture_update(-delta.y, timestamp, false)
                 .is_some(),

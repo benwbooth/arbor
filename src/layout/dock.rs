@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::PresetSize;
-use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
+use niri_ipc::{SizeChange, WindowLayout};
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
@@ -223,21 +223,6 @@ struct DockResize<W: LayoutElement> {
     data: InteractiveResizeData,
     horizontal: Option<DividerDrag>,
     vertical: Option<DividerDrag>,
-}
-
-/// Stand-in for the scrolling view offset, for code that checks for view gestures.
-#[cfg(test)]
-pub(super) struct NoViewOffset;
-
-#[cfg(test)]
-impl NoViewOffset {
-    pub fn is_gesture(&self) -> bool {
-        false
-    }
-
-    pub fn is_animation_ongoing(&self) -> bool {
-        false
-    }
 }
 
 /// A docking-tree tiling space for windows.
@@ -2498,9 +2483,6 @@ impl<W: LayoutElement> DockSpace<W> {
             })
     }
 
-    pub fn scroll_amount_to_activate(&self, _window: &W::Id) -> f64 {
-        0.
-    }
 
     pub fn render<R: NiriRenderer>(
         &self,
@@ -2979,7 +2961,6 @@ impl<W: LayoutElement> DockSpace<W> {
         self.activate_leaf(id);
     }
 
-    pub fn focus_window_in_column(&mut self, _index: u8) {}
 
     pub fn focus_down_or_left(&mut self) {
         if !self.focus_down() {
@@ -3037,11 +3018,8 @@ impl<W: LayoutElement> DockSpace<W> {
         self.move_direction(DockSide::Bottom)
     }
 
-    pub fn move_column_to_index(&mut self, _index: usize) {}
 
-    pub fn move_column_to_first(&mut self) {}
 
-    pub fn move_column_to_last(&mut self) {}
 
     /// Stacks the window below its left neighbor, or, if it is already in a vertical stack,
     /// moves it out to the left of that stack.
@@ -3173,15 +3151,12 @@ impl<W: LayoutElement> DockSpace<W> {
         };
     }
 
-    pub fn toggle_column_tabbed_display(&mut self) {}
 
-    pub fn set_column_display(&mut self, _display: ColumnDisplay) {}
 
     pub fn center_column(&mut self) {}
 
     pub fn center_window(&mut self, _window: Option<&W::Id>) {}
 
-    pub fn center_visible_columns(&mut self) {}
 
     // ---------------------------------------------------------------------------------------
     // Sizing.
@@ -3190,7 +3165,6 @@ impl<W: LayoutElement> DockSpace<W> {
         self.toggle_preset(None, Axis::Horizontal, forwards);
     }
 
-    pub fn toggle_full_width(&mut self) {}
 
     pub fn set_window_width(&mut self, window: Option<&W::Id>, change: SizeChange) {
         self.resize_with_change(window, Axis::Horizontal, change);
@@ -3222,7 +3196,6 @@ impl<W: LayoutElement> DockSpace<W> {
         self.toggle_preset(window, Axis::Vertical, forwards);
     }
 
-    pub fn expand_column_to_available_width(&mut self) {}
 
     pub fn set_fullscreen(&mut self, window: &W::Id, is_fullscreen: bool) -> bool {
         let Some(leaf) = self.leaf_by_window(window) else {
@@ -3283,32 +3256,6 @@ impl<W: LayoutElement> DockSpace<W> {
         self.relayout(true, true, None);
         true
     }
-
-    // ---------------------------------------------------------------------------------------
-    // Gestures (the dock space has no scrollable view).
-
-    pub fn view_offset_gesture_begin(&mut self, _is_touchpad: bool) {}
-
-    pub fn view_offset_gesture_update(
-        &mut self,
-        _delta_x: f64,
-        _timestamp: Duration,
-        _is_touchpad: bool,
-    ) -> Option<bool> {
-        None
-    }
-
-    pub fn view_offset_gesture_end(&mut self, _is_touchpad: Option<bool>) -> bool {
-        false
-    }
-
-    pub fn dnd_scroll_gesture_begin(&mut self) {}
-
-    pub fn dnd_scroll_gesture_scroll(&mut self, _delta: f64) -> bool {
-        false
-    }
-
-    pub fn dnd_scroll_gesture_end(&mut self) {}
 
     // ---------------------------------------------------------------------------------------
     // Interactive resize: dragging an edge moves the divider between the window and its
@@ -3507,10 +3454,6 @@ impl<W: LayoutElement> DockSpace<W> {
         0.
     }
 
-    #[cfg(test)]
-    pub(super) fn view_offset(&self) -> NoViewOffset {
-        NoViewOffset
-    }
 
     /// Compact description of the tree shape, e.g. `H[1,V[2,3]]`.
     #[cfg(test)]

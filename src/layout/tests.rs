@@ -3,7 +3,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use niri_config::utils::{Flag, MergeWith as _};
 use niri_config::workspace::WorkspaceName;
 use niri_config::{
-    CenterFocusedColumn, FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
+    FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
     WorkspaceReference,
 };
 use proptest::prelude::*;
@@ -13,7 +13,6 @@ use smithay::utils::Rectangle;
 
 use super::*;
 
-mod animations;
 mod dock;
 mod fullscreen;
 
@@ -363,9 +362,6 @@ prop_compose! {
     }
 }
 
-fn arbitrary_view_offset_gesture_delta() -> impl Strategy<Value = f64> {
-    prop_oneof![(-10f64..10f64), (-50000f64..50000f64),]
-}
 
 fn arbitrary_resize_edge() -> impl Strategy<Value = ResizeEdge> {
     prop_oneof![
@@ -406,9 +402,6 @@ fn arbitrary_scroll_direction() -> impl Strategy<Value = ScrollDirection> {
     prop_oneof![Just(ScrollDirection::Left), Just(ScrollDirection::Right)]
 }
 
-fn arbitrary_column_display() -> impl Strategy<Value = ColumnDisplay> {
-    prop_oneof![Just(ColumnDisplay::Normal), Just(ColumnDisplay::Tabbed)]
-}
 
 #[derive(Debug, Clone, Arbitrary)]
 enum Op {
@@ -488,18 +481,14 @@ enum Op {
     FocusWindowOrWorkspaceDown,
     FocusWindowOrWorkspaceUp,
     FocusWindow(#[proptest(strategy = "1..=5usize")] usize),
-    FocusWindowInColumn(#[proptest(strategy = "1..=5u8")] u8),
     FocusWindowTop,
     FocusWindowBottom,
     FocusWindowDownOrTop,
     FocusWindowUpOrBottom,
     MoveColumnLeft,
     MoveColumnRight,
-    MoveColumnToFirst,
-    MoveColumnToLast,
     MoveColumnLeftOrToMonitorLeft(#[proptest(strategy = "1..=2u8")] u8),
     MoveColumnRightOrToMonitorRight(#[proptest(strategy = "1..=2u8")] u8),
-    MoveColumnToIndex(#[proptest(strategy = "1..=5usize")] usize),
     MoveWindowDown,
     MoveWindowUp,
     MoveWindowDownOrToWorkspaceDown,
@@ -515,14 +504,11 @@ enum Op {
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
     SwapWindowInDirection(#[proptest(strategy = "arbitrary_scroll_direction()")] ScrollDirection),
-    ToggleColumnTabbedDisplay,
-    SetColumnDisplay(#[proptest(strategy = "arbitrary_column_display()")] ColumnDisplay),
     CenterColumn,
     CenterWindow {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
-    CenterVisibleColumns,
     FocusWorkspaceDown,
     FocusWorkspaceUp,
     FocusWorkspace(#[proptest(strategy = "0..=4usize")] usize),
@@ -596,7 +582,6 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
-    MaximizeColumn,
     MaximizeWindowToEdges {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
@@ -618,7 +603,6 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
-    ExpandColumnToAvailableWidth,
     ToggleWindowFloating {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
@@ -685,22 +669,6 @@ enum Op {
     },
     CompleteAnimations,
     MoveWorkspaceToOutput(#[proptest(strategy = "1..=5usize")] usize),
-    ViewOffsetGestureBegin {
-        #[proptest(strategy = "1..=5usize")]
-        output_idx: usize,
-        #[proptest(strategy = "proptest::option::of(0..=4usize)")]
-        workspace_idx: Option<usize>,
-        is_touchpad: bool,
-    },
-    ViewOffsetGestureUpdate {
-        #[proptest(strategy = "arbitrary_view_offset_gesture_delta()")]
-        delta: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
-    },
-    ViewOffsetGestureEnd {
-        is_touchpad: Option<bool>,
-    },
     WorkspaceSwitchGestureBegin {
         #[proptest(strategy = "1..=5usize")]
         output_idx: usize,
@@ -1159,15 +1127,12 @@ impl Op {
             Op::FocusWindowOrWorkspaceDown => layout.focus_window_or_workspace_down(),
             Op::FocusWindowOrWorkspaceUp => layout.focus_window_or_workspace_up(),
             Op::FocusWindow(id) => layout.activate_window(&id),
-            Op::FocusWindowInColumn(index) => layout.focus_window_in_column(index),
             Op::FocusWindowTop => layout.focus_window_top(),
             Op::FocusWindowBottom => layout.focus_window_bottom(),
             Op::FocusWindowDownOrTop => layout.focus_window_down_or_top(),
             Op::FocusWindowUpOrBottom => layout.focus_window_up_or_bottom(),
             Op::MoveColumnLeft => layout.move_left(),
             Op::MoveColumnRight => layout.move_right(),
-            Op::MoveColumnToFirst => layout.move_column_to_first(),
-            Op::MoveColumnToLast => layout.move_column_to_last(),
             Op::MoveColumnLeftOrToMonitorLeft(id) => {
                 let name = format!("output{id}");
                 let Some(output) = layout.outputs().find(|o| o.name() == name).cloned() else {
@@ -1184,7 +1149,6 @@ impl Op {
 
                 layout.move_column_right_or_to_output(&output);
             }
-            Op::MoveColumnToIndex(index) => layout.move_column_to_index(index),
             Op::MoveWindowDown => layout.move_down(),
             Op::MoveWindowUp => layout.move_up(),
             Op::MoveWindowDownOrToWorkspaceDown => layout.move_down_or_to_workspace_down(),
@@ -1200,14 +1164,11 @@ impl Op {
             Op::ConsumeWindowIntoColumn => layout.consume_into_column(),
             Op::ExpelWindowFromColumn => layout.expel_from_column(),
             Op::SwapWindowInDirection(direction) => layout.swap_window_in_direction(direction),
-            Op::ToggleColumnTabbedDisplay => layout.toggle_column_tabbed_display(),
-            Op::SetColumnDisplay(display) => layout.set_column_display(display),
             Op::CenterColumn => layout.center_column(),
             Op::CenterWindow { id } => {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.center_window(id.as_ref());
             }
-            Op::CenterVisibleColumns => layout.center_visible_columns(),
             Op::FocusWorkspaceDown => layout.switch_workspace_down(),
             Op::FocusWorkspaceUp => layout.switch_workspace_up(),
             Op::FocusWorkspace(idx) => layout.switch_workspace(idx),
@@ -1351,7 +1312,6 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.toggle_window_height(id.as_ref(), false);
             }
-            Op::MaximizeColumn => layout.toggle_full_width(),
             Op::MaximizeWindowToEdges { id } => {
                 let id = id.or_else(|| layout.focus().map(|win| *win.id()));
                 let Some(id) = id else {
@@ -1375,7 +1335,6 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.reset_window_height(id.as_ref());
             }
-            Op::ExpandColumnToAvailableWidth => layout.expand_column_to_available_width(),
             Op::ToggleWindowFloating { id } => {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.toggle_window_floating(id.as_ref());
@@ -1561,28 +1520,6 @@ impl Op {
                 };
 
                 layout.move_workspace_to_output(&output);
-            }
-            Op::ViewOffsetGestureBegin {
-                output_idx: id,
-                workspace_idx,
-                is_touchpad: normalize,
-            } => {
-                let name = format!("output{id}");
-                let Some(output) = layout.outputs().find(|o| o.name() == name).cloned() else {
-                    return;
-                };
-
-                layout.view_offset_gesture_begin(&output, workspace_idx, normalize);
-            }
-            Op::ViewOffsetGestureUpdate {
-                delta,
-                timestamp,
-                is_touchpad,
-            } => {
-                layout.view_offset_gesture_update(delta, timestamp, is_touchpad);
-            }
-            Op::ViewOffsetGestureEnd { is_touchpad } => {
-                layout.view_offset_gesture_end(is_touchpad);
             }
             Op::WorkspaceSwitchGestureBegin {
                 output_idx: id,
@@ -1801,7 +1738,6 @@ fn operations_dont_panic() {
         Op::ConsumeOrExpelWindowLeft { id: None },
         Op::ConsumeOrExpelWindowRight { id: None },
         Op::MoveWorkspaceToOutput(1),
-        Op::ToggleColumnTabbedDisplay,
     ];
 
     for third in &every_op {
@@ -1980,7 +1916,6 @@ fn operations_from_starting_state_dont_panic() {
         Op::MoveWindowUpOrToWorkspaceUp,
         Op::ConsumeOrExpelWindowLeft { id: None },
         Op::ConsumeOrExpelWindowRight { id: None },
-        Op::ToggleColumnTabbedDisplay,
     ];
 
     for third in &every_op {
@@ -3392,82 +3327,6 @@ fn removing_window_above_preserves_focused_window() {
 }
 
 #[test]
-#[ignore = "arbor: scrolling-specific"]
-fn preset_column_width_fixed_correct_with_border() {
-    let ops = [
-        Op::AddOutput(0),
-        Op::AddWindow {
-            params: TestWindowParams::new(0),
-        },
-        Op::SwitchPresetColumnWidth,
-    ];
-
-    let options = Options {
-        layout: niri_config::Layout {
-            preset_column_widths: vec![PresetSize::Fixed(500)],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut layout = check_ops_with_options(options, ops);
-
-    let win = layout.windows().next().unwrap().1;
-    assert_eq!(win.requested_size().unwrap().w, 500);
-
-    // Add border.
-    let options = Options {
-        layout: niri_config::Layout {
-            preset_column_widths: vec![PresetSize::Fixed(500)],
-            border: niri_config::Border {
-                off: false,
-                width: 5.,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    layout.update_options(options);
-
-    // With border, the window gets less size.
-    let win = layout.windows().next().unwrap().1;
-    assert_eq!(win.requested_size().unwrap().w, 490);
-
-    // However, preset fixed width will still work correctly.
-    layout.toggle_width(true);
-    let win = layout.windows().next().unwrap().1;
-    assert_eq!(win.requested_size().unwrap().w, 500);
-}
-
-#[test]
-#[ignore = "arbor: scrolling-specific"]
-fn preset_column_width_reset_after_set_width() {
-    let ops = [
-        Op::AddOutput(0),
-        Op::AddWindow {
-            params: TestWindowParams::new(0),
-        },
-        Op::SwitchPresetColumnWidth,
-        Op::SetWindowWidth {
-            id: None,
-            change: SizeChange::AdjustFixed(-10),
-        },
-        Op::SwitchPresetColumnWidth,
-    ];
-
-    let options = Options {
-        layout: niri_config::Layout {
-            preset_column_widths: vec![PresetSize::Fixed(500), PresetSize::Fixed(1000)],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let layout = check_ops_with_options(options, ops);
-    let win = layout.windows().next().unwrap().1;
-    assert_eq!(win.requested_size().unwrap().w, 500);
-}
-
-#[test]
 fn move_column_to_workspace_unfocused_with_multiple_monitors() {
     let ops = [
         Op::AddOutput(1),
@@ -3702,7 +3561,6 @@ fn tabs_with_different_border() {
             },
         },
         Op::SwitchPresetWindowHeight { id: None },
-        Op::ToggleColumnTabbedDisplay,
         Op::AddWindow {
             params: TestWindowParams::new(3),
         },
@@ -3734,7 +3592,6 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
         Op::FullscreenWindow(1),
         Op::Communicate(1),
         // 1 is now fullscreen, view_offset_to_restore is set.
-        Op::ToggleColumnTabbedDisplay,
         Op::AddWindow {
             params: TestWindowParams::new(2),
         },
@@ -3848,13 +3705,6 @@ fn arbitrary_struts() -> impl Strategy<Value = Struts> {
         })
 }
 
-fn arbitrary_center_focused_column() -> impl Strategy<Value = CenterFocusedColumn> {
-    prop_oneof![
-        Just(CenterFocusedColumn::Never),
-        Just(CenterFocusedColumn::OnOverflow),
-        Just(CenterFocusedColumn::Always),
-    ]
-}
 
 fn arbitrary_tab_indicator_position() -> impl Strategy<Value = TabIndicatorPosition> {
     prop_oneof![
@@ -3940,15 +3790,11 @@ prop_compose! {
         border in prop::option::of(arbitrary_border()),
         shadow in prop::option::of(arbitrary_shadow()),
         tab_indicator in prop::option::of(arbitrary_tab_indicator()),
-        center_focused_column in prop::option::of(arbitrary_center_focused_column()),
-        always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             gaps,
             struts,
-            center_focused_column,
-            always_center_single_column,
             empty_workspace_above_first,
             focus_ring,
             border,

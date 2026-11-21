@@ -41,7 +41,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
-use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use niri_ipc::{PositionChange, SizeChange, WindowLayout};
 use dock::MovedTile;
 use sizing::ColumnWidth;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -1150,11 +1150,6 @@ impl<W: LayoutElement> Layout<W> {
                             mon.dnd_scroll_gesture_end();
                         }
 
-                        // Unlock the view on the workspaces.
-                        for ws in self.workspaces_mut() {
-                            ws.dnd_scroll_gesture_end();
-                        }
-
                         return Some(RemovedTile {
                             tile: move_.tile,
                             width: move_.width,
@@ -1473,24 +1468,6 @@ impl<W: LayoutElement> Layout<W> {
         };
 
         mon.update_output_size();
-    }
-
-    pub fn scroll_amount_to_activate(&self, window: &W::Id) -> f64 {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.tile.window().id() == window {
-                return 0.;
-            }
-        }
-
-        for mon in self.monitors() {
-            for ws in &mon.workspaces {
-                if ws.has_window(window) {
-                    return ws.scroll_amount_to_activate(window);
-                }
-            }
-        }
-
-        0.
     }
 
     pub fn should_trigger_focus_follows_mouse_on(&self, window: &W::Id) -> bool {
@@ -1819,19 +1796,7 @@ impl<W: LayoutElement> Layout<W> {
         workspace.move_right();
     }
 
-    pub fn move_column_to_first(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.move_column_to_first();
-    }
 
-    pub fn move_column_to_last(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.move_column_to_last();
-    }
 
     pub fn move_column_left_or_to_output(&mut self, output: &Output) -> bool {
         if let Some(workspace) = self.active_workspace_mut() {
@@ -1855,12 +1820,6 @@ impl<W: LayoutElement> Layout<W> {
         true
     }
 
-    pub fn move_column_to_index(&mut self, index: usize) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.move_column_to_index(index);
-    }
 
     pub fn move_down(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -2029,12 +1988,6 @@ impl<W: LayoutElement> Layout<W> {
         true
     }
 
-    pub fn focus_window_in_column(&mut self, index: u8) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.focus_window_in_column(index);
-    }
 
     pub fn focus_down(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -2242,19 +2195,7 @@ impl<W: LayoutElement> Layout<W> {
         workspace.swap_window_in_direction(direction);
     }
 
-    pub fn toggle_column_tabbed_display(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.toggle_column_tabbed_display();
-    }
 
-    pub fn set_column_display(&mut self, display: ColumnDisplay) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.set_column_display(display);
-    }
 
     pub fn center_column(&mut self) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -2282,12 +2223,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.center_window(id);
     }
 
-    pub fn center_visible_columns(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.center_visible_columns();
-    }
 
     pub fn focus(&self) -> Option<&W> {
         self.focus_with_output().map(|(win, _out)| win)
@@ -2523,7 +2458,6 @@ impl<W: LayoutElement> Layout<W> {
         assert!(primary_idx < monitors.len());
         assert!(active_monitor_idx < monitors.len());
 
-        let mut saw_view_offset_gesture = false;
 
         for (idx, monitor) in monitors.iter().enumerate() {
             assert_eq!(self.clock, monitor.clock);
@@ -2586,27 +2520,6 @@ impl<W: LayoutElement> Layout<W> {
 
                 workspace.verify_invariants(move_win_id.as_ref());
 
-                let has_view_offset_gesture = workspace.scrolling().view_offset().is_gesture();
-                if self.dnd.is_some() || self.interactive_move.is_some() {
-                    // We'd like to check that all workspaces have the gesture here, furthermore we
-                    // want to check that they have the gesture only if the interactive move
-                    // targets the scrolling layout. However, we cannot do that because we start
-                    // and stop the gesture lazily. Otherwise the gesture code would pollute a lot
-                    // of places like adding new workspaces, implicitly moving windows between
-                    // floating and tiling on fullscreen, etc.
-                    //
-                    // assert!(
-                    //     has_view_offset_gesture,
-                    //     "during an interactive move in the scrolling layout, \
-                    //      all workspaces should be in a view offset gesture"
-                    // );
-                } else if saw_view_offset_gesture {
-                    assert!(
-                        !has_view_offset_gesture,
-                        "only one workspace can have an ongoing view offset gesture"
-                    );
-                }
-                saw_view_offset_gesture = has_view_offset_gesture;
             }
         }
     }
@@ -2617,7 +2530,7 @@ impl<W: LayoutElement> Layout<W> {
         let mut dnd_scroll = None;
         let mut is_dnd = false;
         if let Some(dnd) = &self.dnd {
-            dnd_scroll = Some((dnd.output.clone(), dnd.pointer_pos_within_output, true));
+            dnd_scroll = Some((dnd.output.clone(), dnd.pointer_pos_within_output));
             is_dnd = true;
         }
 
@@ -2625,39 +2538,19 @@ impl<W: LayoutElement> Layout<W> {
             move_.tile.advance_animations();
 
             if dnd_scroll.is_none() {
-                dnd_scroll = Some((
-                    move_.output.clone(),
-                    move_.pointer_pos_within_output,
-                    !move_.is_floating,
-                ));
+                dnd_scroll = Some((move_.output.clone(), move_.pointer_pos_within_output));
             }
         }
 
         let is_overview_open = self.overview_open;
 
         // Scroll the view if needed.
-        if let Some((output, pos_within_output, is_scrolling)) = dnd_scroll {
+        if let Some((output, pos_within_output)) = dnd_scroll {
             if let Some(mon) = self.monitor_for_output_mut(&output) {
                 let mut scrolled = false;
 
                 let zoom = mon.overview_zoom();
                 scrolled |= mon.dnd_scroll_gesture_scroll(pos_within_output, 1. / zoom);
-
-                if is_scrolling {
-                    if let Some((ws, geo)) = mon.workspace_under(pos_within_output) {
-                        let ws_id = ws.id();
-                        let ws = mon
-                            .workspaces
-                            .iter_mut()
-                            .find(|ws| ws.id() == ws_id)
-                            .unwrap();
-                        // As far as the DnD scroll gesture is concerned, the workspace spans across
-                        // the whole monitor horizontally.
-                        let ws_pos = Point::from((0., geo.loc.y));
-                        scrolled |=
-                            ws.dnd_scroll_gesture_scroll(pos_within_output - ws_pos, 1. / zoom);
-                    }
-                }
 
                 if scrolled {
                     // Don't trigger DnD hold while scrolling.
@@ -3066,12 +2959,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.toggle_window_height(window, forwards);
     }
 
-    pub fn toggle_full_width(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.toggle_full_width();
-    }
 
     pub fn set_column_width(&mut self, change: SizeChange) {
         let Some(workspace) = self.active_workspace_mut() else {
@@ -3149,12 +3036,6 @@ impl<W: LayoutElement> Layout<W> {
         workspace.reset_window_height(window);
     }
 
-    pub fn expand_column_to_available_width(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.expand_column_to_available_width();
-    }
 
     pub fn toggle_window_floating(&mut self, window: Option<&W::Id>) {
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
@@ -3184,11 +3065,6 @@ impl<W: LayoutElement> Layout<W> {
                         1.,
                         self.options.animations.window_movement.0,
                     );
-
-                    // Unlock the view on the workspaces.
-                    for ws in self.workspaces_mut() {
-                        ws.dnd_scroll_gesture_end();
-                    }
                 } else {
                     // Animate the tile back to semitransparent.
                     move_.tile.animate_alpha(
@@ -3672,80 +3548,6 @@ impl<W: LayoutElement> Layout<W> {
         None
     }
 
-    pub fn view_offset_gesture_begin(
-        &mut self,
-        output: &Output,
-        workspace_idx: Option<usize>,
-        is_touchpad: bool,
-    ) {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => unreachable!(),
-        };
-
-        for monitor in monitors {
-            for (idx, ws) in monitor.workspaces.iter_mut().enumerate() {
-                // Cancel the gesture on other workspaces.
-                if &monitor.output != output
-                    || idx != workspace_idx.unwrap_or(monitor.active_workspace_idx)
-                {
-                    ws.view_offset_gesture_end(None);
-                    continue;
-                }
-
-                ws.view_offset_gesture_begin(is_touchpad);
-            }
-        }
-    }
-
-    pub fn view_offset_gesture_update(
-        &mut self,
-        delta_x: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
-    ) -> Option<Option<Output>> {
-        let zoom = self.overview_zoom();
-        let delta_x = delta_x / zoom;
-
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
-            for ws in &mut monitor.workspaces {
-                if let Some(refresh) =
-                    ws.view_offset_gesture_update(delta_x, timestamp, is_touchpad)
-                {
-                    if refresh {
-                        return Some(Some(monitor.output.clone()));
-                    } else {
-                        return Some(None);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
-            for ws in &mut monitor.workspaces {
-                if ws.view_offset_gesture_end(is_touchpad) {
-                    return Some(monitor.output.clone());
-                }
-            }
-        }
-
-        None
-    }
-
     pub fn overview_gesture_begin(&mut self) {
         self.overview_open = true;
 
@@ -3841,7 +3643,6 @@ impl<W: LayoutElement> Layout<W> {
 
         let zoom = mon.overview_zoom();
 
-        let is_floating = ws.is_floating(&window_id);
         let (tile, tile_offset, _visible) = ws
             .tiles_with_render_positions()
             .find(|(tile, _, _)| tile.window().id() == &window_id)
@@ -3866,13 +3667,6 @@ impl<W: LayoutElement> Layout<W> {
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_begin();
-        }
-
-        // Lock the view for scrolling interactive move.
-        if !is_floating {
-            for ws in self.workspaces_mut() {
-                ws.dnd_scroll_gesture_begin();
-            }
         }
 
         true
@@ -4012,10 +3806,6 @@ impl<W: LayoutElement> Layout<W> {
 
                 if is_floating {
                     // Unlock the view in case we locked it moving a fullscreen window that is
-                    // going to unfullscreen to floating.
-                    for ws in self.workspaces_mut() {
-                        ws.dnd_scroll_gesture_end();
-                    }
                 } else {
                     // Animate to semitransparent.
                     tile.animate_alpha(
@@ -4134,16 +3924,6 @@ impl<W: LayoutElement> Layout<W> {
                         tile.animate_move_from(offset);
                     }
 
-                    // Unlock the view on the workspaces, but if the moved window was active,
-                    // preserve that.
-                    let moved_tile_was_active =
-                        ws.active_window().is_some_and(|win| *win.id() == window_id);
-
-                    ws.dnd_scroll_gesture_end();
-
-                    if moved_tile_was_active {
-                        ws.activate_window(&window_id);
-                    }
                 }
 
                 return;
@@ -4165,9 +3945,6 @@ impl<W: LayoutElement> Layout<W> {
 
         // Unlock the view on the workspaces.
         if !move_.is_floating {
-            for ws in self.workspaces_mut() {
-                ws.dnd_scroll_gesture_end();
-            }
 
             // Also animate the tile back to opaque.
             move_.tile.animate_alpha(
@@ -4392,10 +4169,6 @@ impl<W: LayoutElement> Layout<W> {
             for mon in self.monitors_mut() {
                 mon.dnd_scroll_gesture_begin();
             }
-
-            for ws in self.workspaces_mut() {
-                ws.dnd_scroll_gesture_begin();
-            }
         }
     }
 
@@ -4408,10 +4181,6 @@ impl<W: LayoutElement> Layout<W> {
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();
-        }
-
-        for ws in self.workspaces_mut() {
-            ws.dnd_scroll_gesture_end();
         }
     }
 
@@ -4923,27 +4692,12 @@ impl<W: LayoutElement> Layout<W> {
                     for (ws_idx, ws) in mon.workspaces.iter_mut().enumerate() {
                         let is_focused = is_active && ws_idx == mon.active_workspace_idx;
                         ws.refresh(is_active, is_focused);
-
-                        if let Some(is_scrolling) = ongoing_scrolling_dnd {
-                            // Lock or unlock the view for scrolling interactive move.
-                            if is_scrolling {
-                                ws.dnd_scroll_gesture_begin();
-                            } else {
-                                ws.dnd_scroll_gesture_end();
-                            }
-                        } else {
-                            // Cancel the view offset gesture after workspace switches, moves, etc.
-                            if !self.overview_open && ws_idx != mon.active_workspace_idx {
-                                ws.view_offset_gesture_end(None);
-                            }
-                        }
                     }
                 }
             }
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     ws.refresh(false, false);
-                    ws.view_offset_gesture_end(None);
                 }
             }
         }

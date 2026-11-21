@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
 use niri_ipc::{
-    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
+    LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
 };
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
 use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
@@ -156,7 +156,6 @@ pub enum Action {
     ToggleWindowedFullscreenById(u64),
     #[knuffel(skip)]
     FocusWindow(u64),
-    FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
     FocusColumnLeft,
     #[knuffel(skip)]
@@ -187,11 +186,8 @@ pub enum Action {
     FocusWindowUpOrBottom,
     MoveColumnLeft,
     MoveColumnRight,
-    MoveColumnToFirst,
-    MoveColumnToLast,
     MoveColumnLeftOrToMonitorLeft,
     MoveColumnRightOrToMonitorRight,
-    MoveColumnToIndex(#[knuffel(argument)] usize),
     MoveWindowDown,
     MoveWindowUp,
     MoveWindowDownOrToWorkspaceDown,
@@ -206,13 +202,10 @@ pub enum Action {
     ExpelWindowFromColumn,
     SwapWindowLeft,
     SwapWindowRight,
-    ToggleColumnTabbedDisplay,
-    SetColumnDisplay(#[knuffel(argument, str)] ColumnDisplay),
     CenterColumn,
     CenterWindow,
     #[knuffel(skip)]
     CenterWindowById(u64),
-    CenterVisibleColumns,
     FocusWorkspaceDown,
     #[knuffel(skip)]
     FocusWorkspaceDownUnderMouse,
@@ -317,12 +310,10 @@ pub enum Action {
     SwitchPresetWindowHeightById(u64),
     #[knuffel(skip)]
     SwitchPresetWindowHeightBackById(u64),
-    MaximizeColumn,
     MaximizeWindowToEdges,
     #[knuffel(skip)]
     MaximizeWindowToEdgesById(u64),
     SetColumnWidth(#[knuffel(argument, str)] SizeChange),
-    ExpandColumnToAvailableWidth,
     SwitchLayout(#[knuffel(argument, str)] LayoutSwitchTarget),
     ShowHotkeyOverlay,
     MoveWorkspaceToMonitorLeft,
@@ -458,7 +449,6 @@ impl From<niri_ipc::Action> for Action {
                 Self::ToggleWindowedFullscreenById(id)
             }
             niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
-            niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
             niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
             niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
             niri_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
@@ -485,9 +475,6 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::FocusWindowUpOrBottom {} => Self::FocusWindowUpOrBottom,
             niri_ipc::Action::MoveColumnLeft {} => Self::MoveColumnLeft,
             niri_ipc::Action::MoveColumnRight {} => Self::MoveColumnRight,
-            niri_ipc::Action::MoveColumnToFirst {} => Self::MoveColumnToFirst,
-            niri_ipc::Action::MoveColumnToLast {} => Self::MoveColumnToLast,
-            niri_ipc::Action::MoveColumnToIndex { index } => Self::MoveColumnToIndex(index),
             niri_ipc::Action::MoveColumnLeftOrToMonitorLeft {} => {
                 Self::MoveColumnLeftOrToMonitorLeft
             }
@@ -516,12 +503,9 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ExpelWindowFromColumn {} => Self::ExpelWindowFromColumn,
             niri_ipc::Action::SwapWindowRight {} => Self::SwapWindowRight,
             niri_ipc::Action::SwapWindowLeft {} => Self::SwapWindowLeft,
-            niri_ipc::Action::ToggleColumnTabbedDisplay {} => Self::ToggleColumnTabbedDisplay,
-            niri_ipc::Action::SetColumnDisplay { display } => Self::SetColumnDisplay(display),
             niri_ipc::Action::CenterColumn {} => Self::CenterColumn,
             niri_ipc::Action::CenterWindow { id: None } => Self::CenterWindow,
             niri_ipc::Action::CenterWindow { id: Some(id) } => Self::CenterWindowById(id),
-            niri_ipc::Action::CenterVisibleColumns {} => Self::CenterVisibleColumns,
             niri_ipc::Action::FocusWorkspaceDown {} => Self::FocusWorkspaceDown,
             niri_ipc::Action::FocusWorkspaceUp {} => Self::FocusWorkspaceUp,
             niri_ipc::Action::FocusWorkspace { reference } => {
@@ -637,13 +621,11 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SwitchPresetWindowHeightBack { id: Some(id) } => {
                 Self::SwitchPresetWindowHeightBackById(id)
             }
-            niri_ipc::Action::MaximizeColumn {} => Self::MaximizeColumn,
             niri_ipc::Action::MaximizeWindowToEdges { id: None } => Self::MaximizeWindowToEdges,
             niri_ipc::Action::MaximizeWindowToEdges { id: Some(id) } => {
                 Self::MaximizeWindowToEdgesById(id)
             }
             niri_ipc::Action::SetColumnWidth { change } => Self::SetColumnWidth(change),
-            niri_ipc::Action::ExpandColumnToAvailableWidth {} => Self::ExpandColumnToAvailableWidth,
             niri_ipc::Action::SwitchLayout { layout } => Self::SwitchLayout(layout),
             niri_ipc::Action::ShowHotkeyOverlay {} => Self::ShowHotkeyOverlay,
             niri_ipc::Action::MoveWorkspaceToMonitorLeft {} => Self::MoveWorkspaceToMonitorLeft,

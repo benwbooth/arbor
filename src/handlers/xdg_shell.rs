@@ -133,13 +133,13 @@ impl XdgShellHandler for State {
 
         match &start_data {
             PointerOrTouchStartData::Pointer(_) => {
-                if let Some(grab) = MoveGrab::new(self, start_data, window.clone(), true, None) {
+                if let Some(grab) = MoveGrab::new(self, start_data, window.clone(), None) {
                     pointer.set_grab(self, grab, serial, Focus::Clear);
                 }
             }
             PointerOrTouchStartData::Touch(_) => {
                 let touch = self.niri.seat.get_touch().unwrap();
-                if let Some(grab) = MoveGrab::new(self, start_data, window.clone(), true, None) {
+                if let Some(grab) = MoveGrab::new(self, start_data, window.clone(), None) {
                     touch.set_grab(self, grab, serial);
                 }
             }
@@ -214,12 +214,6 @@ impl XdgShellHandler for State {
                 last_cell.set(None);
 
                 let intersection = edges.intersection(last_edges);
-                if intersection.intersects(ResizeEdge::LEFT_RIGHT) {
-                    // FIXME: don't activate once we can pass specific windows to actions.
-                    self.niri.layout.activate_window(&window);
-                    self.niri.layer_shell_on_demand_focus = None;
-                    self.niri.layout.toggle_full_width();
-                }
                 if intersection.intersects(ResizeEdge::TOP_BOTTOM) {
                     self.niri.layer_shell_on_demand_focus = None;
                     self.niri.layout.reset_window_height(Some(&window));

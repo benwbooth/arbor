@@ -81,7 +81,7 @@ impl State {
                     };
                     let start_data = PointerOrTouchStartData::Pointer(start_data);
                     if let Some(grab) =
-                        MoveGrab::new(self, start_data, window, false, Some(CursorIcon::Default))
+                        MoveGrab::new(self, start_data, window, Some(CursorIcon::Default))
                     {
                         pointer.set_grab(self, grab, serial, Focus::Clear);
                     }

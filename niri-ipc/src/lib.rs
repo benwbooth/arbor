@@ -325,14 +325,6 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
-    /// Focus a window in the focused column by index.
-    FocusWindowInColumn {
-        /// Index of the window in the column.
-        ///
-        /// The index starts from 1 for the topmost window.
-        #[cfg_attr(feature = "clap", arg())]
-        index: u8,
-    },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
     /// Focus the column to the left.
@@ -391,22 +383,10 @@ pub enum Action {
     MoveColumnLeft {},
     /// Move the focused column to the right.
     MoveColumnRight {},
-    /// Move the focused column to the start of the workspace.
-    MoveColumnToFirst {},
-    /// Move the focused column to the end of the workspace.
-    MoveColumnToLast {},
     /// Move the focused column to the left or to the monitor to the left.
     MoveColumnLeftOrToMonitorLeft {},
     /// Move the focused column to the right or to the monitor to the right.
     MoveColumnRightOrToMonitorRight {},
-    /// Move the focused column to a specific index on its workspace.
-    MoveColumnToIndex {
-        /// New index for the column.
-        ///
-        /// The index starts from 1 for the first column.
-        #[cfg_attr(feature = "clap", arg())]
-        index: usize,
-    },
     /// Move the focused window down in a column.
     MoveWindowDown {},
     /// Move the focused window up in a column.
@@ -447,14 +427,6 @@ pub enum Action {
     SwapWindowRight {},
     /// Swap focused window with one to the left.
     SwapWindowLeft {},
-    /// Toggle the focused column between normal and tabbed display.
-    ToggleColumnTabbedDisplay {},
-    /// Set the display mode of the focused column.
-    SetColumnDisplay {
-        /// Display mode to set.
-        #[cfg_attr(feature = "clap", arg())]
-        display: ColumnDisplay,
-    },
     /// Center the focused column on the screen.
     CenterColumn {},
     /// Center a window on the screen.
@@ -469,8 +441,6 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
-    /// Center all fully visible columns on the screen.
-    CenterVisibleColumns {},
     /// Focus the workspace below.
     FocusWorkspaceDown {},
     /// Focus the workspace above.
@@ -748,8 +718,6 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
-    /// Toggle the maximized state of the focused column.
-    MaximizeColumn {},
     /// Toggle the maximized-to-edges state of the focused window.
     MaximizeWindowToEdges {
         /// Id of the window to maximize.
@@ -764,8 +732,6 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
         change: SizeChange,
     },
-    /// Expand the focused column to space not taken up by other fully visible columns.
-    ExpandColumnToAvailableWidth {},
     /// Switch between keyboard layouts.
     SwitchLayout {
         /// Layout to switch to.

@@ -1,5 +1,5 @@
 use knuffel::errors::DecodeError;
-use niri_ipc::{ColumnDisplay, SizeChange};
+use niri_ipc::SizeChange;
 
 use crate::appearance::{
     Border, FocusRing, InsertHint, Shadow, TabIndicator, DEFAULT_BACKGROUND_COLOR,
@@ -20,10 +20,7 @@ pub struct Layout {
     pub preset_column_widths: Vec<PresetSize>,
     pub default_column_width: Option<PresetSize>,
     pub preset_window_heights: Vec<PresetSize>,
-    pub center_focused_column: CenterFocusedColumn,
-    pub always_center_single_column: bool,
     pub empty_workspace_above_first: bool,
-    pub default_column_display: ColumnDisplay,
     pub gaps: f64,
     pub struts: Struts,
     pub background_color: Color,
@@ -47,10 +44,7 @@ impl Default for Layout {
                 PresetSize::Proportion(2. / 3.),
             ],
             default_column_width: Some(PresetSize::Proportion(0.5)),
-            center_focused_column: CenterFocusedColumn::Never,
-            always_center_single_column: false,
             empty_workspace_above_first: false,
-            default_column_display: ColumnDisplay::Normal,
             gaps: 16.,
             struts: Struts::default(),
             preset_window_heights: vec![
@@ -76,7 +70,6 @@ impl MergeWith<LayoutPart> for Layout {
             insert_hint,
             title_bars,
             camera,
-            always_center_single_column,
             empty_workspace_above_first,
             gaps,
         );
@@ -85,8 +78,6 @@ impl MergeWith<LayoutPart> for Layout {
             (self, part),
             preset_column_widths,
             preset_window_heights,
-            center_focused_column,
-            default_column_display,
             struts,
             background_color,
         );
@@ -123,14 +114,8 @@ pub struct LayoutPart {
     pub default_column_width: Option<DefaultPresetSize>,
     #[knuffel(child, unwrap(children))]
     pub preset_window_heights: Option<Vec<PresetSize>>,
-    #[knuffel(child, unwrap(argument))]
-    pub center_focused_column: Option<CenterFocusedColumn>,
-    #[knuffel(child)]
-    pub always_center_single_column: Option<Flag>,
     #[knuffel(child)]
     pub empty_workspace_above_first: Option<Flag>,
-    #[knuffel(child, unwrap(argument, str))]
-    pub default_column_display: Option<ColumnDisplay>,
     #[knuffel(child, unwrap(argument))]
     pub gaps: Option<FloatOrInt<0, 65535>>,
     #[knuffel(child)]
@@ -173,18 +158,6 @@ pub struct Struts {
     pub top: FloatOrInt<-65535, 65535>,
     #[knuffel(child, unwrap(argument), default)]
     pub bottom: FloatOrInt<-65535, 65535>,
-}
-
-#[derive(knuffel::DecodeScalar, Debug, Default, PartialEq, Eq, Clone, Copy)]
-pub enum CenterFocusedColumn {
-    /// Focusing a column will not center the column.
-    #[default]
-    Never,
-    /// The focused column will always be centered.
-    Always,
-    /// Focusing a column will center it if it doesn't fit on the screen together with the
-    /// previously focused column.
-    OnOverflow,
 }
 
 impl<S> knuffel::Decode<S> for DefaultPresetSize

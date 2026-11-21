@@ -821,10 +821,6 @@ mod tests {
                     top 3
                 }
 
-                center-focused-column "on-overflow"
-
-                default-column-display "tabbed"
-
                 insert-hint {
                     color "rgb(255, 200, 127)"
                     gradient from="rgba(10, 20, 30, 1.0)" to="#0080ffff" relative-to="workspace-view"
@@ -876,13 +872,6 @@ mod tests {
                 }
             }
 
-            gestures {
-                dnd-edge-view-scroll {
-                    trigger-width 10
-                    max-speed 50
-                }
-            }
-
             environment {
                 QT_QPA_PLATFORM "wayland"
                 DISPLAY null
@@ -899,7 +888,6 @@ mod tests {
                 open-floating false
                 open-focused true
                 default-window-height { fixed 500; }
-                default-column-display "tabbed"
                 default-floating-position x=100 y=-200 relative-to="bottom-left"
 
                 focus-ring {
@@ -1495,10 +1483,7 @@ mod tests {
                         1280,
                     ),
                 ],
-                center_focused_column: OnOverflow,
-                always_center_single_column: false,
                 empty_workspace_above_first: false,
-                default_column_display: Tabbed,
                 gaps: 8.0,
                 struts: Struts {
                     left: FloatOrInt(
@@ -1726,11 +1711,6 @@ mod tests {
                 saturation: 1.5,
             },
             gestures: Gestures {
-                dnd_edge_view_scroll: DndEdgeViewScroll {
-                    trigger_width: 10.0,
-                    delay_ms: 100,
-                    max_speed: 50.0,
-                },
                 dnd_edge_workspace_switch: DndEdgeWorkspaceSwitch {
                     trigger_height: 50.0,
                     delay_ms: 100,
@@ -1940,9 +1920,6 @@ mod tests {
                     baba_is_float: None,
                     block_out_from: None,
                     variable_refresh_rate: None,
-                    default_column_display: Some(
-                        Tabbed,
-                    ),
                     default_floating_position: Some(
                         FloatingPosition {
                             x: FloatOrInt(

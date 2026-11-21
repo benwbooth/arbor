@@ -1,12 +1,11 @@
 use std::cmp::max;
 use std::rc::Rc;
-use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{
-    CenterFocusedColumn, CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
+    CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
 };
-use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use niri_ipc::{PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{layer_map_for_output, Window};
@@ -967,12 +966,6 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.focus_column(index);
     }
 
-    pub fn focus_window_in_column(&mut self, index: u8) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.focus_window_in_column(index);
-    }
 
     pub fn focus_down(&mut self) -> bool {
         if self.floating_is_active.get() {
@@ -1068,26 +1061,8 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn move_column_to_first(&mut self) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.move_column_to_first();
-    }
 
-    pub fn move_column_to_last(&mut self) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.move_column_to_last();
-    }
 
-    pub fn move_column_to_index(&mut self, index: usize) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.move_column_to_index(index);
-    }
 
     pub fn move_down(&mut self) -> bool {
         if self.floating_is_active.get() {
@@ -1146,19 +1121,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.swap_window_in_direction(direction);
     }
 
-    pub fn toggle_column_tabbed_display(&mut self) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.toggle_column_tabbed_display();
-    }
 
-    pub fn set_column_display(&mut self, display: ColumnDisplay) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.set_column_display(display);
-    }
 
     pub fn center_column(&mut self) {
         if self.floating_is_active.get() {
@@ -1178,12 +1141,6 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn center_visible_columns(&mut self) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.center_visible_columns();
-    }
 
     pub fn toggle_width(&mut self, forwards: bool) {
         if self.floating_is_active.get() {
@@ -1193,14 +1150,6 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn toggle_full_width(&mut self) {
-        if self.floating_is_active.get() {
-            // Leave this unimplemented for now. For good UX, this probably needs moving the tile
-            // to be against the left edge of the working area while it is full-width.
-            return;
-        }
-        self.scrolling.toggle_full_width();
-    }
 
     pub fn set_column_width(&mut self, change: SizeChange) {
         if self.floating_is_active.get() {
@@ -1259,12 +1208,6 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn expand_column_to_available_width(&mut self) {
-        if self.floating_is_active.get() {
-            return;
-        }
-        self.scrolling.expand_column_to_available_width();
-    }
 
     pub fn set_fullscreen(&mut self, window: &W::Id, is_fullscreen: bool) {
         let mut restore_to_floating = false;
@@ -1429,13 +1372,7 @@ impl<W: LayoutElement> Workspace<W> {
             // Come up with a default floating position close to the tile position.
             let stored_or_default = self.floating.stored_or_default_tile_pos(&removed.tile);
             if stored_or_default.is_none() {
-                let offset =
-                    if self.options.layout.center_focused_column == CenterFocusedColumn::Always {
-                        Point::from((0., 0.))
-                    } else {
-                        Point::from((50., 50.))
-                    };
-                let pos = render_pos + offset;
+                let pos = render_pos + Point::from((50., 50.));
                 let size = removed.tile.tile_size();
                 let pos = self.floating.clamp_within_working_area(pos, size);
                 let pos = self.floating.logical_to_size_frac(pos);
@@ -1833,13 +1770,6 @@ impl<W: LayoutElement> Workspace<W> {
             .refresh(is_active && self.floating_is_active.get(), is_focused);
     }
 
-    pub fn scroll_amount_to_activate(&self, window: &W::Id) -> f64 {
-        if self.floating.has_window(window) {
-            return 0.;
-        }
-
-        self.scrolling.scroll_amount_to_activate(window)
-    }
 
     pub fn is_urgent(&self) -> bool {
         self.windows().any(|win| win.is_urgent())
@@ -1913,62 +1843,11 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_hint_area(position)
     }
 
-    pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
-        self.scrolling.view_offset_gesture_begin(is_touchpad);
-    }
 
-    pub fn view_offset_gesture_update(
-        &mut self,
-        delta_x: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
-    ) -> Option<bool> {
-        self.scrolling
-            .view_offset_gesture_update(delta_x, timestamp, is_touchpad)
-    }
 
-    pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {
-        self.scrolling.view_offset_gesture_end(is_touchpad)
-    }
 
-    pub fn dnd_scroll_gesture_begin(&mut self) {
-        self.scrolling.dnd_scroll_gesture_begin();
-    }
 
-    pub fn dnd_scroll_gesture_scroll(&mut self, pos: Point<f64, Logical>, speed: f64) -> bool {
-        let config = &self.options.gestures.dnd_edge_view_scroll;
-        let trigger_width = config.trigger_width;
 
-        // This working area intentionally does not include extra struts from Options.
-        let x = pos.x - self.working_area.loc.x;
-        let width = self.working_area.size.w;
-
-        let x = x.clamp(0., width);
-        let trigger_width = trigger_width.clamp(0., width / 2.);
-
-        let delta = if x < trigger_width {
-            -(trigger_width - x)
-        } else if width - x < trigger_width {
-            trigger_width - (width - x)
-        } else {
-            0.
-        };
-
-        let delta = if trigger_width < 0.01 {
-            // Sanity check for trigger-width 0 or small window sizes.
-            0.
-        } else {
-            // Normalize to [0, 1].
-            delta / trigger_width
-        };
-        let delta = delta * speed;
-
-        self.scrolling.dnd_scroll_gesture_scroll(delta)
-    }
-
-    pub fn dnd_scroll_gesture_end(&mut self) {
-        self.scrolling.dnd_scroll_gesture_end();
-    }
 
     pub fn interactive_resize_begin(&mut self, window: W::Id, edges: ResizeEdge) -> bool {
         if self.floating.has_window(&window) {
