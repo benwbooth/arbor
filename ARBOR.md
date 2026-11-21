@@ -255,6 +255,121 @@ window-rule {
 With title bars on, the decoration globals are offered to clients even
 without `prefer-no-csd`, so that Qt stops drawing its own bar.
 
+## Liquid glass
+
+Shells can ask arbor to draw macOS 26-style liquid glass under parts of their
+layer-shell surfaces: real refraction of whatever is behind (wallpaper,
+windows, video), not a shell-side imitation. For each registered shape arbor
+captures the backdrop under it (everything rendered below that surface on that
+output), then draws it through a lens shader
+(`src/render_helpers/shaders/glass.frag`) before the surface's own content:
+
+- a rounded rectangle with continuous (squircle) corners, the same curve as
+  hearth's `shaders/glass.frag`;
+- inside, the backdrop bends inwards in a band along the rim (the *bezel*,
+  by default as wide as the corner radius): strongest at the edge, nothing in
+  the middle. The displacement is quadratic across the band and capped so the
+  mapping never folds (no mirror images): the backdrop is magnified towards
+  the rim like through the rounded edge of a thick lens;
+- slight chromatic dispersion where it bends (red bends least, blue most);
+- dual-kawase blur of the captured backdrop (the existing blur passes), a
+  saturation boost (vibrancy) and a tint;
+- a specular rim: a ~1.5 px highlight lit from the top-left with a weaker
+  reflection at the bottom-right, plus light gathered in the bending band.
+
+Variants (Apple HIG Materials): **regular** (frosted: blur 8 px, saturation
+1.6, faint white tint) for menus, popovers, the dock; **clear** (blur 1 px,
+saturation 1.3, slight dimming) for glass over media.
+
+A surface with glass shapes draws no layer-rule `background-effect` and no
+layer-rule `shadow` (they are rectangles around the whole surface); the shell
+draws its own shadow around the shapes. Glass is drawn for surfaces on the
+bottom, top and overlay layers (not the background layer).
+
+### Registering shapes (IPC)
+
+```json
+{"SetGlass": {"namespace": "hearth-dock", "output": "DP-1", "key": "",
+  "popup": false, "surface_size": [3840, 120],
+  "shapes": [{"x": 1200, "y": 20, "width": 1440, "height": 86, "radius": 26,
+              "params": {"variant": "Regular", "strength": 1.0}}]}}
+```
+
+- Target: the mapped layer surface(s) with that `namespace` on `output`
+  (every output when `output` is null/absent). Shapes are in that surface's
+  logical, surface-local coordinates.
+- Several surfaces with the same namespace on one output: `surface_size`
+  (logical) picks the one with that size (within 1 px); without it the
+  shapes apply to all of them. With a single match the size is ignored (it
+  may lag a resize by a frame).
+- `popup: true` targets the xdg pop-ups of the matching layer surface
+  instead (tooltips, submenus); shapes are pop-up-surface-local and
+  `surface_size` picks the pop-up when several are open.
+- `key`: a client can keep several independent lists per namespace (e.g.
+  one per window); a request replaces only the list with the same
+  (namespace, output, popup, key).
+- An empty `shapes` list clears that list. Lists also go away when no mapped
+  layer surface matches them any more (the surface unmapped), so a shell
+  that crashes leaves nothing behind.
+- `params` (all optional) override the `glass {}` defaults: `variant`
+  (`Regular`/`Clear`), `strength` (0..1, scales everything), `refraction`
+  (0..1), `bezel` (px), `dispersion` (0..1), `blur_radius` (px), `saturation`,
+  `rim` (0..1), `tint` (straight RGBA 0..1).
+- At most 64 shapes per list; replies `{"Ok":"Handled"}`. A compositor
+  without glass replies an error (unknown variant), which shells can use to
+  detect the feature.
+
+Element ids are kept per shape index, so updating positions every frame
+(a magnifying dock) only damages the old and new rectangles.
+
+Testing from a shell:
+
+```sh
+arbor msg glass --namespace hearth-dock --shape 1200,20,1440,86,26
+arbor msg glass --namespace hearth-dock --shape 10,10,300,60,30 --variant clear --strength 0.6
+arbor msg glass --namespace hearth-dock            # clears
+```
+
+### Defaults (config)
+
+```kdl
+glass {
+    // off                 // draw no glass (surfaces fall back to their layer rules)
+    strength 1.0
+    refraction 0.8
+    bezel 0                // 0 = the shape's corner radius (at least 12 px)
+    dispersion 0.12
+    blur-radius 8
+    clear-blur-radius 1
+    saturation 1.6
+    clear-saturation 1.3
+    rim 0.7
+    tint "#ffffff0c"
+    clear-tint "#00000014"
+}
+```
+
+### Rendering, damage, performance
+
+- Each shape is one framebuffer-effect render element (`GlassElement`,
+  `src/render_helpers/glass.rs`). smithay's damage tracker calls its
+  capture only when something behind the shape changed (or the shape
+  moved): the backdrop is blitted into a shape-sized texture at the output's
+  physical resolution and blurred there (the blur cost scales with the
+  shape, not the output). Glass over a static backdrop costs nothing per
+  frame; glass over a playing video recaptures with each video frame, and
+  only the glass rectangles are redrawn.
+- Fractional scale: shape edges are snapped to the physical pixel grid
+  (each edge rounded on its own), the SDF is evaluated in logical px and
+  antialiased over half a physical pixel.
+- Code: registry and matching in `src/glass.rs` (unit tested), defaults and
+  resolution in `arbor-config/src/glass.rs`, IPC types `SetGlass`,
+  `GlassShape`, `GlassParams` in `arbor-ipc`. Headless render check:
+  `cargo test --lib tests::glass -- --ignored` (needs EGL;
+  `ARBOR_GLASS_SHOT_DIR` writes the frames as PNGs): stripes behind a glass
+  shape are displaced near the rim and untouched in the middle, at scale 1
+  and 4/3.
+
 ## Configuration
 
 The config is KDL (`$XDG_CONFIG_HOME/arbor/config.kdl`); arbor writes a
@@ -272,6 +387,7 @@ Top-level sections, mostly as in niri:
 | `layout` | `gaps`, `struts`, `focus-ring`, `border`, `shadow`, `tab-indicator` (tab groups), `insert-hint` (drag-to-dock preview), `preset-column-widths` / `preset-window-heights` (what `switch-preset-*` cycles through), `default-column-width` (new floating windows), `background-color`, `empty-workspace-above-first`; arbor: `camera { ... }`, `title-bars { ... }` |
 | `window-rule` | `match` / `exclude` on app-id, title, state; `open-floating`, arbor's `open-docked`, `open-maximized`, `open-fullscreen`, `open-on-output` / `open-on-workspace`, sizes, `geometry-corner-radius`, `clip-to-geometry`, `opacity`, `block-out-from`, `title-bar false`, ... |
 | `layer-rule` | the same idea for layer-shell surfaces (panels, wallpapers) |
+| `glass` | arbor: liquid glass defaults (see Liquid glass) |
 | `binds` | key, mouse button, wheel and touchpad-scroll binds to actions (below) |
 | `animations`, `gestures` (hot corners, DnD workspace switch), `overview`, `cursor`, `environment`, `spawn-at-startup` / `spawn-sh-at-startup`, `workspace "name"`, `screenshot-path`, `hotkey-overlay`, `clipboard`, `prefer-no-csd`, `xwayland-satellite`, `debug` | as in niri |
 
@@ -340,6 +456,9 @@ default-column-display }`, the `default-column-display` window rule,
 - `src/arbor.rs`: compositor state (`State`, `Arbor`); `src/input/`: input
   handling and bind dispatch; `arbor-config/`: config parsing;
   `arbor-ipc/`: IPC types.
+- `src/glass.rs`, `src/render_helpers/glass.rs`,
+  `src/render_helpers/shaders/glass.frag`, `arbor-config/src/glass.rs`:
+  liquid glass (see Liquid glass).
 - `src/protocols/kde_appmenu.rs`: server side of `org_kde_kwin_appmenu`.
   The menu's DBus address shows up as `app_menu` on IPC windows
   (`WindowOpenedOrChanged` fires when it changes). Qt only exports its menu
