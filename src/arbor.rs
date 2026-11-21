@@ -292,6 +292,8 @@ pub struct Arbor {
     pub screen_zoom: ScreenZoom,
     /// Runtime reduce-motion setting (IPC), overriding `accessibility { reduce-motion }`.
     pub reduce_motion_override: Option<bool>,
+    /// Keymaps of virtual keyboards (see handlers/virtual_keyboard.rs).
+    pub virtual_keymaps: crate::handlers::virtual_keyboard::VirtualKeymaps,
     /// Where the session is saved (`None` in tests).
     pub session_path: Option<std::path::PathBuf>,
     /// Session restore in progress.
@@ -2550,6 +2552,7 @@ impl Arbor {
             is_at_startup: true,
             screen_zoom: ScreenZoom::new(animation_clock.clone()),
             reduce_motion_override: None,
+            virtual_keymaps: Default::default(),
             session_path: if cfg!(test) {
                 None
             } else {

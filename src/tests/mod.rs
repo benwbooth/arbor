@@ -17,5 +17,6 @@ mod portal_global_shortcuts;
 mod remove_output;
 mod session;
 mod toplevel_export;
+mod virtual_keyboard;
 mod window_opening;
 mod zoom;
