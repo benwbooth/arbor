@@ -1380,7 +1380,9 @@ impl<W: LayoutElement> Workspace<W> {
             }
 
             self.floating.add_tile(removed.tile, target_is_active);
-            if target_is_active {
+            // Floating also takes over when the dock tree is now empty (the moved window may
+            // not have been the active one, e.g. when it was minimized).
+            if target_is_active || self.scrolling.is_empty() {
                 self.floating_is_active = FloatingActive::Yes;
             }
         }

@@ -1554,3 +1554,15 @@ fn framing_stays_within_the_canvas() {
     // Not centered past the edge: the canvas edge (plus the outer gap) is at the screen edge.
     assert_eq!(cam.to_view(r3.loc).x + r3.size.w + 16., 1280.);
 }
+
+#[test]
+fn toggle_floating_of_minimized_window_without_outputs() {
+    let ops = [
+        Op::AddWindow {
+            params: TestWindowParams::new(4),
+        },
+        Op::MinimizeWindow { id: Some(4) },
+        Op::ToggleWindowFloating { id: Some(4) },
+    ];
+    check_ops(ops);
+}
