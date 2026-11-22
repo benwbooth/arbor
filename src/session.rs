@@ -76,6 +76,9 @@ pub struct SavedWindow {
     /// reconnects by itself and is not launched again.
     #[serde(default)]
     pub pid: Option<i32>,
+    /// In-place restarts: the window's id, which the next compositor gives it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<u64>,
 }
 
 /// A dock camera (in-place restarts).
@@ -182,18 +185,24 @@ impl PendingRestore {
         &mut self,
         app_id: &str,
         title: Option<&str>,
+        pid: Option<i32>,
         window: &Window,
     ) -> Option<SavedWindow> {
         let free = |w: &&SavedWindow| {
             w.app_id == app_id && !self.claimed.iter().any(|(s, _)| *s == w.slot)
         };
-        let saved = self
-            .file
-            .windows
+        let same_pid = |w: &&SavedWindow| pid.is_some() && w.pid == pid;
+        let same_title = |w: &&SavedWindow| title.is_some() && w.title.as_deref() == title;
+        // The same process and title, then the same process (the app's windows after an
+        // in-place restart), then the same title, then any.
+        let windows = &self.file.windows;
+        let saved = windows
             .iter()
             .filter(free)
-            .find(|w| title.is_some() && w.title.as_deref() == title)
-            .or_else(|| self.file.windows.iter().find(free))?
+            .find(|w| same_pid(w) && same_title(w))
+            .or_else(|| windows.iter().filter(free).find(same_pid))
+            .or_else(|| windows.iter().filter(free).find(same_title))
+            .or_else(|| windows.iter().find(free))?
             .clone();
         self.claimed.push((saved.slot, window.clone()));
         Some(saved)
@@ -417,6 +426,7 @@ impl State {
                 fullscreen: mode.is_fullscreen(),
                 minimized: ipc.is_minimized,
                 pid: ipc.pid,
+                window_id: Some(mapped.id().get()),
             });
         });
 
@@ -589,7 +599,28 @@ impl State {
         if has_parent {
             return;
         }
-        let Some(saved) = pending.claim(&app_id, title.as_deref(), window) else {
+        let pid = crate::utils::get_credentials_for_surface(toplevel.wl_surface()).map(|c| c.pid);
+        let Some(saved) = pending.claim(&app_id, title.as_deref(), pid, window) else {
+            return;
+        };
+        // After an in-place restart the window gets its previous id back (IPC ids and
+        // foreign-toplevel identifiers stay the same; captures naming it keep working).
+        if pending.restart {
+            if let Some(id) = saved.window_id {
+                let id = crate::window::mapped::MappedId::from_previous(id);
+                let layout = &mut self.arbor.layout;
+                let mut taken = false;
+                layout.with_windows(|m, _, _, _| taken |= m.id() == id);
+                if !taken {
+                    if let Some((mapped, _)) =
+                        layout.find_window_and_output_mut(toplevel.wl_surface())
+                    {
+                        mapped.restore_id(id);
+                    }
+                }
+            }
+        }
+        let Some(pending) = &mut self.arbor.session_restore else {
             return;
         };
         let focus = pending.file.focused == Some(saved.slot);
@@ -832,6 +863,10 @@ impl State {
                         file.windows.len()
                     );
                     let portal_sessions = std::mem::take(&mut file.portal_sessions);
+                    // Windows get their ids back as they map: new ones come after those.
+                    if let Some(max) = file.windows.iter().filter_map(|w| w.window_id).max() {
+                        crate::window::mapped::MappedId::reserve(max);
+                    }
                     self.arbor
                         .global_shortcuts
                         .restore_sessions(portal_sessions);
@@ -973,6 +1008,7 @@ mod tests {
             fullscreen: false,
             minimized: false,
             pid: None,
+            window_id: None,
         };
         let file = SessionFile {
             version: SESSION_VERSION,

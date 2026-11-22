@@ -257,6 +257,20 @@ pub struct Hub {
     /// xdg-foreign handles: the one an app got first → the current compositor's. Apps keep
     /// the first (and pass it on to portals and other apps); imports are translated.
     aliases: Mutex<std::collections::HashMap<Vec<u8>, Vec<u8>>>,
+    /// Connections being served.
+    live: std::sync::atomic::AtomicUsize,
+    /// Rebuilds after a compositor change: apps that refer to other apps' windows wait for
+    /// the apps that own windows.
+    barrier: Mutex<Barrier>,
+    barrier_changed: Condvar,
+}
+
+#[derive(Default)]
+struct Barrier {
+    /// The compositor that went away.
+    generation: u64,
+    detached: usize,
+    owners_left: usize,
 }
 
 #[derive(Default)]
@@ -304,6 +318,54 @@ impl Hub {
                     }
                 }
             }
+        }
+    }
+
+    /// A connection lost compositor `generation`; `owner`: it doesn't refer to other apps'
+    /// windows (others wait for it).
+    fn detached(&self, generation: u64, owner: bool) {
+        let mut b = self.barrier.lock().unwrap();
+        if b.generation != generation {
+            *b = Barrier {
+                generation,
+                ..Default::default()
+            };
+        }
+        b.detached += 1;
+        if owner {
+            b.owners_left += 1;
+        }
+        self.barrier_changed.notify_all();
+    }
+
+    /// An owner's rebuild ended (well or not).
+    fn owner_done(&self, generation: u64) {
+        let mut b = self.barrier.lock().unwrap();
+        if b.generation == generation {
+            b.owners_left = b.owners_left.saturating_sub(1);
+        }
+        self.barrier_changed.notify_all();
+    }
+
+    /// Waits (a few seconds at most) for every connection to notice the change and the
+    /// owners among them to be rebuilt.
+    fn wait_owners(&self, generation: u64) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let noticed_by = Instant::now() + Duration::from_millis(300);
+        let mut b = self.barrier.lock().unwrap();
+        loop {
+            let live = self.live.load(std::sync::atomic::Ordering::SeqCst);
+            let all_noticed =
+                b.generation == generation && b.detached >= live || Instant::now() >= noticed_by;
+            if all_noticed && (b.generation != generation || b.owners_left == 0) {
+                return;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return;
+            }
+            let wait = (deadline - now).min(Duration::from_millis(50));
+            b = self.barrier_changed.wait_timeout(b, wait).unwrap().0;
         }
     }
 
@@ -440,6 +502,17 @@ fn serve_client(client: UnixStream, hub: Arc<Hub>, restricted: bool) {
         }
     };
     debug!("wl-proxy: {label} connected");
+    struct Live<'a>(&'a Hub);
+    impl Drop for Live<'_> {
+        fn drop(&mut self) {
+            self.0
+                .live
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            self.0.barrier_changed.notify_all();
+        }
+    }
+    hub.live.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let _live = Live(&hub);
     // A bug here must only cost this one app its connection.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Connection::new(
@@ -592,6 +665,24 @@ struct ReplayState {
     replayed_registries: std::collections::HashSet<u32>,
     /// Ack configures right away (the old buffers go back up before the app answers).
     auto_ack: bool,
+    /// New foreign-toplevel handles (by compositor id), held until their details are in.
+    pending_handles: std::collections::HashMap<u32, PendingHandle>,
+    /// The app's handles that the new compositor's handle of the same window took over.
+    matched: std::collections::HashSet<model::Key>,
+}
+
+/// A foreign-toplevel handle the new compositor announced while the app was being rebuilt.
+struct PendingHandle {
+    iface: &'static wayland_backend::protocol::Interface,
+    /// The announcement (on the app's manager), not yet translated.
+    creation: (
+        u32,
+        Msg,
+        &'static wayland_backend::protocol::Interface,
+        &'static wayland_backend::protocol::MessageDesc,
+    ),
+    /// Its events so far (object: the compositor's id).
+    msgs: Vec<Msg>,
 }
 
 struct Connection {
@@ -794,24 +885,31 @@ impl Connection {
         let Some(o) = self.model.live(frame) else {
             return;
         };
-        let copy = o.sets.get("copy").and_then(|rec| match rec.args.first() {
-            Some(model::V::Obj(Some(b))) => Some((rec.opcode, *b)),
-            _ => None,
-        });
+        let copy = o.sets.get("copy").cloned();
         let fits = o.frame_buffer.as_ref() == Some(&now);
         let target = (
             self.ids.c2s(frame),
-            copy.and_then(|(op, b)| {
-                let buffer = self.model.objs.get(&b).filter(|b| b.alive)?;
-                Some((op, self.ids.c2s(buffer.id)?))
+            copy.and_then(|rec| {
+                let mut args = Vec::new();
+                for v in &rec.args {
+                    args.push(match v {
+                        model::V::Obj(Some(k)) => {
+                            let o = self.model.objs.get(k).filter(|o| o.alive)?;
+                            wire::A::Obj(self.ids.c2s(o.id)?)
+                        }
+                        model::V::Int(x) => wire::A::Int(*x),
+                        model::V::Uint(x) => wire::A::Uint(*x),
+                        _ => return None,
+                    });
+                }
+                Some((rec.opcode, args))
             }),
         );
         let copied = o.handle.is_some();
         match (fits, copied, target) {
             // Asked for already: again.
-            (true, true, (Some(fs), Some((op, bs)))) => {
-                self.to_server
-                    .push_msg(Msg::new(fs, op, vec![wire::A::Obj(bs)]));
+            (true, true, (Some(fs), Some((op, args)))) => {
+                self.to_server.push_msg(Msg::new(fs, op, args));
             }
             // Not asked for yet: the app's coming copy fits.
             (true, false, _) => (),
@@ -924,6 +1022,34 @@ impl Connection {
             return Ok(());
         }
 
+        let mut rp = rp;
+        // Events of a new handle being held (see PendingHandle).
+        if let Some(rp) = rp.as_deref_mut() {
+            if let Some(p) = rp.pending_handles.get_mut(&header.object) {
+                let iface = p.iface;
+                let desc =
+                    iface
+                        .events
+                        .get(header.opcode as usize)
+                        .ok_or(WireError::BadOpcode {
+                            interface: iface.name,
+                            opcode: header.opcode,
+                            dir: Dir::Event,
+                        })?;
+                let args = wire::decode_args(desc.signature, body, &mut self.from_server.fds)
+                    .map_err(|_| WireError::Truncated {
+                        interface: iface.name,
+                        message: desc.name,
+                    })?;
+                p.msgs.push(Msg::new(header.object, header.opcode, args));
+                if desc.name == "done" {
+                    let p = rp.pending_handles.remove(&header.object).unwrap();
+                    self.settle_handle(header.object, p, rp)?;
+                }
+                return Ok(());
+            }
+        }
+
         let c = self
             .ids
             .s2c(header.object)
@@ -931,9 +1057,125 @@ impl Connection {
                 id: header.object,
                 dir: Dir::Event,
             })?;
-        let (mut msg, iface, desc) =
+        let (msg, iface, desc) =
             self.model
                 .decode(Dir::Event, header, c, body, &mut self.from_server.fds)?;
+        // A new foreign-toplevel handle while rebuilding: held until its details tell which
+        // of the app's handles (the same window) it is.
+        if let Some(rp) = rp.as_deref_mut() {
+            if desc.name == "toplevel"
+                && matches!(
+                    iface.name,
+                    "zwlr_foreign_toplevel_manager_v1" | "ext_foreign_toplevel_list_v1"
+                )
+            {
+                if let (Some(wire::A::New(s)), Some(child)) =
+                    (msg.args.first(), desc.child_interface)
+                {
+                    let s = *s;
+                    rp.pending_handles.insert(
+                        s,
+                        PendingHandle {
+                            iface: child,
+                            creation: (c, msg, iface, desc),
+                            msgs: Vec::new(),
+                        },
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        self.deliver(c, msg, iface, desc, rp)
+    }
+
+    /// A held handle's details are in: it takes over the app's handle of the same window, or
+    /// goes to the app as a new one.
+    fn settle_handle(
+        &mut self,
+        s: u32,
+        p: PendingHandle,
+        rp: &mut ReplayState,
+    ) -> Result<(), WireError> {
+        let iface = p.iface;
+        let last = |name: &str| {
+            p.msgs.iter().rev().find_map(|m| {
+                (iface.events[m.opcode as usize].name == name)
+                    .then(|| match m.args.first() {
+                        Some(wire::A::Str(Some(v))) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .flatten()
+            })
+        };
+        let (identifier, app_id, title) = (last("identifier"), last("app_id"), last("title"));
+        let manager = self.model.key_of(p.creation.0);
+        let candidates: Vec<(model::Key, u32)> = self
+            .model
+            .objs
+            .iter()
+            .filter(|(k, o)| {
+                o.alive
+                    && !o.on_server
+                    && o.iface.name == iface.name
+                    && o.parent == manager
+                    && !rp.matched.contains(k)
+            })
+            .map(|(k, o)| (*k, o.id))
+            .collect();
+        let meta = |k: model::Key, n: &str| self.model.meta_of(k, n).map(|v| v.to_vec());
+        let found = if identifier.is_some() {
+            candidates
+                .iter()
+                .find(|(k, _)| meta(*k, "identifier") == identifier)
+        } else {
+            candidates
+                .iter()
+                .find(|(k, _)| meta(*k, "app_id") == app_id && meta(*k, "title") == title)
+                .or_else(|| {
+                    let same_app: Vec<_> = candidates
+                        .iter()
+                        .filter(|(k, _)| meta(*k, "app_id") == app_id)
+                        .collect();
+                    (same_app.len() == 1).then(|| same_app[0])
+                })
+        }
+        .copied();
+
+        match found {
+            Some((key, cid)) => {
+                self.ids.pair(cid, s);
+                self.model.objs.get_mut(&key).unwrap().on_server = true;
+                rp.matched.insert(key);
+                for mut m in p.msgs {
+                    let desc = &iface.events[m.opcode as usize];
+                    m.object = cid;
+                    self.deliver(cid, m, iface, desc, Some(rp))?;
+                }
+            }
+            None => {
+                let (c, m, miface, mdesc) = p.creation;
+                self.deliver(c, m, miface, mdesc, Some(rp))?;
+                for mut m in p.msgs {
+                    let Some(cid) = self.ids.s2c(s) else { break };
+                    let desc = &iface.events[m.opcode as usize];
+                    m.object = cid;
+                    self.deliver(cid, m, iface, desc, Some(rp))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Hands a decoded event (object already the client's, arguments still the compositor's)
+    /// to the app.
+    fn deliver(
+        &mut self,
+        c: u32,
+        mut msg: Msg,
+        iface: &'static wayland_backend::protocol::Interface,
+        desc: &'static wayland_backend::protocol::MessageDesc,
+        rp: Option<&mut ReplayState>,
+    ) -> Result<(), WireError> {
         let model = &self.model;
         let server_end = model.server_end;
         if let Fate::Swallow = self.ids.event(
@@ -971,7 +1213,10 @@ impl Connection {
             // for the copy); only the outcome goes through.
             // (The copy is sent again only if the compositor still wants the same buffer;
             // otherwise the app is told the copy failed and asks again.)
-            ("zwlr_screencopy_frame_v1", "buffer" | "linux_dmabuf" | "buffer_done") => {
+            (
+                "zwlr_screencopy_frame_v1" | "hyprland_toplevel_export_frame_v1",
+                "buffer" | "linux_dmabuf" | "buffer_done",
+            ) => {
                 if self
                     .model
                     .live(c)
@@ -1101,6 +1346,9 @@ impl Connection {
         if !self.hub.wait_gone(self.generation, Duration::from_secs(3)) {
             return Err(End::CompositorClosed(None));
         }
+        let owner = !self.model.is_observer();
+        let old_generation = self.generation;
+        self.hub.detached(old_generation, owner);
         for m in self.model.detach() {
             self.to_client.push_msg(m);
         }
@@ -1122,8 +1370,17 @@ impl Connection {
         self.server = server;
         self.generation = generation;
         self.ids.reset();
+        if !owner {
+            // Imports, window copies and foreign-toplevel handles refer to other apps' windows:
+            // those first.
+            self.hub.wait_owners(old_generation);
+        }
         let started = Instant::now();
-        match self.replay() {
+        let result = self.replay();
+        if owner {
+            self.hub.owner_done(old_generation);
+        }
+        match result {
             Ok(count) => {
                 info!(
                     "wl-proxy: {}: carried over to the new compositor ({count} objects, {} ms)",

@@ -220,6 +220,17 @@ impl MappedId {
         self.0
     }
 
+    /// After an in-place restart: ids up to `id` are the previous compositor's (windows get
+    /// theirs back, see `session.rs`).
+    pub fn reserve(id: u64) {
+        MAPPED_ID_COUNTER.reserve(id);
+    }
+
+    /// A previous compositor's id (in-place restart).
+    pub fn from_previous(id: u64) -> MappedId {
+        MappedId(id)
+    }
+
     /// Converts the ID to a string that can be used as an identifier in
     /// ext_foreign_toplevel_handle_v1::identifier
     ///
@@ -357,6 +368,12 @@ impl Mapped {
 
     pub fn set_needs_configure(&mut self) {
         self.needs_configure = true;
+    }
+
+    /// Gives the window back the id it had in the previous compositor (in-place restart), so
+    /// IPC ids and foreign-toplevel identifiers stay the same.
+    pub fn restore_id(&mut self, id: MappedId) {
+        self.id = id;
     }
 
     pub fn id(&self) -> MappedId {

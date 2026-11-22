@@ -91,6 +91,9 @@ pub struct Obj {
     pub frame_buffer: Option<Vec<u32>>,
     /// Rebuilt by the proxy in the current compositor (not created by the app there).
     pub rebuilt: bool,
+    /// Foreign-toplevel handles: app_id, title, identifier (for matching the new compositor's
+    /// handle of the same window).
+    pub meta: Vec<(&'static str, Vec<u8>)>,
 }
 
 /// How a request is remembered.
@@ -164,6 +167,18 @@ const SOURCES: &[&str] = &[
     "zwp_primary_selection_source_v1",
     "zwlr_data_control_source_v1",
     "ext_data_control_source_v1",
+];
+
+/// Screen and window copies: redone in the new compositor while in flight.
+pub const FRAMES: &[&str] = &[
+    "zwlr_screencopy_frame_v1",
+    "hyprland_toplevel_export_frame_v1",
+];
+
+/// Foreign-toplevel handles: matched to the new compositor's handle of the same window.
+pub const HANDLES: &[&str] = &[
+    "zwlr_foreign_toplevel_handle_v1",
+    "ext_foreign_toplevel_handle_v1",
 ];
 
 /// Role objects whose surface gets a first commit without a buffer and a configure to ack.
@@ -250,6 +265,7 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
         ("zwp_virtual_keyboard_v1", "keymap") => Kind::Set(n),
         ("zxdg_imported_v2", "set_parent_of") => Kind::Set(n),
         ("zwlr_screencopy_frame_v1", "copy" | "copy_with_damage") => Kind::Set("copy"),
+        ("hyprland_toplevel_export_frame_v1", "copy") => Kind::Set("copy"),
         (
             "xdg_toplevel",
             "set_parent" | "set_title" | "set_app_id" | "set_max_size" | "set_min_size",
@@ -361,6 +377,7 @@ impl Model {
                 handle: None,
                 frame_buffer: None,
                 rebuilt: false,
+                meta: Vec::new(),
             },
         );
         if let Some(old) = self.by_id.insert(id, key) {
@@ -500,7 +517,7 @@ impl Model {
         {
             self.objs.get_mut(&key).unwrap().awaiting = true;
         }
-        if iface.name == "zwlr_screencopy_frame_v1" && kind == Kind::Set("copy") {
+        if FRAMES.contains(&iface.name) && kind == Kind::Set("copy") {
             self.objs.get_mut(&key).unwrap().handle = Some(Vec::new());
         }
         if kind == Kind::Special && desc.name == "ack_configure" {
@@ -541,7 +558,7 @@ impl Model {
                 }
             };
             let k = self.insert(id, child, ver, Some(key), Creation::Event, forward);
-            if child.name == "zwlr_screencopy_frame_v1" {
+            if FRAMES.contains(&child.name) {
                 self.objs.get_mut(&k).unwrap().awaiting = true;
             }
             new_keys.insert(id, k);
@@ -659,7 +676,18 @@ impl Model {
                     o.handle.get_or_insert_with(|| h.clone());
                 }
             }
-            ("zwlr_screencopy_frame_v1", "buffer") => {
+            (
+                "zwlr_foreign_toplevel_handle_v1" | "ext_foreign_toplevel_handle_v1",
+                "app_id" | "title" | "identifier",
+            ) => {
+                if let (Some(o), Some(A::Str(Some(v)))) =
+                    (key.and_then(|k| self.objs.get_mut(&k)), msg.args.first())
+                {
+                    o.meta.retain(|(n, _)| *n != desc.name);
+                    o.meta.push((desc.name, v.clone()));
+                }
+            }
+            ("zwlr_screencopy_frame_v1" | "hyprland_toplevel_export_frame_v1", "buffer") => {
                 if let Some(o) = key
                     .and_then(|k| self.objs.get_mut(&k))
                     .filter(|o| o.frame_buffer.is_none())
@@ -676,7 +704,10 @@ impl Model {
                     );
                 }
             }
-            ("zwlr_screencopy_frame_v1", "ready" | "failed") => {
+            (
+                "zwlr_screencopy_frame_v1" | "hyprland_toplevel_export_frame_v1",
+                "ready" | "failed",
+            ) => {
                 if let Some(o) = key.and_then(|k| self.objs.get_mut(&k)) {
                     o.awaiting = false;
                 }
@@ -727,6 +758,31 @@ impl Model {
         true
     }
 
+    /// Refers to other apps' windows (imports, window copies, foreign-toplevel handles): its
+    /// rebuild waits for the apps that own windows (`Hub::wait_owners`).
+    pub fn is_observer(&self) -> bool {
+        self.by_id.values().any(|k| {
+            let o = &self.objs[k];
+            o.alive
+                && matches!(
+                    o.iface.name,
+                    "zxdg_imported_v2"
+                        | "hyprland_toplevel_export_frame_v1"
+                        | "zwlr_foreign_toplevel_manager_v1"
+                        | "ext_foreign_toplevel_list_v1"
+                )
+        })
+    }
+
+    /// The handle's matching keys: (identifier) for ext handles, (app_id, title) for wlr ones.
+    pub fn meta_of(&self, key: Key, name: &str) -> Option<&[u8]> {
+        self.objs[&key]
+            .meta
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.as_slice())
+    }
+
     /// Whether an object would be rebuilt in a new compositor (as far as can be told without
     /// the new compositor's globals).
     pub fn persists(&self, key: Key) -> bool {
@@ -757,7 +813,7 @@ impl Model {
             || REPLAYABLE.contains(&o.iface.name)
             || (SOURCES.contains(&o.iface.name) && self.holds_selection(key))
             // A token or a screen copy the app is still waiting for: asked for again.
-            || (matches!(o.iface.name, "xdg_activation_token_v1" | "zwlr_screencopy_frame_v1")
+            || ((o.iface.name == "xdg_activation_token_v1" || FRAMES.contains(&o.iface.name))
                 && o.awaiting)
     }
 
@@ -853,7 +909,9 @@ impl Model {
                 o.busy = false;
                 out.push(Msg::new(id, 0, vec![]));
             }
-            if !persists {
+            // Foreign-toplevel handles stay: the new compositor's handle of the same window takes
+            // over (replay.rs); those of windows that don't come back are closed then.
+            if !persists && !HANDLES.contains(&iface.name) {
                 let ending = ENDINGS.iter().find_map(|name| {
                     let op = event_by_name(iface, name)?;
                     iface.events[op as usize].signature.is_empty().then_some(op)

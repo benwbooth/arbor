@@ -934,10 +934,19 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   - xdg-foreign: an exported window gets a new handle from the new
     compositor; the app keeps (and has passed on) its first one, so the
     supervisor keeps a map first → current for all its apps and translates
-    `import_toplevel` (portal dialogs keep their parent window). An import
-    replayed before its exporter is rebuilt can still miss (they're
-    rebuilt in parallel).
-  - Screen copies in flight (wlr-screencopy): the frame is asked for again;
+    `import_toplevel` (portal dialogs keep their parent window).
+  - Rebuild order: apps that refer to other apps' windows (xdg-foreign
+    imports, window copies, foreign-toplevel managers: taskbars, hearth)
+    are rebuilt after the apps that own windows (`Hub::wait_owners`, 3 s
+    at most); the others all at once.
+  - Foreign-toplevel handles (wlr and ext) aren't closed at a swap: the new
+    compositor's handle of the same window takes over the app's (matched by
+    identifier for ext handles, which stay the same since window ids do; by
+    app id and title for wlr ones), so taskbars see no window close and
+    reopen. Handles of windows that don't come back are closed.
+  - Screen and window copies in flight (wlr-screencopy,
+    hyprland-toplevel-export; by window id or through a foreign-toplevel
+    handle, then once that handle is matched): the frame is asked for again;
     if the app had already asked for the copy and the new compositor wants
     the same buffer, the copy is asked for again too and the repeated
     buffer details are kept from the app; if the buffer changed (another
@@ -947,7 +956,10 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   them), are saved with the restart layout and taken back by the next
   compositor; KDE apps that left the bus meanwhile are dropped.
 - With the proxy, the focused window keeps the focus: windows mapping later
-  during the restore give it back.
+  during the restore give it back. Windows also keep their ids (IPC ids,
+  ext-foreign-toplevel identifiers, window-copy targets): the restart file
+  saves them and the next compositor gives each window its id back when it
+  maps (matched by pid, app id and title).
 
 Code: `src/supervisor.rs`, `src/wl_proxy/`, the restart half of
 `src/session.rs`.
@@ -1068,7 +1080,7 @@ binary in a test profile, a GTK app and foot surviving `reload-binary`):
 | 1 | **Done.** Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations, data device, cursor shape; id and global translation. Verified nested: foot, zenity (GTK4), Konsole (with Qt's own reconnect off) and Brave survive `reload-binary` twice and a SIGKILL crash, same pids, drawing, keyboard input working (foot runs typed commands, Brave's address bar navigates). Window tokens not needed yet (app id + title matching works since the pids stay). | ~1.5k |
 | 2 | **Done.** text-input, pointer constraints/relative, gestures, idle inhibit/notify, primary selection and data control, the clipboard owner keeps the selection (smithay vendored for it), gtk_surface1/appmenu. Verified nested: Brave and the Claude app (test profile) survive with the same pids and keep drawing. xdg-activation tokens pending at a swap are not rebuilt (an app waiting on one gets no answer). | ~0.5k |
 | 3 | **Done.** xwayland-satellite under the supervisor; layer-shell (hearth keeps running); crash restarts use the same path. Verified nested: hearth, xterm (X11), foot, Brave and wl-copy's clipboard survive reloads and a SIGKILL crash. | ~0.3k |
-| 4 | **Done.** Activation tokens, security-context (flatpak) listeners in the proxy, portal and KDE shortcut state kept, xdg-foreign handles kept (aliases), screen copies in flight redone; devloop swaps again (only proxied sessions). Not done: replay fuzzing. Still failing at a swap: hyprland-toplevel-export frames (window previews; they name windows by compositor ids, the app gets `failed` and asks again). | ~0.6k |
+| 4 | **Done.** Activation tokens, security-context (flatpak) listeners in the proxy, portal and KDE shortcut state kept, xdg-foreign handles kept (aliases), screen and window copies in flight redone, foreign-toplevel handles kept, window ids kept, rebuild order (observers after owners); devloop swaps again (only proxied sessions). Not done: replay fuzzing. | ~1k |
 
 It came to about 3.5k lines (plus vendored smithay).
 

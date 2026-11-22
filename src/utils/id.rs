@@ -17,6 +17,12 @@ impl IdCounter {
     pub fn next(&self) -> u64 {
         self.value.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Makes sure later ids come after `value` (ids handed over from a previous process).
+    pub fn reserve(&self, value: u64) {
+        self.value
+            .fetch_max(value.saturating_add(1), Ordering::Relaxed);
+    }
 }
 
 impl Default for IdCounter {

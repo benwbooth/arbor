@@ -126,6 +126,9 @@ impl Connection {
                     _ => true,
                 };
                 bind_ok
+                    // Window copies through a foreign-toplevel handle wait for the handle
+                    // (postponed_frames).
+                    && !refs_handle(m, rec)
                     && m.replayable_iface(key)
                     && m.role_ok(key)
                     && parent_ok(memo)
@@ -331,7 +334,7 @@ impl Connection {
                 .filter(|(g, _)| {
                     !(iface.name == "wl_surface" && matches!(**g, "attach" | "offset"))
                         // Sent once the new compositor's buffer details came (redo_screen_copy).
-                        && !(iface.name == "zwlr_screencopy_frame_v1" && **g == "copy")
+                        && !(super::model::FRAMES.contains(&iface.name) && **g == "copy")
                 })
                 .map(|(_, r)| r.clone())
                 .chain(o.accum.iter().cloned())
@@ -422,6 +425,57 @@ impl Connection {
         rp.auto_ack = true;
         self.roundtrip(&mut rp)?;
 
+        // Window copies through a foreign-toplevel handle: now that the app's handles were
+        // matched to the new compositor's (foreign-toplevel managers were rebound above), asked
+        // for again through the same window's handle; those whose window is gone failed.
+        let postponed: Vec<Key> = self
+            .model
+            .by_id
+            .values()
+            .copied()
+            .filter(|k| {
+                let o = &self.model.objs[k];
+                o.alive
+                    && o.awaiting
+                    && super::model::FRAMES.contains(&o.iface.name)
+                    && matches!(&o.creation, Creation::Request(rec) if refs_handle(&self.model, rec))
+            })
+            .collect();
+        for k in postponed {
+            let o = &self.model.objs[&k];
+            let (frame_id, frame_iface) = (o.id, o.iface);
+            let Creation::Request(rec) = o.creation.clone() else {
+                continue;
+            };
+            let manager = o.parent.unwrap();
+            let handles: Vec<(Key, u32)> = rec
+                .refs()
+                .filter_map(|h| {
+                    let ho = self.model.objs.get(&h)?;
+                    (ho.alive && ho.on_server).then(|| Some((h, self.ids.c2s(ho.id)?)))?
+                })
+                .collect();
+            for (h, hs) in &handles {
+                ks.insert(*h, *hs);
+            }
+            let msg = (handles.len() == rec.refs().count())
+                .then(|| {
+                    let ms = *ks.get(&manager)?;
+                    let miface = self.model.objs[&manager].iface;
+                    self.build(&rec, miface, ms, &mut ks).map(|m| (m, miface))
+                })
+                .flatten();
+            match msg {
+                Some((m, miface)) => self.send_replay(m, miface),
+                None => {
+                    if let Some(op) = super::model::event_by_name(frame_iface, "failed") {
+                        self.to_client.push_msg(Msg::new(frame_id, op, vec![]));
+                    }
+                    self.model.objs.get_mut(&k).unwrap().awaiting = false;
+                }
+            }
+        }
+
         // 4. Buffers back up, children before parents. Surfaces whose role wasn't rebuilt
         // (popups) stay unmapped.
         let depth = |mut k: Key| {
@@ -493,6 +547,30 @@ impl Connection {
         }
         self.roundtrip(&mut rp)?;
 
+        // Handles still being held: new windows for the app after all.
+        let held: Vec<u32> = rp.pending_handles.keys().copied().collect();
+        for s in held {
+            let p = rp.pending_handles.remove(&s).unwrap();
+            self.settle_handle(s, p, &mut rp)
+                .map_err(|e| format!("handle: {e}"))?;
+        }
+        // The app's handles of windows that didn't come back: closed.
+        let closed: Vec<(u32, &'static Interface)> = self
+            .model
+            .by_id
+            .values()
+            .filter_map(|k| {
+                let o = &self.model.objs[k];
+                (o.alive && !o.on_server && super::model::HANDLES.contains(&o.iface.name))
+                    .then_some((o.id, o.iface))
+            })
+            .collect();
+        for (id, iface) in closed {
+            if let Some(op) = super::model::event_by_name(iface, "closed") {
+                self.to_client.push_msg(Msg::new(id, op, vec![]));
+            }
+        }
+
         let mut count = 0;
         for k in &wanted {
             if let Some(o) = self.model.objs.get_mut(k) {
@@ -537,4 +615,13 @@ fn required_refs_ok(
             (V::Obj(None), ArgumentType::Object(AllowNull::No)) => false,
             _ => true,
         })
+}
+
+/// A request that names a foreign-toplevel handle (a window copy through a handle).
+fn refs_handle(m: &super::model::Model, rec: &Rec) -> bool {
+    rec.refs().any(|k| {
+        m.objs
+            .get(&k)
+            .is_some_and(|o| super::model::HANDLES.contains(&o.iface.name))
+    })
 }
