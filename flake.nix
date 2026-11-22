@@ -46,8 +46,6 @@
 
         let
           cargoDeps = rustPlatform.importCargoLock {
-            # allowBuiltinFetchGit: smithay is a git dependency.
-            allowBuiltinFetchGit = true;
             lockFile = ./Cargo.lock;
           };
           features =
@@ -66,6 +64,7 @@
               ./arbor-ipc
               ./resources
               ./src
+              ./vendor
               ./Cargo.toml
               ./Cargo.lock
             ];
