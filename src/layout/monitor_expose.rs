@@ -99,7 +99,7 @@ type ThumbWindow = ((i32, i32, i32, i32), String, bool);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ThumbKey {
-    /// The layer under the live windows (background, the new workspace's "+") rather than the
+    /// The layer under the live windows (the background) rather than the
     /// one over them (app icons, name, border).
     back: bool,
     size: (i32, i32),
@@ -107,7 +107,6 @@ struct ThumbKey {
     name: String,
     is_active: bool,
     is_hovered: bool,
-    is_new: bool,
     windows: Vec<ThumbWindow>,
 }
 
@@ -590,7 +589,6 @@ impl<W: LayoutElement> Monitor<W> {
                 scale,
                 idx == active_ws,
                 hover_thumb == Some(idx) || drop_target == Some(idx),
-                idx + 1 == self.workspaces.len(),
             );
             let back = ThumbKey {
                 back: true,
@@ -793,7 +791,6 @@ impl<W: LayoutElement> Monitor<W> {
         scale: f64,
         is_active: bool,
         is_hovered: bool,
-        is_last: bool,
     ) -> ThumbKey {
         let view = self.view_size;
         let windows: Vec<_> = ws
@@ -832,7 +829,6 @@ impl<W: LayoutElement> Monitor<W> {
             name: ws.name().cloned().unwrap_or_else(|| format!("{}", idx + 1)),
             is_active,
             is_hovered,
-            is_new: is_last && windows.is_empty(),
             windows,
         }
     }
@@ -1033,21 +1029,11 @@ fn draw(key: &TexKey, scale: f64) -> anyhow::Result<Option<MemoryBuffer>> {
             let radius = 10. * s;
 
             if key.back {
-                // Under the live windows: the background, and the new workspace's "+".
+                // Under the live windows: the background. The spare empty workspace at the end
+                // looks like any blank desktop (no "+": there is always a fresh one).
                 rounded_rect(&cr, 0., 0., wf, hf, radius);
                 cr.set_source_rgba(0.1, 0.11, 0.13, 0.82);
                 cr.fill()?;
-                if key.is_new {
-                    let a = hf.min(wf) * 0.14;
-                    cr.move_to(wf / 2. - a, hf / 2.);
-                    cr.line_to(wf / 2. + a, hf / 2.);
-                    cr.move_to(wf / 2., hf / 2. - a);
-                    cr.line_to(wf / 2., hf / 2. + a);
-                    cr.set_source_rgba(1., 1., 1., 0.55);
-                    cr.set_line_width((2. * s).max(1.));
-                    cr.set_line_cap(cairo::LineCap::Round);
-                    cr.stroke()?;
-                }
                 return Ok(Some(finish(surf, cr, s)?));
             }
 
