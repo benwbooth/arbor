@@ -174,6 +174,12 @@ pub fn take_from_env() {
     let Some(control) = env_fd(ENV_CONTROL) else {
         return;
     };
+    // The supervisor execs us through /proc/self/fd/N, which names the process "N" (it was "3"):
+    // name it arbor again, for ps/top and for earlyoom's list of processes never to kill.
+    // SAFETY: PR_SET_NAME with a NUL-terminated string of at most 16 bytes.
+    unsafe {
+        libc::prctl(libc::PR_SET_NAME, c"arbor".as_ptr());
+    }
     let start = match env_take(ENV_START).as_deref().and_then(|s| s.to_str()) {
         Some("reload") => StartKind::Reload,
         Some("crash") => StartKind::Crash,
