@@ -134,6 +134,9 @@
               # The linker wrapper rejects output paths outside the build dir.
               export NIX_ENFORCE_PURITY=0
               cd "$workDir/src"
+              # (No LTO and incremental: a change rebuilds in seconds, not
+              # the whole crate and its link-time optimisation in minutes.)
+              CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_INCREMENTAL=true \
               CARGO_HOME="$NIX_BUILD_TOP/.cargo" CARGO_TARGET_DIR="$workDir/target" \
                 cargo build --profile "$profile" --bin arbor --offline --locked \
                   -j "$NIX_BUILD_CORES" --no-default-features \
