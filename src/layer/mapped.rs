@@ -150,15 +150,10 @@ impl MappedLayer {
         if self.glass_config.off || self.popup_glass.is_empty() {
             return Vec::new();
         }
-        self.popup_glass
-            .iter()
-            .filter(|g| {
-                // With one pop-up open, it gets every pop-up entry (its size may lag behind).
-                popup_count == 1
-                    || g.surface_size
-                        .is_none_or(|(w, h)| (w - size.0).abs() <= 1. && (h - size.1).abs() <= 1.)
-            })
-            .flat_map(|g| g.shapes.iter())
+        let entries = crate::glass::popup_entries_for(&self.popup_glass, size, popup_count);
+        entries
+            .into_iter()
+            .flat_map(|i| self.popup_glass[i].shapes.iter())
             .collect()
     }
 

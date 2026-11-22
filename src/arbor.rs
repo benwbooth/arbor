@@ -4780,7 +4780,22 @@ impl Arbor {
 
     /// arbor: applies a `SetGlass` IPC request.
     pub fn set_glass(&mut self, req: arbor_ipc::SetGlass) {
+        // Logged when an entry comes or goes (not on every move), so entries a shell leaves
+        // behind show up as a growing count.
+        let before = self.glass.entries().len();
+        let what = format!(
+            "{}{} key {:?}",
+            req.namespace,
+            if req.popup { " (pop-ups)" } else { "" },
+            req.key
+        );
+        let clearing = req.shapes.is_empty();
         if self.glass.set(req) {
+            let after = self.glass.entries().len();
+            if after != before {
+                let verb = if clearing { "cleared" } else { "added" };
+                debug!("glass: {verb} {what}, {after} entries");
+            }
             self.refresh_glass();
         }
     }

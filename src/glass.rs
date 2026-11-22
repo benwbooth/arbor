@@ -179,6 +179,39 @@ pub fn pick_targets(surface_size: Option<(f64, f64)>, candidates: &[(f64, f64)])
     }
 }
 
+/// Which pop-up entries (by index) a pop-up of `size` draws, with `popup_count` pop-ups open.
+///
+/// Entries with a size go to the pop-up of that size (within [`SIZE_TOLERANCE`]); entries
+/// without one go to every pop-up. With a single pop-up open, its size may lag behind its
+/// entry's, so when no sized entry matches it takes the closest one, but never every entry: a
+/// shell that leaves entries of closed pop-ups behind would otherwise stack all of their panes
+/// under it.
+pub fn popup_entries_for(
+    entries: &[PopupGlass],
+    size: (f64, f64),
+    popup_count: usize,
+) -> Vec<usize> {
+    let dist = |(w, h): (f64, f64)| (w - size.0).abs().max((h - size.1).abs());
+    let mut out: Vec<usize> = (0..entries.len())
+        .filter(|&i| {
+            entries[i]
+                .surface_size
+                .is_none_or(|s| dist(s) <= SIZE_TOLERANCE)
+        })
+        .collect();
+    let any_sized_match = out.iter().any(|&i| entries[i].surface_size.is_some());
+    if popup_count == 1 && !any_sized_match {
+        let closest = (0..entries.len())
+            .filter_map(|i| entries[i].surface_size.map(|s| (i, dist(s))))
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = closest {
+            out.push(i);
+            out.sort_unstable();
+        }
+    }
+    out
+}
+
 /// Resolves an entry's shapes into instances (surface-local).
 pub fn instances(entry: &GlassEntry) -> Vec<GlassInstance> {
     entry
@@ -320,6 +353,25 @@ mod tests {
         assert_eq!(pick_targets(Some((300., 199.5)), &c), [0]);
         assert!(pick_targets(Some((50., 50.)), &c).is_empty());
         assert_eq!(pick_targets(None, &c), [0, 1, 2]);
+    }
+
+    #[test]
+    fn popup_entries_by_size() {
+        let e = |size: Option<(f64, f64)>| PopupGlass {
+            surface_size: size,
+            shapes: Vec::new(),
+        };
+        // A menu, a leftover tooltip entry and an unsized entry.
+        let entries = [e(Some((300., 400.))), e(Some((120., 40.))), e(None)];
+        // One pop-up open, of the menu's size: the menu's entry and the unsized one, not the
+        // leftover tooltip's.
+        assert_eq!(popup_entries_for(&entries, (300., 400.), 1), [0, 2]);
+        // One pop-up whose size lags behind: the closest sized entry.
+        assert_eq!(popup_entries_for(&entries, (310., 380.), 1), [0, 2]);
+        // Several pop-ups: only exact (within a pixel) sizes.
+        assert_eq!(popup_entries_for(&entries, (310., 380.), 2), [2]);
+        assert_eq!(popup_entries_for(&entries, (120.5, 40.), 2), [1, 2]);
+        assert!(popup_entries_for(&[], (1., 1.), 1).is_empty());
     }
 
     #[test]
