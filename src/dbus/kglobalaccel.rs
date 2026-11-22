@@ -595,6 +595,8 @@ async fn emit(conn: &zbus::Connection, event: KdeEvent) -> zbus::Result<()> {
                 .await?;
             KGlobalAccel::your_shortcut_got_changed(&emitter, action_id, first_ints(&keys)).await
         }
+        // Handled in start_service().
+        KdeEvent::Restored { .. } => Ok(()),
     }
 }
 
@@ -665,8 +667,26 @@ fn start_service(
     let async_conn = conn.inner().clone();
     let emitter = {
         let conn = async_conn.clone();
+        let to_arbor = to_arbor.clone();
         async move {
             while let Ok(event) = from_arbor.recv().await {
+                if let KdeEvent::Restored { components, owners } = event {
+                    to_arbor.export(conn.object_server(), components).await;
+                    // Apps that left while no compositor was there to notice.
+                    if let Ok(proxy) = fdo::DBusProxy::new(&conn).await {
+                        for owner in owners {
+                            let Ok(name) = zbus::names::BusName::try_from(owner.clone()) else {
+                                continue;
+                            };
+                            if !proxy.name_has_owner(name).await.unwrap_or(true) {
+                                let _ = to_arbor
+                                    .gs(move |gs, _, _| gs.kde_owner_vanished(&owner))
+                                    .await;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Err(err) = emit(&conn, event).await {
                     warn!("error emitting kglobalaccel signal: {err:?}");
                 }

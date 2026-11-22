@@ -80,7 +80,17 @@ pub struct Obj {
     /// app ignores a `done` whose serial isn't its own count).
     pub commits: u32,
     /// xdg_activation_token_v1: committed, its token not sent yet.
+    /// zwlr_screencopy_frame_v1: neither ready nor failed yet.
     pub awaiting: bool,
+    /// zxdg_exported_v2: the handle the app got first (later compositors' handles are aliases
+    /// of it, see `Hub::aliases`). zwlr_screencopy_frame_v1: set (empty) once the app asked
+    /// for the copy.
+    pub handle: Option<Vec<u8>>,
+    /// zwlr_screencopy_frame_v1: the shm buffer the compositor asked for (format, width,
+    /// height, stride), which the app's buffer matches.
+    pub frame_buffer: Option<Vec<u32>>,
+    /// Rebuilt by the proxy in the current compositor (not created by the app there).
+    pub rebuilt: bool,
 }
 
 /// How a request is remembered.
@@ -143,6 +153,8 @@ const REPLAYABLE: &[&str] = &[
     "ext_background_effect_surface_v1",
     "zwp_virtual_keyboard_v1",
     "zwlr_virtual_pointer_v1",
+    "zxdg_exported_v2",
+    "zxdg_imported_v2",
 ];
 
 /// Selection sources: rebuilt only while they hold a selection (a device's last
@@ -236,6 +248,8 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
         ("org_kde_kwin_appmenu", "set_address") => Kind::Set(n),
         ("ext_background_effect_surface_v1", "set_blur_region") => Kind::Set(n),
         ("zwp_virtual_keyboard_v1", "keymap") => Kind::Set(n),
+        ("zxdg_imported_v2", "set_parent_of") => Kind::Set(n),
+        ("zwlr_screencopy_frame_v1", "copy" | "copy_with_damage") => Kind::Set("copy"),
         (
             "xdg_toplevel",
             "set_parent" | "set_title" | "set_app_id" | "set_max_size" | "set_min_size",
@@ -344,6 +358,9 @@ impl Model {
                 serials: Vec::new(),
                 commits: 0,
                 awaiting: false,
+                handle: None,
+                frame_buffer: None,
+                rebuilt: false,
             },
         );
         if let Some(old) = self.by_id.insert(id, key) {
@@ -483,6 +500,9 @@ impl Model {
         {
             self.objs.get_mut(&key).unwrap().awaiting = true;
         }
+        if iface.name == "zwlr_screencopy_frame_v1" && kind == Kind::Set("copy") {
+            self.objs.get_mut(&key).unwrap().handle = Some(Vec::new());
+        }
         if kind == Kind::Special && desc.name == "ack_configure" {
             if let Some(A::Uint(serial)) = msg.args.first() {
                 let serial = *serial;
@@ -521,6 +541,9 @@ impl Model {
                 }
             };
             let k = self.insert(id, child, ver, Some(key), Creation::Event, forward);
+            if child.name == "zwlr_screencopy_frame_v1" {
+                self.objs.get_mut(&k).unwrap().awaiting = true;
+            }
             new_keys.insert(id, k);
         }
 
@@ -629,6 +652,35 @@ impl Model {
                     self.globals.remove(name);
                 }
             }
+            ("zxdg_exported_v2", "handle") => {
+                if let (Some(o), Some(A::Str(Some(h)))) =
+                    (key.and_then(|k| self.objs.get_mut(&k)), msg.args.first())
+                {
+                    o.handle.get_or_insert_with(|| h.clone());
+                }
+            }
+            ("zwlr_screencopy_frame_v1", "buffer") => {
+                if let Some(o) = key
+                    .and_then(|k| self.objs.get_mut(&k))
+                    .filter(|o| o.frame_buffer.is_none())
+                {
+                    o.frame_buffer = Some(
+                        msg.args
+                            .iter()
+                            .filter_map(|a| match a {
+                                A::Uint(v) => Some(*v),
+                                A::Int(v) => Some(*v as u32),
+                                _ => None,
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            ("zwlr_screencopy_frame_v1", "ready" | "failed") => {
+                if let Some(o) = key.and_then(|k| self.objs.get_mut(&k)) {
+                    o.awaiting = false;
+                }
+            }
             ("xdg_activation_token_v1", "done") => {
                 if let Some(o) = key.and_then(|k| self.objs.get_mut(&k)) {
                     o.awaiting = false;
@@ -704,8 +756,9 @@ impl Model {
         global
             || REPLAYABLE.contains(&o.iface.name)
             || (SOURCES.contains(&o.iface.name) && self.holds_selection(key))
-            // A token the app is still waiting for: asked for again.
-            || (o.iface.name == "xdg_activation_token_v1" && o.awaiting)
+            // A token or a screen copy the app is still waiting for: asked for again.
+            || (matches!(o.iface.name, "xdg_activation_token_v1" | "zwlr_screencopy_frame_v1")
+                && o.awaiting)
     }
 
     /// A selection source some device's last set_selection / set_primary_selection names.
@@ -1040,5 +1093,49 @@ mod tests {
         ev.extend(string("token"));
         feed(&mut m, Dir::Event, &raw(21, op, &ev));
         assert!(!m.persists(key));
+    }
+
+    #[test]
+    fn screen_copies_in_flight_persist() {
+        let mut m = toplevel();
+        let mut ev = global(4, "wl_output", 4);
+        ev.extend(global(5, "zwlr_screencopy_manager_v1", 3));
+        feed(&mut m, Dir::Event, &ev);
+        feed(&mut m, Dir::Request, &bind(4, "wl_output", 4, 20));
+        feed(
+            &mut m,
+            Dir::Request,
+            &bind(5, "zwlr_screencopy_manager_v1", 3, 21),
+        );
+        req(&mut m, 21, "capture_output", &[22, 0, 20]);
+        let key = m.key_of(22).unwrap();
+        assert!(m.persists(key));
+        let iface = m.iface_of(22).unwrap();
+        let buffer = event_by_name(iface, "buffer").unwrap();
+        feed(&mut m, Dir::Event, &raw(22, buffer, &[1, 640, 480, 2560]));
+        assert_eq!(
+            m.live(22).unwrap().frame_buffer,
+            Some(vec![1, 640, 480, 2560])
+        );
+        let ready = event_by_name(iface, "ready").unwrap();
+        feed(&mut m, Dir::Event, &raw(22, ready, &[0, 0, 0]));
+        assert!(!m.persists(key));
+    }
+
+    #[test]
+    fn exports_keep_their_first_handle() {
+        let mut m = toplevel();
+        feed(&mut m, Dir::Event, &global(4, "zxdg_exporter_v2", 1));
+        feed(&mut m, Dir::Request, &bind(4, "zxdg_exporter_v2", 1, 20));
+        req(&mut m, 20, "export_toplevel", &[21, 5]);
+        assert!(m.persists(m.key_of(21).unwrap()));
+        let iface = m.iface_of(21).unwrap();
+        let op = event_by_name(iface, "handle").unwrap();
+        for h in ["first", "second"] {
+            let mut ev = vec![];
+            ev.extend(string(h));
+            feed(&mut m, Dir::Event, &raw(21, op, &ev));
+        }
+        assert_eq!(m.live(21).unwrap().handle.as_deref(), Some(&b"first"[..]));
     }
 }

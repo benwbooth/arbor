@@ -198,7 +198,8 @@ impl Connection {
                 V::New(k) => {
                     let s = self.ids.alloc();
                     ks.insert(*k, s);
-                    let o = &self.model.objs[k];
+                    let o = self.model.objs.get_mut(k).unwrap();
+                    o.rebuilt = true;
                     if o.alive {
                         self.ids.pair(o.id, s);
                     } else {
@@ -298,13 +299,17 @@ impl Connection {
                         .map(|m| (m, piface))
                 }
             };
-            let Some((msg, target_iface)) = msg else {
+            let Some((mut msg, target_iface)) = msg else {
                 debug!(
                     "wl-proxy: {}: couldn't rebuild {}#{}",
                     self.label, iface.name, self.model.objs[&k].id
                 );
                 continue;
             };
+            if target_iface.name == "zxdg_importer_v2" {
+                // An import by a handle from an earlier compositor.
+                self.translate_import(&mut msg);
+            }
             self.send_replay(msg, target_iface);
             let Some(&s) = ks.get(&k) else { continue };
 
@@ -325,6 +330,8 @@ impl Connection {
                 .iter()
                 .filter(|(g, _)| {
                     !(iface.name == "wl_surface" && matches!(**g, "attach" | "offset"))
+                        // Sent once the new compositor's buffer details came (redo_screen_copy).
+                        && !(iface.name == "zwlr_screencopy_frame_v1" && **g == "copy")
                 })
                 .map(|(_, r)| r.clone())
                 .chain(o.accum.iter().cloned())

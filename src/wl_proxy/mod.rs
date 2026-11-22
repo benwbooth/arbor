@@ -254,6 +254,9 @@ pub fn recv_client(chan: BorrowedFd) -> io::Result<Option<(UnixStream, Creds)>> 
 pub struct Hub {
     state: Mutex<HubState>,
     changed: Condvar,
+    /// xdg-foreign handles: the one an app got first → the current compositor's. Apps keep
+    /// the first (and pass it on to portals and other apps); imports are translated.
+    aliases: Mutex<std::collections::HashMap<Vec<u8>, Vec<u8>>>,
 }
 
 #[derive(Default)]
@@ -302,6 +305,23 @@ impl Hub {
                 }
             }
         }
+    }
+
+    fn set_alias(&self, first: Vec<u8>, current: Vec<u8>) {
+        let mut aliases = self.aliases.lock().unwrap();
+        if first == current {
+            aliases.remove(&first);
+        } else {
+            aliases.insert(first, current);
+        }
+    }
+
+    fn resolve_alias(&self, handle: &[u8]) -> Option<Vec<u8>> {
+        self.aliases.lock().unwrap().get(handle).cloned()
+    }
+
+    fn remove_alias(&self, first: &[u8]) {
+        self.aliases.lock().unwrap().remove(first);
     }
 
     /// Waits up to `timeout` for compositor `generation` to end. False if it's still running
@@ -713,6 +733,11 @@ impl Connection {
                     break;
                 }
             };
+            if iface.name == "zxdg_exported_v2" && desc.is_destructor {
+                if let Some(first) = self.model.live(msg.object).and_then(|o| o.handle.clone()) {
+                    self.hub.remove_alias(&first);
+                }
+            }
             let (mut forward, synth) = self.model.on_request(&mut msg, iface, desc);
             for m in synth {
                 self.to_client.push_msg(m);
@@ -731,6 +756,7 @@ impl Connection {
                     }
                 }
                 ("wp_security_context_v1", "commit") => self.start_sandbox_listener(msg.object),
+                ("zxdg_importer_v2", "import_toplevel") => self.translate_import(&mut msg),
                 _ => (),
             }
             if forward {
@@ -746,6 +772,70 @@ impl Connection {
         }
         self.model.gc();
         Ok(())
+    }
+
+    /// A screen copy rebuilt in a new compositor, whose `buffer` event is `msg`: asks for the
+    /// copy again into the app's buffer if it still fits, else tells the app it failed.
+    fn redo_screen_copy(
+        &mut self,
+        frame: u32,
+        iface: &'static wayland_backend::protocol::Interface,
+        msg: &Msg,
+    ) {
+        let now: Vec<u32> = msg
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                wire::A::Uint(v) => Some(*v),
+                wire::A::Int(v) => Some(*v as u32),
+                _ => None,
+            })
+            .collect();
+        let Some(o) = self.model.live(frame) else {
+            return;
+        };
+        let copy = o.sets.get("copy").and_then(|rec| match rec.args.first() {
+            Some(model::V::Obj(Some(b))) => Some((rec.opcode, *b)),
+            _ => None,
+        });
+        let fits = o.frame_buffer.as_ref() == Some(&now);
+        let target = (
+            self.ids.c2s(frame),
+            copy.and_then(|(op, b)| {
+                let buffer = self.model.objs.get(&b).filter(|b| b.alive)?;
+                Some((op, self.ids.c2s(buffer.id)?))
+            }),
+        );
+        let copied = o.handle.is_some();
+        match (fits, copied, target) {
+            // Asked for already: again.
+            (true, true, (Some(fs), Some((op, bs)))) => {
+                self.to_server
+                    .push_msg(Msg::new(fs, op, vec![wire::A::Obj(bs)]));
+            }
+            // Not asked for yet: the app's coming copy fits.
+            (true, false, _) => (),
+            _ => {
+                if let Some(op) = model::event_by_name(iface, "failed") {
+                    self.to_client.push_msg(Msg::new(frame, op, vec![]));
+                }
+                if let Some(k) = self.model.key_of(frame) {
+                    let o = self.model.objs.get_mut(&k).unwrap();
+                    o.awaiting = false;
+                    // Its copy (sized for the old buffer) mustn't reach the compositor.
+                    o.on_server = false;
+                }
+            }
+        }
+    }
+
+    /// An import by a handle an app got from an earlier compositor: the current one's.
+    fn translate_import(&self, msg: &mut Msg) {
+        if let Some(wire::A::Str(Some(handle))) = msg.args.get_mut(1) {
+            if let Some(current) = self.hub.resolve_alias(handle) {
+                *handle = current;
+            }
+        }
     }
 
     fn start_sandbox_listener(&mut self, context: u32) {
@@ -866,6 +956,34 @@ impl Connection {
                     }
                 }
             }
+        }
+        match (iface.name, desc.name) {
+            // A rebuilt export got a new handle: the app keeps its first one, which now
+            // stands for this one.
+            ("zxdg_exported_v2", "handle") => {
+                let first = self.model.live(c).and_then(|o| o.handle.clone());
+                if let (Some(first), Some(wire::A::Str(Some(new)))) = (first, msg.args.first()) {
+                    self.hub.set_alias(first, new.clone());
+                    return Ok(());
+                }
+            }
+            // A screen copy asked for again: the app already has its buffer details (and asked
+            // for the copy); only the outcome goes through.
+            // (The copy is sent again only if the compositor still wants the same buffer;
+            // otherwise the app is told the copy failed and asks again.)
+            ("zwlr_screencopy_frame_v1", "buffer" | "linux_dmabuf" | "buffer_done") => {
+                if self
+                    .model
+                    .live(c)
+                    .is_some_and(|o| o.rebuilt && o.frame_buffer.is_some())
+                {
+                    if desc.name == "buffer" {
+                        self.redo_screen_copy(c, iface, &msg);
+                    }
+                    return Ok(());
+                }
+            }
+            _ => (),
         }
         let forward = self.model.on_event(&msg, iface, desc);
         if let Some(rp) = rp {

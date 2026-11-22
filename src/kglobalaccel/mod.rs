@@ -70,6 +70,22 @@ pub enum KdeEvent {
         action_id: ActionId,
         keys: Vec<KeySeq>,
     },
+    /// After an in-place restart: export these components again and forget owners that left
+    /// the bus meanwhile.
+    Restored {
+        components: Vec<String>,
+        owners: Vec<String>,
+    },
+}
+
+/// The runtime part of [`KdeState`], kept across in-place restarts (in the restart state file):
+/// which actions are present and which app owns each component. Apps don't register again
+/// when arbor restarts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedKde {
+    pub present: Vec<(String, String)>,
+    pub fresh: Vec<(String, String)>,
+    pub owners: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -540,6 +556,45 @@ impl GlobalShortcuts {
         self.kde.blocked = blocked;
     }
 
+    /// The KDE runtime state for the next compositor after an in-place restart.
+    pub fn kde_saved(&self) -> SavedKde {
+        let mut out = SavedKde {
+            present: self.kde.present.iter().cloned().collect(),
+            fresh: self.kde.fresh.iter().cloned().collect(),
+            owners: self
+                .kde
+                .owners
+                .iter()
+                .map(|(c, o)| (c.clone(), o.clone()))
+                .collect(),
+        };
+        out.present.sort();
+        out.fresh.sort();
+        out.owners.sort();
+        out
+    }
+
+    /// After an in-place restart: take the previous compositor's KDE runtime state back.
+    pub fn kde_restore(&mut self, saved: SavedKde) {
+        let mut components: Vec<String> = saved
+            .present
+            .iter()
+            .map(|(c, _)| c.clone())
+            .chain(saved.owners.iter().map(|(c, _)| c.clone()))
+            .collect();
+        components.sort();
+        components.dedup();
+        let mut owners: Vec<String> = saved.owners.iter().map(|(_, o)| o.clone()).collect();
+        owners.sort();
+        owners.dedup();
+        self.kde.present.extend(saved.present);
+        self.kde.fresh.extend(saved.fresh);
+        self.kde.owners.extend(saved.owners);
+        if !components.is_empty() {
+            self.kde.send(KdeEvent::Restored { components, owners });
+        }
+    }
+
     /// The app that registered these components left the bus: they stop taking key presses.
     pub fn kde_owner_vanished(&mut self, owner: &str) {
         let components: Vec<String> = self
@@ -779,5 +834,41 @@ mod tests {
         gs.kde_set_inactive(&id("a", "x"));
         assert!(gs.kde_clean_up("a"));
         assert_eq!(gs.kde_infos("a", m).len(), 1);
+    }
+
+    #[test]
+    fn runtime_state_survives_a_restart() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut gs = GlobalShortcuts::with_path(None);
+        gs.set_kde_event_sender(tx);
+        let m = ModKey::Super;
+        gs.kde_register(&id("app", "ring"), Some(":1.5".into()));
+        gs.kde_set_keys(
+            &id("app", "ring"),
+            &[qt("Meta+Alt+R")],
+            SET_PRESENT,
+            NO_BINDS,
+            m,
+        );
+        let saved = gs.kde_saved();
+
+        // The next compositor: the same store, an empty runtime state until restored.
+        let store = gs.store().clone();
+        let (tx, rx) = async_channel::unbounded();
+        let mut next = GlobalShortcuts::with_path(None);
+        next.set_kde_event_sender(tx);
+        next.replace_store(store);
+        assert!(!next.kde.is_present("app", "ring"));
+        next.kde_restore(saved);
+        assert!(next.kde.is_present("app", "ring"));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            KdeEvent::Restored {
+                components: vec!["app".into()],
+                owners: vec![":1.5".into()],
+            }
+        );
+        let code = Keycode::new(27);
+        assert!(next.kde_press(code, m, Keysym::r, Modifiers::SUPER | Modifiers::ALT, 5));
     }
 }

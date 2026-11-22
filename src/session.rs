@@ -142,6 +142,9 @@ pub struct SessionFile {
     /// In-place restarts: the GlobalShortcuts portal sessions apps have open.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub portal_sessions: Vec<crate::global_shortcuts::SavedPortalSession>,
+    /// In-place restarts: KDE (kglobalaccel) apps' runtime registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kde_shortcuts: Option<crate::kglobalaccel::SavedKde>,
 }
 
 impl SessionFile {
@@ -449,6 +452,7 @@ impl State {
             workspaces,
             focused,
             portal_sessions: Vec::new(),
+            kde_shortcuts: None,
         }
     }
 
@@ -810,6 +814,7 @@ impl State {
         };
         let mut file = self.session_collect_for(true);
         file.portal_sessions = self.arbor.global_shortcuts.saved_sessions();
+        file.kde_shortcuts = Some(self.arbor.global_shortcuts.kde_saved());
         match store(&path, &file) {
             Ok(()) => trace!("saved restart state ({} windows)", file.windows.len()),
             Err(err) => warn!("error saving restart state to {}: {err:?}", path.display()),
@@ -830,6 +835,9 @@ impl State {
                     self.arbor
                         .global_shortcuts
                         .restore_sessions(portal_sessions);
+                    if let Some(kde) = file.kde_shortcuts.take() {
+                        self.arbor.global_shortcuts.kde_restore(kde);
+                    }
                     self.arbor.session_restore = Some(PendingRestore {
                         file,
                         deadline: Instant::now() + RESTART_TIMEOUT,
@@ -972,6 +980,7 @@ mod tests {
             workspaces: vec![],
             focused: None,
             portal_sessions: vec![],
+            kde_shortcuts: None,
         };
         assert_eq!(file.launch_commands(), [vec!["a"], vec!["b"]]);
 
