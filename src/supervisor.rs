@@ -55,6 +55,8 @@ const ENV_WAYLAND_FD: &str = "ARBOR_SUPERVISED_WAYLAND_FD";
 const ENV_WAYLAND_NAME: &str = "ARBOR_SUPERVISED_WAYLAND_NAME";
 const ENV_IPC_FD: &str = "ARBOR_SUPERVISED_IPC_FD";
 const ENV_IPC_PATH: &str = "ARBOR_SUPERVISED_IPC_PATH";
+/// With the proxy: the channel IPC connections arrive on (wl_proxy/ipc.rs).
+const ENV_IPC_CLIENTS_FD: &str = "ARBOR_SUPERVISED_IPC_CLIENTS_FD";
 const ENV_X11_DISPLAY: &str = "ARBOR_SUPERVISED_X11_DISPLAY";
 const ENV_X11_UNIX_FD: &str = "ARBOR_SUPERVISED_X11_UNIX_FD";
 const ENV_X11_ABSTRACT_FD: &str = "ARBOR_SUPERVISED_X11_ABSTRACT_FD";
@@ -100,6 +102,8 @@ pub struct Inherited {
     /// exports `$DISPLAY`).
     pub x11_by_supervisor: Option<String>,
     pub ipc: Option<(UnixListener, PathBuf)>,
+    /// With the proxy: the channel IPC connections arrive on, and the socket's path.
+    pub ipc_proxy: Option<(OwnedFd, PathBuf)>,
     pub x11: Option<InheritedX11>,
 }
 
@@ -186,7 +190,9 @@ pub fn take_from_env() {
         inherited.wayland = Some((listener, name));
     }
     let ipc_path = env_take(ENV_IPC_PATH);
-    if let (Some(fd), Some(path)) = (env_fd(ENV_IPC_FD), ipc_path) {
+    if let (Some(fd), Some(path)) = (env_fd(ENV_IPC_CLIENTS_FD), ipc_path.clone()) {
+        inherited.ipc_proxy = Some((fd, PathBuf::from(path)));
+    } else if let (Some(fd), Some(path)) = (env_fd(ENV_IPC_FD), ipc_path) {
         let listener = UnixListener::from(fd);
         let _ = listener.set_nonblocking(true);
         inherited.ipc = Some((listener, PathBuf::from(path)));
@@ -233,6 +239,11 @@ pub fn take_proxy_clients() -> Option<(OwnedFd, OsString)> {
 }
 
 /// The inherited IPC listening socket and its path.
+/// With the proxy: the channel IPC connections arrive on, and the socket's path.
+pub fn take_ipc_proxy() -> Option<(OwnedFd, PathBuf)> {
+    INHERITED.lock().unwrap().as_mut()?.ipc_proxy.take()
+}
+
 pub fn take_ipc() -> Option<(UnixListener, PathBuf)> {
     INHERITED.lock().unwrap().as_mut()?.ipc.take()
 }
@@ -401,7 +412,11 @@ struct Supervisor {
 impl Supervisor {
     /// Starts a compositor; with the proxy, also returns the supervisor's end of its clients
     /// channel.
-    fn spawn(&mut self, binary: &Binary, start: StartKind) -> io::Result<(Child, Option<OwnedFd>)> {
+    fn spawn(
+        &mut self,
+        binary: &Binary,
+        start: StartKind,
+    ) -> io::Result<(Child, Option<(OwnedFd, OwnedFd)>)> {
         let (read, write) = smithay::reexports::rustix::pipe::pipe_with(
             smithay::reexports::rustix::pipe::PipeFlags::CLOEXEC,
         )?;
@@ -429,13 +444,12 @@ impl Supervisor {
             })?;
 
         let s = &self.sockets;
-        let mut fds: Vec<RawFd> = vec![write.as_raw_fd(), s.ipc.as_raw_fd()];
+        let mut fds: Vec<RawFd> = vec![write.as_raw_fd()];
         let mut cmd = Command::new(format!("/proc/self/fd/{}", binary.file.as_raw_fd()));
         cmd.arg0(&binary.path)
             .args(&self.args)
             .env(ENV_CONTROL, write.as_raw_fd().to_string())
             .env(ENV_WAYLAND_NAME, &s.wayland_name)
-            .env(ENV_IPC_FD, s.ipc.as_raw_fd().to_string())
             .env(ENV_IPC_PATH, &s.ipc_path)
             .env(ENV_START, start.as_str())
             .env(ENV_STATE, &self.state_path);
@@ -444,10 +458,15 @@ impl Supervisor {
             let (ours, theirs) = crate::wl_proxy::seqpacket_pair()?;
             cmd.env(ENV_CLIENTS_FD, theirs.as_raw_fd().to_string());
             fds.push(theirs.as_raw_fd());
-            clients = Some((ours, theirs));
+            let (ipc_ours, ipc_theirs) = crate::wl_proxy::seqpacket_pair()?;
+            cmd.env(ENV_IPC_CLIENTS_FD, ipc_theirs.as_raw_fd().to_string());
+            fds.push(ipc_theirs.as_raw_fd());
+            clients = Some(((ours, theirs), (ipc_ours, ipc_theirs)));
         } else {
-            cmd.env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string());
+            cmd.env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string())
+                .env(ENV_IPC_FD, s.ipc.as_raw_fd().to_string());
             fds.push(s.wayland.as_fd().as_raw_fd());
+            fds.push(s.ipc.as_raw_fd());
         }
         if let (Some(x11), true) = (&s.x11, self.x11_by_supervisor) {
             cmd.env(ENV_X11_DISPLAY, &x11.display_name)
@@ -477,7 +496,10 @@ impl Supervisor {
         );
         let child = cmd.spawn();
         drop(write);
-        Ok((child?, clients.map(|(ours, _theirs)| ours)))
+        Ok((
+            child?,
+            clients.map(|((ours, _theirs), (ipc_ours, _ipc_theirs))| (ours, ipc_ours)),
+        ))
     }
 
     fn drain(&mut self, generation: u64, locked: &mut bool, reload: &mut Option<PathBuf>) {
@@ -561,7 +583,11 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
             .as_fd()
             .try_clone_to_owned()
             .map(UnixListener::from)
-            .and_then(|l| crate::wl_proxy::start(l, hub.clone()));
+            .and_then(|l| crate::wl_proxy::start(l, hub.clone()))
+            .and_then(|()| {
+                let ipc = sup.sockets.ipc.try_clone()?;
+                crate::wl_proxy::ipc::start(ipc, hub.clone())
+            });
         match started {
             Ok(()) => sup.hub = Some(hub),
             Err(err) => warn!("supervisor: error starting the Wayland proxy: {err:?}"),
@@ -705,5 +731,8 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
     };
 
     let _ = std::fs::remove_file(&state_path);
+    for ext in ["clipboard", "primary"] {
+        let _ = std::fs::remove_file(state_path.with_extension(ext));
+    }
     Ok(code)
 }

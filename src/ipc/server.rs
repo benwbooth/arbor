@@ -82,6 +82,37 @@ impl IpcServer {
     ) -> anyhow::Result<Self> {
         let _span = tracy_client::span!("Ipc::start");
 
+        // The supervisor proxies the IPC socket (wl_proxy/ipc.rs): connections arrive on a
+        // channel.
+        if let Some((chan, socket_path)) = wayland_socket_name
+            .is_some()
+            .then(crate::supervisor::take_ipc_proxy)
+            .flatten()
+        {
+            let source = Generic::new(chan, Interest::READ, Mode::Level);
+            event_loop
+                .insert_source(source, |_, chan, state| {
+                    loop {
+                        match crate::wl_proxy::recv_client(std::os::fd::AsFd::as_fd(&**chan)) {
+                            Ok(Some((stream, _))) => on_new_ipc_client(state, stream),
+                            Ok(None) => break,
+                            Err(err) => {
+                                warn!("error reading the supervisor's IPC channel: {err:?}");
+                                return Ok(PostAction::Remove);
+                            }
+                        }
+                    }
+                    Ok(PostAction::Continue)
+                })
+                .unwrap();
+            return Ok(Self {
+                socket_path: Some(socket_path),
+                owns_path: false,
+                event_streams: Rc::new(RefCell::new(Vec::new())),
+                event_stream_state: Rc::new(RefCell::new(EventStreamState::default())),
+                last_zone_drag: RefCell::new(None),
+            });
+        }
         let inherited = wayland_socket_name
             .is_some()
             .then(crate::supervisor::take_ipc)

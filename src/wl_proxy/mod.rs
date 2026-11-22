@@ -15,6 +15,7 @@
 
 pub mod ids;
 pub mod interfaces;
+pub mod ipc;
 pub mod model;
 mod replay;
 pub mod wire;
@@ -276,19 +277,60 @@ struct Barrier {
 #[derive(Default)]
 struct HubState {
     chan: Option<Arc<OwnedFd>>,
+    /// The compositor's channel for IPC connections (ipc.rs).
+    ipc_chan: Option<Arc<OwnedFd>>,
     /// Counts compositors: each `set(Some(..))` starts a new one.
     generation: u64,
 }
 
 impl Hub {
-    /// Sets (a compositor started) or clears (it ended) the clients channel.
-    pub fn set(&self, chan: Option<OwnedFd>) {
+    /// Sets (a compositor started) or clears (it ended) the clients channels (Wayland, IPC).
+    pub fn set(&self, chans: Option<(OwnedFd, OwnedFd)>) {
         let mut state = self.state.lock().unwrap();
-        if chan.is_some() {
+        if chans.is_some() {
             state.generation += 1;
         }
+        let (chan, ipc) = chans.map_or((None, None), |(w, i)| (Some(w), Some(i)));
         state.chan = chan.map(Arc::new);
+        state.ipc_chan = ipc.map(Arc::new);
         self.changed.notify_all();
+    }
+
+    /// Like [`Hub::connect`], for an IPC connection.
+    fn connect_ipc(&self, newer_than: u64) -> io::Result<(UnixStream, u64)> {
+        loop {
+            let (chan, generation) = {
+                let mut state = self.state.lock().unwrap();
+                while state.ipc_chan.is_none() || state.generation <= newer_than {
+                    state = self.changed.wait(state).unwrap();
+                }
+                (state.ipc_chan.clone().unwrap(), state.generation)
+            };
+            let (ours, theirs) = UnixStream::pair()?;
+            let creds = Creds {
+                pid: 0,
+                uid: 0,
+                gid: 0,
+                restore: false,
+                restricted: false,
+            };
+            match send_with_fds(chan.as_fd(), &creds.to_bytes(), &[OwnedFd::from(theirs)]) {
+                Ok(_) => return Ok((ours, generation)),
+                Err(_) => {
+                    let state = self.state.lock().unwrap();
+                    if state
+                        .ipc_chan
+                        .as_ref()
+                        .is_some_and(|c| Arc::ptr_eq(c, &chan))
+                    {
+                        let _ = self
+                            .changed
+                            .wait_timeout(state, Duration::from_millis(200))
+                            .unwrap();
+                    }
+                }
+            }
+        }
     }
 
     /// Hands a new connection for an app with `creds` to a compositor newer than
@@ -1428,7 +1470,8 @@ mod tests {
     fn clients_channel() {
         let (sup, comp) = seqpacket_pair().unwrap();
         let hub = Hub::default();
-        hub.set(Some(sup));
+        let (ipc_sup, _ipc_comp) = seqpacket_pair().unwrap();
+        hub.set(Some((sup, ipc_sup)));
         let creds = Creds {
             pid: 42,
             uid: 1000,

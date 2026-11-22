@@ -191,7 +191,15 @@ impl Connection {
                 V::Fixed(x) => A::Fixed(*x),
                 V::Str(s) => A::Str(s.clone()),
                 V::Array(a) => A::Array(a.clone()),
-                V::Fd(fd) => A::Fd(fd.try_clone().ok()?),
+                V::Fd(fd) => {
+                    // From the start again (a gamma ramp is read from the fd's position, which
+                    // the previous compositor's read moved; harmless for others).
+                    // SAFETY: lseek on an fd we own a dup of.
+                    unsafe {
+                        libc::lseek(std::os::fd::AsRawFd::as_raw_fd(&**fd), 0, libc::SEEK_SET)
+                    };
+                    A::Fd(fd.try_clone().ok()?)
+                }
                 V::Obj(None) => A::Obj(0),
                 V::Obj(Some(k)) => match ks.get(k) {
                     Some(s) => A::Obj(*s),

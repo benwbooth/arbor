@@ -850,9 +850,9 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   `session-restore { exclude-app-ids }` apps are put back but never
   relaunched (hearth lists `org.quickshell`: the shell restarts itself).
 - **hearth** keeps running: with the proxy (`ARBOR_WAYLAND_PROXY=1` in the
-  session's environment) its layer surfaces are carried over and it just
-  reconnects its IPC streams (the first events re-send the whole state, and
-  glass shapes are sent again). Without the proxy it quits (exit 75) when
+  session's environment) its layer surfaces are carried over and its IPC
+  connections too (below); if they ever drop it reconnects them (the first
+  events re-send the whole state, and glass shapes are sent again). Without the proxy it quits (exit 75) when
   its event stream drops and its wrapper starts it again (Quickshell's own
   Wayland objects don't survive Qt's reconnect).
 - **Failures:** a build that crashes within 20 s of a reload is replaced by
@@ -902,7 +902,9 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
     inhibitors, tablet seats, gtk_surface1 and KDE appmenu (global menus),
     background-effect regions, virtual keyboard/pointer, activation
     tokens the app is still waiting for (asked for again), xdg-foreign
-    exports and imports, and screen copies in flight. Selection sources
+    exports and imports, screen copies in flight, input methods (with their
+    keyboard grab and popups) and gamma ramps (night light; the ramp's fd
+    is read again from its start). Selection sources
     come back while a device's last `set_selection` names them; the
     vendored smithay accepts that `set_selection` without keyboard focus
     from an app being restored (the clients channel flags restores;
@@ -951,6 +953,20 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
     the same buffer, the copy is asked for again too and the repeated
     buffer details are kept from the app; if the buffer changed (another
     output size), the app gets `failed` and asks again.
+- **IPC** (`src/wl_proxy/ipc.rs`): the supervisor proxies the IPC socket
+  too (connections reach the compositor over a second channel). The
+  protocol is line based, so at a change a connection is taken to the next
+  compositor: an event stream asks for `EventStream` again (the reply line
+  is kept from the client; the first events send the whole state again),
+  unanswered requests are sent again, and so are the latest `SetGlass` per
+  surface and temporary `Output` changes, the IPC state a compositor keeps.
+  A client's half-close (`arbor msg` shuts down its writing side) is passed
+  on.
+- The clipboard copy arbor serves for an app that quit (Clipboard after the
+  app quits) is written beside the restart state (`arbor-restart.<pid>.
+  clipboard` / `.primary`, mode 0600) when arbor takes the selection over,
+  dropped when a client sets a new one, and offered again by the next
+  compositor (reloads and crashes).
 - GlobalShortcuts portal sessions apps have open, and KDE (kglobalaccel)
   apps' runtime registrations (which actions are active, which app owns
   them), are saved with the restart layout and taken back by the next

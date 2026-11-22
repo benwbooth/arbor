@@ -862,6 +862,8 @@ impl State {
                         "in-place restart ({kind:?}): putting back {} windows",
                         file.windows.len()
                     );
+                    // The clipboard copy the previous compositor held for an app that quit.
+                    self.restore_handed_over_selections();
                     let portal_sessions = std::mem::take(&mut file.portal_sessions);
                     // Windows get their ids back as they map: new ones come after those.
                     if let Some(max) = file.windows.iter().filter_map(|w| w.window_id).max() {
@@ -933,6 +935,28 @@ impl State {
         for (app_id, command) in launches {
             info!("relaunching {app_id} (it exited with the previous compositor)");
             spawn(command, None);
+        }
+    }
+
+    fn restore_handed_over_selections(&mut self) {
+        use smithay::wayland::selection::data_device::set_data_device_selection;
+        use smithay::wayland::selection::primary_selection::set_primary_selection;
+        use smithay::wayland::selection::SelectionTarget;
+        let dh = self.arbor.display_handle.clone();
+        let seat = self.arbor.seat.clone();
+        for ty in [SelectionTarget::Clipboard, SelectionTarget::Primary] {
+            let Some(data) = crate::clipboard_persist::load_handover(ty) else {
+                continue;
+            };
+            info!("in-place restart: offering the kept {ty:?} selection again");
+            match ty {
+                SelectionTarget::Clipboard => {
+                    set_data_device_selection(&dh, &seat, data.mime_types(), data)
+                }
+                SelectionTarget::Primary => {
+                    set_primary_selection(&dh, &seat, data.mime_types(), data)
+                }
+            }
         }
     }
 

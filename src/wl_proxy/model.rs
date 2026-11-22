@@ -158,6 +158,10 @@ const REPLAYABLE: &[&str] = &[
     "zwlr_virtual_pointer_v1",
     "zxdg_exported_v2",
     "zxdg_imported_v2",
+    "zwp_input_method_v2",
+    "zwp_input_method_keyboard_grab_v2",
+    "zwp_input_popup_surface_v2",
+    "zwlr_gamma_control_v1",
 ];
 
 /// Selection sources: rebuilt only while they hold a selection (a device's last
@@ -264,6 +268,7 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
         ("ext_background_effect_surface_v1", "set_blur_region") => Kind::Set(n),
         ("zwp_virtual_keyboard_v1", "keymap") => Kind::Set(n),
         ("zxdg_imported_v2", "set_parent_of") => Kind::Set(n),
+        ("zwlr_gamma_control_v1", "set_gamma") => Kind::Set(n),
         ("zwlr_screencopy_frame_v1", "copy" | "copy_with_damage") => Kind::Set("copy"),
         ("hyprland_toplevel_export_frame_v1", "copy") => Kind::Set("copy"),
         (
@@ -1195,5 +1200,34 @@ mod tests {
             feed(&mut m, Dir::Event, &raw(21, op, &ev));
         }
         assert_eq!(m.live(21).unwrap().handle.as_deref(), Some(&b"first"[..]));
+    }
+
+    #[test]
+    fn gamma_ramps_and_input_methods_persist() {
+        let mut m = toplevel();
+        let mut ev = global(4, "wl_output", 4);
+        ev.extend(global(5, "zwlr_gamma_control_manager_v1", 1));
+        ev.extend(global(6, "wl_seat", 8));
+        ev.extend(global(7, "zwp_input_method_manager_v2", 1));
+        feed(&mut m, Dir::Event, &ev);
+        feed(&mut m, Dir::Request, &bind(4, "wl_output", 4, 20));
+        feed(
+            &mut m,
+            Dir::Request,
+            &bind(5, "zwlr_gamma_control_manager_v1", 1, 21),
+        );
+        feed(&mut m, Dir::Request, &bind(6, "wl_seat", 8, 22));
+        feed(
+            &mut m,
+            Dir::Request,
+            &bind(7, "zwp_input_method_manager_v2", 1, 23),
+        );
+        req(&mut m, 21, "get_gamma_control", &[24, 20]);
+        req(&mut m, 23, "get_input_method", &[22, 25]);
+        let synth = m.detach();
+        // Neither is told it failed / is gone.
+        assert!(!synth.iter().any(|e| e.object == 24 || e.object == 25));
+        assert!(m.persists(m.key_of(24).unwrap()));
+        assert!(m.persists(m.key_of(25).unwrap()));
     }
 }

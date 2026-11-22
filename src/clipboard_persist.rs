@@ -86,6 +86,78 @@ impl SelectionData {
     pub fn total_len(&self) -> usize {
         self.0.iter().map(|(_, data)| data.len()).sum()
     }
+
+    /// For the next compositor after an in-place restart: count, then per format the MIME
+    /// type and the bytes, each length-prefixed (u32 / u64, little endian).
+    fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.total_len() + 64);
+        out.extend_from_slice(&(self.0.len() as u32).to_le_bytes());
+        for (mime, data) in self.0.iter() {
+            out.extend_from_slice(&(mime.len() as u32).to_le_bytes());
+            out.extend_from_slice(mime.as_bytes());
+            out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+            out.extend_from_slice(data);
+        }
+        out
+    }
+
+    fn decode(mut b: &[u8]) -> Option<Self> {
+        fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+            let (head, rest) = (b.get(..n)?, b.get(n..)?);
+            *b = rest;
+            Some(head)
+        }
+        let count = u32::from_le_bytes(take(&mut b, 4)?.try_into().ok()?);
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let len = u32::from_le_bytes(take(&mut b, 4)?.try_into().ok()?) as usize;
+            let mime = String::from_utf8(take(&mut b, len)?.to_vec()).ok()?;
+            let len = u64::from_le_bytes(take(&mut b, 8)?.try_into().ok()?) as usize;
+            entries.push((mime, Arc::from(take(&mut b, len)?.to_vec())));
+        }
+        b.is_empty().then(|| Self::new(entries))
+    }
+}
+
+/// Where a compositor-owned copy of a selection is kept for the next compositor of the
+/// supervisor (in-place restarts): beside the restart state, readable only by the user.
+pub fn handover_path(ty: SelectionTarget) -> Option<std::path::PathBuf> {
+    let state = crate::supervisor::state_path()?;
+    Some(state.with_extension(match ty {
+        SelectionTarget::Clipboard => "clipboard",
+        SelectionTarget::Primary => "primary",
+    }))
+}
+
+fn save_handover(ty: SelectionTarget, data: &SelectionData) {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let Some(path) = handover_path(ty) else {
+        return;
+    };
+    let tmp = path.with_extension("tmp");
+    let res = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(&data.encode()))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(err) = res {
+        warn!("error saving the {ty:?} selection for a restart: {err:?}");
+    }
+}
+
+fn drop_handover(ty: SelectionTarget) {
+    if let Some(path) = handover_path(ty) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// The selection copy the previous compositor held (in-place restarts).
+pub fn load_handover(ty: SelectionTarget) -> Option<SelectionData> {
+    SelectionData::decode(&std::fs::read(handover_path(ty)?).ok()?)
 }
 
 #[derive(Debug, Default)]
@@ -250,6 +322,8 @@ impl State {
         mime_types: Option<Vec<String>>,
     ) {
         let persist = self.arbor.config.borrow().clipboard.persist;
+        // A client's selection now: what the compositor kept for a restart is stale.
+        drop_handover(ty);
         let slot = self.arbor.clipboard_persist.slot(ty);
         slot.generation += 1;
         slot.kept = None;
@@ -400,6 +474,8 @@ impl State {
             slot.client_owned = false;
             let data = slot.kept.clone().unwrap();
             debug!("selection owner gone; keeping the {ty:?} selection");
+            // The next compositor (after a reload or a crash) offers it again.
+            save_handover(ty, &data);
             let dh = self.arbor.display_handle.clone();
             let seat = self.arbor.seat.clone();
             match ty {
@@ -540,6 +616,18 @@ mod tests {
         assert_eq!(out[0].1.as_deref(), Some(&b"hello"[..]));
         assert_eq!(out[1].1.as_ref().map(Vec::len), Some(200_000));
         assert_eq!(out[2].1, None, "over budget");
+    }
+
+    #[test]
+    fn handover_encoding_roundtrips() {
+        let data = SelectionData::new(vec![
+            ("text/plain".into(), Arc::from(b"hello".to_vec())),
+            ("image/png".into(), Arc::from(vec![0u8, 1, 2, 255])),
+        ]);
+        let back = SelectionData::decode(&data.encode()).unwrap();
+        assert_eq!(back.mime_types(), data.mime_types());
+        assert_eq!(&*back.get("image/png").unwrap(), &[0u8, 1, 2, 255]);
+        assert!(SelectionData::decode(&data.encode()[..10]).is_none());
     }
 
     #[test]
