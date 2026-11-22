@@ -585,10 +585,21 @@ impl State {
             return;
         };
         let focus = pending.file.focused == Some(saved.slot);
+        // A window mapping later would take the focus from the one that had it (after an
+        // in-place restart apps come back in any order): give it back.
+        let refocus = (!focus)
+            .then(|| {
+                let slot = pending.file.focused?;
+                let (_, w) = pending.claimed.iter().find(|(s, _)| *s == slot)?;
+                Some(w.clone())
+            })
+            .flatten();
         let complete = pending.is_complete();
         self.session_place_window(window, &saved);
         if focus {
             self.arbor.layout.activate_window(window);
+        } else if let Some(focused) = refocus {
+            self.arbor.layout.activate_window(&focused);
         }
         if complete {
             debug!("session restore complete");

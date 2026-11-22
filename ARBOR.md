@@ -836,8 +836,12 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   the focused window and each workspace's camera. The next compositor puts
   reconnecting windows back (matched by app id, preferring the same title),
   floating windows again once the shell's bar is back.
-- **Apps that can't reconnect** (GTK, Electron/Chromium, foot, X11 apps:
-  xwayland-satellite goes with the compositor) exit; 2 s and 8 s after the
+- **Every other Wayland app is carried over by the supervisor's proxy**
+  (below): GTK, Electron/Chromium (Brave, VS Code, the Claude app), foot.
+  Its connection never drops; the proxy rebuilds its windows in the new
+  compositor.
+- **Apps that still exit** (X11 apps: xwayland-satellite goes with the
+  compositor; apps the proxy couldn't carry over) exit; 2 s and 8 s after the
   restart, the ones whose process is gone and none of whose windows came
   back are relaunched through session restore's commands.
   `session-restore { exclude-app-ids }` apps are put back but never
@@ -856,25 +860,60 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   devloop (home-services `apps/arbor.conf`) swaps the session onto each new
   build.
 
-- **Wayland proxy (stage 0 of the design below):** the supervisor accepts
-  the apps' Wayland connections itself and forwards each one to the
-  compositor (`src/wl_proxy/`). Each new connection goes to the compositor
-  over a "clients channel" (a `SOCK_SEQPACKET` pair per compositor process)
-  together with the app's pid/uid/gid, so window pids, session restore and
-  portals still see the real app and not the supervisor. Each app gets its
-  own thread, which forwards bytes and fds as they arrive and decodes every
-  message on the side, keeping the object table later stages need. A
-  decoding gap is logged ("lost track of the protocol") and doesn't affect
-  the connection. When a compositor goes away its connections still end,
-  as before. Cost: about 16 µs added to a roundtrip (release build, nested:
-  36 µs against 20 µs direct). `ARBOR_NO_PROXY=1` hands the socket to the
-  compositor as before. The supervisor and the compositor must both have
-  the proxy, but a new compositor still works under an older supervisor.
+- **Wayland proxy** (`src/wl_proxy/`): the supervisor accepts the apps'
+  Wayland connections itself and forwards each one to the compositor. Each
+  new connection goes to the compositor over a "clients channel" (a
+  `SOCK_SEQPACKET` pair per compositor process) with the app's pid/uid/gid,
+  so window pids, session restore and portals still see the real app.
+  - One thread per app decodes every message (`wire.rs`) and keeps a model
+    of the app's objects (`model.rs`): how each was created, the last value
+    of each setting request (title, app id, buffer, scale, regions,
+    viewport, ...), what adds up (region rectangles, dmabuf planes), and
+    the fds those need.
+  - When the compositor goes away (a reload or a crash; a compositor that
+    is still running and closed the connection on purpose is passed on),
+    the app is told what ended: focus left, open popups `popup_done`,
+    clipboard offers cleared, objects that can't be rebuilt their
+    `cancelled`/`closed`/`finished`/... event, buffers the old compositor
+    held released.
+  - In the next compositor the proxy (`replay.rs`) matches the globals,
+    recreates the objects it knows how to rebuild in creation order (plus
+    destroyed ones they need, like the shm pool a buffer came from), sets
+    their state, does each toplevel's first commit and acks the configure
+    (the app gets it too and redraws at the new size), puts every surface's
+    buffer back up (children first) and commits. Ids and global names are
+    translated between the app's view and the new compositor's from then
+    on (`ids.rs`).
+  - What it rebuilds is a table (`model::REPLAYABLE`, `model::kind`): every
+    global, and for the rest core surfaces/regions/subsurfaces, shm and
+    dmabuf buffers, seat devices, data devices, xdg-shell toplevels and
+    positioners, decorations, viewports, fractional scale, xdg-output,
+    cursor-shape. Everything else ends as above (popups, layer surfaces,
+    text-input, primary selection, ...) and requests to it are dropped, so
+    a gap means a missing feature until the app recreates the object, never
+    a protocol error. Requests the table doesn't know are simply not
+    replayed.
+  - Safety nets: a global whose protocol the proxy can't decode is hidden
+    from apps (`tests::wl_proxy::every_global_is_known_to_the_proxy` fails
+    when arbor gains one); a decoding gap before the first change switches
+    that app to plain pass-through ("lost track"), after one it ends the
+    connection; a rebuild that fails (protocol error, no answer in 10 s)
+    ends that app's connection and session restore relaunches it as
+    before; a panic costs only that app. `ARBOR_NO_PROXY=1` turns the proxy
+    off.
+  - Cost: a roundtrip takes ~37 µs through the proxy against ~20 µs direct
+    (release, nested), the same before and after a change. A rebuild takes
+    ~150–190 ms per app (all apps in parallel).
+  - The supervisor and the compositor must both have the proxy; a new
+    compositor still works under an older supervisor (no proxy until the
+    next login).
+- With the proxy, the focused window keeps the focus: windows mapping later
+  during the restore give it back.
 
 Code: `src/supervisor.rs`, `src/wl_proxy/`, the restart half of
 `src/session.rs`.
 
-### Design: swaps and crashes that apps don't notice (planned, not built)
+### Design: swaps and crashes that apps don't notice (stages 0–1 built)
 
 Ben, 2026-11-21: *"any swaps need to be nondestructive"*, *"the window
 system should never crash"*. Today a swap keeps the sockets, but every
@@ -987,7 +1026,7 @@ binary in a test profile, a GTK app and foot surviving `reload-binary`):
 | # | Stage | Rough size |
 |---|-------|-----------|
 | 0 | **Done.** Pass-through proxy: wire codec, fd passing, object table, real credentials (sent over the clients channel instead of `arbor_restore_v1`). Nothing survives yet. Verified nested: foot, zenity (GTK4), Konsole, Brave, xwayland-satellite and the portals through it, with no decoding gaps; reload and crash restart behave as before. | ~1k lines |
-| 1 | Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations; window tokens. foot and GTK survive. | ~3k |
+| 1 | **Done.** Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations, data device, cursor shape; id and global translation. Verified nested: foot, zenity (GTK4), Konsole (with Qt's own reconnect off) and Brave survive `reload-binary` twice and a SIGKILL crash, same pids, drawing, keyboard input working (foot runs typed commands, Brave's address bar navigates). Window tokens not needed yet (app id + title matching works since the pids stay). | ~1.5k |
 | 2 | What Electron/Chromium uses: text-input, pointer constraints/relative, presentation, idle-inhibit, primary selection, data device (selection kept), xdg-activation. Brave and the Claude app survive. | ~2k |
 | 3 | xwayland-satellite under the supervisor; layer-shell (hearth stops restarting itself); a crash restart uses the same path. | ~1.5k |
 | 4 | The remaining globals, security-context, tests (replay fuzzing against a nested arbor). | ~1.5k |

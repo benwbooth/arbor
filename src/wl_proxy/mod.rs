@@ -13,7 +13,10 @@
 //! of the connection as an fd. A connection made while no compositor is running waits for the
 //! next one.
 
+pub mod ids;
 pub mod interfaces;
+pub mod model;
+mod replay;
 pub mod wire;
 
 use std::collections::VecDeque;
@@ -24,7 +27,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
-use self::wire::{Dir, Tracker};
+use self::ids::{Fate, Ids};
+use self::model::Model;
+use self::wire::{Dir, Header, Msg, Splitter, WireError};
 
 /// The most fds one `recvmsg` can carry (`SCM_MAX_FD`).
 const MAX_FDS: usize = 253;
@@ -233,43 +238,72 @@ pub fn recv_client(chan: BorrowedFd) -> io::Result<Option<(UnixStream, Creds)>> 
 /// Where new connections go: the current compositor's clients channel, if one is running.
 #[derive(Default)]
 pub struct Hub {
-    chan: Mutex<Option<Arc<OwnedFd>>>,
+    state: Mutex<HubState>,
     changed: Condvar,
+}
+
+#[derive(Default)]
+struct HubState {
+    chan: Option<Arc<OwnedFd>>,
+    /// Counts compositors: each `set(Some(..))` starts a new one.
+    generation: u64,
 }
 
 impl Hub {
     /// Sets (a compositor started) or clears (it ended) the clients channel.
     pub fn set(&self, chan: Option<OwnedFd>) {
-        *self.chan.lock().unwrap() = chan.map(Arc::new);
+        let mut state = self.state.lock().unwrap();
+        if chan.is_some() {
+            state.generation += 1;
+        }
+        state.chan = chan.map(Arc::new);
         self.changed.notify_all();
     }
 
-    /// Hands a new connection for an app with `creds` to the compositor, waiting for one if
-    /// none is running. Returns the proxy's end.
-    fn connect(&self, creds: Creds) -> io::Result<UnixStream> {
+    /// Hands a new connection for an app with `creds` to a compositor newer than
+    /// `newer_than`, waiting for one if none is running. Returns the proxy's end and the
+    /// compositor's generation.
+    fn connect(&self, creds: Creds, newer_than: u64) -> io::Result<(UnixStream, u64)> {
         loop {
-            let chan = {
-                let mut guard = self.chan.lock().unwrap();
-                while guard.is_none() {
-                    guard = self.changed.wait(guard).unwrap();
+            let (chan, generation) = {
+                let mut state = self.state.lock().unwrap();
+                while state.chan.is_none() || state.generation <= newer_than {
+                    state = self.changed.wait(state).unwrap();
                 }
-                guard.clone().unwrap()
+                (state.chan.clone().unwrap(), state.generation)
             };
             let (ours, theirs) = UnixStream::pair()?;
             match send_with_fds(chan.as_fd(), &creds.to_bytes(), &[OwnedFd::from(theirs)]) {
-                Ok(_) => return Ok(ours),
+                Ok(_) => return Ok((ours, generation)),
                 Err(err) => {
                     // The compositor is gone (or its channel is full): wait for the next.
                     debug!("wl-proxy: error handing a client to the compositor: {err}");
-                    let guard = self.chan.lock().unwrap();
-                    if guard.as_ref().is_some_and(|c| Arc::ptr_eq(c, &chan)) {
+                    let state = self.state.lock().unwrap();
+                    if state.chan.as_ref().is_some_and(|c| Arc::ptr_eq(c, &chan)) {
                         let _ = self
                             .changed
-                            .wait_timeout(guard, Duration::from_millis(200))
+                            .wait_timeout(state, Duration::from_millis(200))
                             .unwrap();
                     }
                 }
             }
+        }
+    }
+
+    /// Waits up to `timeout` for compositor `generation` to end. False if it's still running
+    /// (then it closed a connection on purpose).
+    fn wait_gone(&self, generation: u64, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.generation != generation || state.chan.is_none() {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            state = self.changed.wait_timeout(state, deadline - now).unwrap().0;
         }
     }
 }
@@ -318,7 +352,7 @@ fn serve_client(client: UnixStream, hub: &Hub) {
         }
     };
     let label = format!("{} ({})", process_name(creds.pid), creds.pid);
-    let server = match hub.connect(creds) {
+    let (server, generation) = match hub.connect(creds, 0) {
         Ok(s) => s,
         Err(err) => {
             warn!("wl-proxy: {label}: error connecting to the compositor: {err}");
@@ -328,7 +362,7 @@ fn serve_client(client: UnixStream, hub: &Hub) {
     debug!("wl-proxy: {label} connected");
     // A bug here must only cost this one app its connection.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Connection::new(client, server, label.clone()).run()
+        Connection::new(hub, creds, generation, client, server, label.clone()).run()
     }));
     match result {
         Ok(end) => debug!("wl-proxy: {label}: {end}"),
@@ -392,6 +426,11 @@ impl Outgoing {
         });
     }
 
+    fn push_msg(&mut self, msg: Msg) {
+        let (bytes, fds) = msg.encode();
+        self.push(&bytes, fds);
+    }
+
     fn is_empty(&self) -> bool {
         self.chunks.is_empty()
     }
@@ -423,6 +462,8 @@ enum End {
     CompositorClosed(Option<String>),
     Error(&'static str, io::Error),
     TooMuchQueued(&'static str),
+    Lost(WireError),
+    ReplayFailed(String),
 }
 
 impl std::fmt::Display for End {
@@ -438,18 +479,49 @@ impl std::fmt::Display for End {
             }
             End::Error(side, err) => write!(f, "error on the {side} side: {err}"),
             End::TooMuchQueued(side) => write!(f, "the {side} stopped reading"),
+            End::Lost(err) => write!(f, "lost track of the protocol: {err}"),
+            End::ReplayFailed(err) => {
+                write!(f, "couldn't be carried over to the new compositor: {err}")
+            }
         }
     }
 }
 
-struct Connection {
+/// A global as announced: name, interface, version.
+type Global = (u32, String, u32);
+
+/// While rebuilding an app's objects in a new compositor.
+#[derive(Default)]
+struct ReplayState {
+    /// The sync callback being waited for, and whether it came.
+    done_cb: Option<u32>,
+    done: bool,
+    /// The proxy's own registry and the globals it announced.
+    collect: Option<(u32, Vec<Global>)>,
+    /// Global names the app knew before: not announced again to its registries.
+    pre_globals: std::collections::HashSet<u32>,
+    /// The app's registries being rebuilt.
+    replayed_registries: std::collections::HashSet<u32>,
+    /// Ack configures right away (the old buffers go back up before the app answers).
+    auto_ack: bool,
+}
+
+struct Connection<'h> {
+    hub: &'h Hub,
+    creds: Creds,
+    generation: u64,
     client: UnixStream,
     server: UnixStream,
     label: String,
-    tracker: Tracker,
-    warned_lost: bool,
+    model: Model,
+    ids: Ids,
+    from_client: Splitter,
+    from_server: Splitter,
     to_client: Outgoing,
     to_server: Outgoing,
+    /// Lost track of the protocol: bytes go through undecoded and the app can't be carried
+    /// over to a new compositor.
+    raw: bool,
 }
 
 enum Read {
@@ -457,33 +529,48 @@ enum Read {
     Closed,
 }
 
-impl Connection {
-    fn new(client: UnixStream, server: UnixStream, label: String) -> Self {
+impl<'h> Connection<'h> {
+    fn new(
+        hub: &'h Hub,
+        creds: Creds,
+        generation: u64,
+        client: UnixStream,
+        server: UnixStream,
+        label: String,
+    ) -> Self {
         Self {
+            hub,
+            creds,
+            generation,
             client,
             server,
             label,
-            tracker: Tracker::default(),
-            warned_lost: false,
+            model: Model::default(),
+            ids: Ids::default(),
+            from_client: Splitter::default(),
+            from_server: Splitter::default(),
             to_client: Outgoing::default(),
             to_server: Outgoing::default(),
+            raw: false,
         }
     }
 
-    /// Reads everything available from one side and queues it for the other.
+    /// Reads everything available from one side.
     fn read(&mut self, dir: Dir, buf: &mut [u8]) -> io::Result<Read> {
-        let (from, to) = match dir {
-            Dir::Request => (&self.client, &mut self.to_server),
-            Dir::Event => (&self.server, &mut self.to_client),
-        };
         loop {
+            let from = match dir {
+                Dir::Request => &self.client,
+                Dir::Event => &self.server,
+            };
             let mut fds = Vec::new();
             match recv_with_fds(from.as_fd(), buf, &mut fds) {
                 Ok(0) => return Ok(Read::Closed),
-                Ok(n) => {
-                    self.tracker.feed(dir, &buf[..n], fds.len());
-                    to.push(&buf[..n], fds);
-                }
+                Ok(n) => match (self.raw, dir) {
+                    (true, Dir::Request) => self.to_server.push(&buf[..n], fds),
+                    (true, Dir::Event) => self.to_client.push(&buf[..n], fds),
+                    (false, Dir::Request) => self.from_client.push(&buf[..n], fds),
+                    (false, Dir::Event) => self.from_server.push(&buf[..n], fds),
+                },
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(Read::Open),
                 Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {
                     return Ok(Read::Closed)
@@ -493,16 +580,198 @@ impl Connection {
         }
     }
 
-    fn note_lost(&mut self) {
-        if !self.warned_lost {
-            if let Some(err) = &self.tracker.lost {
-                self.warned_lost = true;
-                warn!(
-                    "wl-proxy: {}: lost track of the protocol ({err}); this app won't survive a restart",
-                    self.label
-                );
+    /// Decoding failed. Before any compositor change the bytes can still go through as they
+    /// are; after one (ids are translated) the connection can't continue.
+    fn lose_track(
+        &mut self,
+        err: WireError,
+        dir: Dir,
+        header: Header,
+        body: &[u8],
+    ) -> Result<(), End> {
+        if self.ids.active {
+            return Err(End::Lost(err));
+        }
+        warn!(
+            "wl-proxy: {}: lost track of the protocol ({err}); this app won't survive a restart",
+            self.label
+        );
+        self.raw = true;
+        let mut bytes = Vec::with_capacity(8 + body.len());
+        bytes.extend_from_slice(&header.object.to_ne_bytes());
+        bytes.extend_from_slice(
+            &(((header.size as u32) << 16) | header.opcode as u32).to_ne_bytes(),
+        );
+        bytes.extend_from_slice(body);
+        let (to, from) = match dir {
+            Dir::Request => (&mut self.to_server, &mut self.from_client),
+            Dir::Event => (&mut self.to_client, &mut self.from_server),
+        };
+        let (rest, fds) = from.take_rest();
+        let mut all_fds: Vec<OwnedFd> = Vec::new();
+        all_fds.extend(fds);
+        bytes.extend_from_slice(&rest);
+        to.push(&bytes, all_fds);
+        let (rest, fds) = match dir {
+            Dir::Request => self.from_server.take_rest(),
+            Dir::Event => self.from_client.take_rest(),
+        };
+        match dir {
+            Dir::Request => self.to_client.push(&rest, fds),
+            Dir::Event => self.to_server.push(&rest, fds),
+        }
+        Ok(())
+    }
+
+    /// Handles the complete requests read so far.
+    fn pump_client(&mut self) -> Result<(), End> {
+        while !self.raw {
+            let (header, body) = match self.from_client.next_msg() {
+                Ok(Some(m)) => m,
+                Ok(None) => break,
+                Err(err) => return Err(End::Lost(err)),
+            };
+            let decoded = self.model.decode(
+                Dir::Request,
+                header,
+                header.object,
+                &body,
+                &mut self.from_client.fds,
+            );
+            let (mut msg, iface, desc) = match decoded {
+                Ok(d) => d,
+                Err(err) => {
+                    self.lose_track(err, Dir::Request, header, &body)?;
+                    break;
+                }
+            };
+            let (forward, synth) = self.model.on_request(&mut msg, iface, desc);
+            for m in synth {
+                self.to_client.push_msg(m);
+            }
+            if forward {
+                if self.ids.request(&mut msg, iface, desc) {
+                    self.to_server.push_msg(msg);
+                } else {
+                    debug!(
+                        "wl-proxy: {}: dropped {}.{} (no counterpart in the compositor)",
+                        self.label, iface.name, desc.name
+                    );
+                }
             }
         }
+        self.model.gc();
+        Ok(())
+    }
+
+    /// Handles the complete events read so far.
+    fn pump_server(&mut self, mut rp: Option<&mut ReplayState>) -> Result<(), End> {
+        while !self.raw {
+            let (header, body) = match self.from_server.next_msg() {
+                Ok(Some(m)) => m,
+                Ok(None) => break,
+                Err(err) => return Err(End::Lost(err)),
+            };
+            if let Err(err) = self.on_server_msg(header, &body, rp.as_deref_mut()) {
+                self.lose_track(err, Dir::Event, header, &body)?;
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn on_server_msg(
+        &mut self,
+        header: Header,
+        body: &[u8],
+        rp: Option<&mut ReplayState>,
+    ) -> Result<(), WireError> {
+        // The proxy's own objects.
+        if let Some(&iface) = self.ids.temps.get(&header.object) {
+            let desc = iface
+                .events
+                .get(header.opcode as usize)
+                .ok_or(WireError::BadOpcode {
+                    interface: iface.name,
+                    opcode: header.opcode,
+                    dir: Dir::Event,
+                })?;
+            let args = wire::decode_args(desc.signature, body, &mut self.from_server.fds).map_err(
+                |_| WireError::Truncated {
+                    interface: iface.name,
+                    message: desc.name,
+                },
+            )?;
+            if let Some(rp) = rp {
+                if iface.name == "wl_callback" && rp.done_cb == Some(header.object) {
+                    rp.done = true;
+                }
+                if let (Some((reg, list)), "global") = (&mut rp.collect, desc.name) {
+                    if *reg == header.object {
+                        if let [wire::A::Uint(name), wire::A::Str(Some(i)), wire::A::Uint(v)] =
+                            &args[..]
+                        {
+                            list.push((*name, String::from_utf8_lossy(i).into_owned(), *v));
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let c = self
+            .ids
+            .s2c(header.object)
+            .ok_or(WireError::UnknownObject {
+                id: header.object,
+                dir: Dir::Event,
+            })?;
+        let (mut msg, iface, desc) =
+            self.model
+                .decode(Dir::Event, header, c, body, &mut self.from_server.fds)?;
+        let model = &self.model;
+        if let Fate::Swallow = self
+            .ids
+            .event(&mut msg, iface, desc, |id| model.by_id.contains_key(&id))
+        {
+            return Ok(());
+        }
+        if let Some(rp) = &rp {
+            if iface.name == "wl_registry"
+                && desc.name == "global"
+                && rp.replayed_registries.contains(&c)
+            {
+                if let Some(wire::A::Uint(name)) = msg.args.first() {
+                    if rp.pre_globals.contains(name) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let forward = self.model.on_event(&msg, iface, desc);
+        if let Some(rp) = rp {
+            if rp.auto_ack && iface.name == "xdg_surface" && desc.name == "configure" {
+                if let Some(wire::A::Uint(serial)) = msg.args.first() {
+                    let serial = *serial;
+                    if let (Some(key), Some(s), Some(op)) = (
+                        self.model.key_of(c),
+                        self.ids.c2s(c),
+                        model::request_by_name(iface, "ack_configure"),
+                    ) {
+                        self.to_server
+                            .push_msg(Msg::new(s, op, vec![wire::A::Uint(serial)]));
+                        self.model.proxy_acked.insert((key, serial));
+                        if let Some(o) = self.model.objs.get_mut(&key) {
+                            o.serials.retain(|x| *x != serial);
+                        }
+                    }
+                }
+            }
+        }
+        if forward {
+            self.to_client.push_msg(msg);
+        }
+        Ok(())
     }
 
     fn run(mut self) -> End {
@@ -535,26 +804,35 @@ impl Connection {
                     Ok(Read::Closed) => return End::ClientClosed,
                     Err(err) => return End::Error("app", err),
                 }
+                if let Err(end) = self.pump_client() {
+                    return end;
+                }
             }
+            let mut server_gone = false;
             if readable(revents[1]) {
                 match self.read(Dir::Event, &mut buf) {
                     Ok(Read::Open) => (),
-                    Ok(Read::Closed) => {
-                        self.note_lost();
-                        self.drain_to_client();
-                        return End::CompositorClosed(self.tracker.error.take());
-                    }
+                    Ok(Read::Closed) => server_gone = true,
+                    Err(err) if err.kind() == io::ErrorKind::ConnectionReset => server_gone = true,
+                    Err(err) => return End::Error("compositor", err),
+                }
+                if let Err(end) = self.pump_server(None) {
+                    return end;
+                }
+            }
+
+            if !server_gone {
+                match self.to_server.flush(self.server.as_fd()) {
+                    Ok(()) => (),
+                    Err(err) if err.kind() == io::ErrorKind::BrokenPipe => server_gone = true,
                     Err(err) => return End::Error("compositor", err),
                 }
             }
-            self.note_lost();
-
-            if let Err(err) = self.to_server.flush(self.server.as_fd()) {
-                if err.kind() == io::ErrorKind::BrokenPipe {
+            if server_gone {
+                if let Err(end) = self.reattach() {
                     self.drain_to_client();
-                    return End::CompositorClosed(self.tracker.error.take());
+                    return end;
                 }
-                return End::Error("compositor", err);
             }
             if let Err(err) = self.to_client.flush(self.client.as_fd()) {
                 if err.kind() == io::ErrorKind::BrokenPipe {
@@ -571,7 +849,48 @@ impl Connection {
         }
     }
 
-    /// After the compositor closed: passes on what it sent last (a protocol error, say).
+    /// The compositor connection ended. If the compositor itself went away (a restart or a
+    /// crash), rebuilds this app's objects in the next one; otherwise passes the end on.
+    fn reattach(&mut self) -> Result<(), End> {
+        if let Some(err) = self.model.error.take() {
+            return Err(End::CompositorClosed(Some(err)));
+        }
+        if self.raw {
+            return Err(End::CompositorClosed(None));
+        }
+        if !self.hub.wait_gone(self.generation, Duration::from_secs(3)) {
+            return Err(End::CompositorClosed(None));
+        }
+        for m in self.model.detach() {
+            self.to_client.push_msg(m);
+        }
+        self.to_server = Outgoing::default();
+        self.from_server = Splitter::default();
+        // Keep the app's view current while waiting (it may be blocked on a roundtrip).
+        let _ = self.to_client.flush(self.client.as_fd());
+
+        let (server, generation) = self
+            .hub
+            .connect(self.creds, self.generation)
+            .map_err(|e| End::Error("compositor", e))?;
+        self.server = server;
+        self.generation = generation;
+        self.ids.reset();
+        let started = Instant::now();
+        match self.replay() {
+            Ok(count) => {
+                info!(
+                    "wl-proxy: {}: carried over to the new compositor ({count} objects, {} ms)",
+                    self.label,
+                    started.elapsed().as_millis()
+                );
+                Ok(())
+            }
+            Err(err) => Err(End::ReplayFailed(err)),
+        }
+    }
+
+    /// Passes on what's queued for the app before closing (a protocol error, say).
     fn drain_to_client(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !self.to_client.is_empty() && Instant::now() < deadline {
@@ -612,7 +931,8 @@ mod tests {
             uid: 1000,
             gid: 100,
         };
-        let mut ours = hub.connect(creds).unwrap();
+        let (mut ours, generation) = hub.connect(creds, 0).unwrap();
+        assert_eq!(generation, 1);
         let (mut theirs, got) = recv_client(comp.as_fd()).unwrap().unwrap();
         assert_eq!(got, creds);
         use std::io::{Read as _, Write as _};
