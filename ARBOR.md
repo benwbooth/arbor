@@ -809,7 +809,10 @@ turns this off. Code: src/layout/own_space.rs.
 
 Separate from session restore: whenever a window closes, hides (an app hiding to the tray
 destroys or unmaps its toplevel, e.g. treetop) or arbor quits, the app's placement is saved to
-`$XDG_STATE_HOME/arbor/windows.json`: output, docked or floating, and for floating windows the
+the SQLite database `$XDG_STATE_HOME/arbor/windows.db` (table `placements`, one row per app and
+per window title; written on a background thread, flushed when arbor quits or reloads; an older
+`windows.json` is imported once and renamed `windows.json.imported`): output, docked or
+floating, and for floating windows the
 position (relative to the working area's top left) and window size. The next window of that app
 gets it through the window rules at its initial configure, filling only what the user's own
 rules leave unset (`default-column-width`/`default-window-height`, `default-floating-position`,

@@ -334,6 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Remember where every window is (window_memory.rs).
     state.window_memory_record_all();
+    state.arbor.window_memory.flush();
 
     // Save the running apps for the next start (session-restore).
     if cli.session {
