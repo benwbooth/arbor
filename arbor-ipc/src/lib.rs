@@ -664,6 +664,16 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         y: f64,
     },
+    /// Close a window's open popup menus, as a click outside them would.
+    ///
+    /// The window's popup grab (an app's open menu) ends and its popups are
+    /// dismissed; other windows' are left alone. For accessibility tools,
+    /// after they opened a menu to read it (see ClickWindow).
+    ClosePopups {
+        /// Id of the window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+    },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
     /// Focus the column to the left.

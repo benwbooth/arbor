@@ -953,6 +953,7 @@ impl State {
                 }
             }
             Action::ClickWindow(id, x, y) => self.click_window(id, x, y),
+            Action::ClosePopups(id) => self.close_window_popups(id),
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
                 if let Some(window) = self
@@ -3076,6 +3077,45 @@ impl State {
             },
         );
         pointer.frame(self);
+    }
+
+    /// IPC ClosePopups: close window `id`'s popups (its open menus), as a
+    /// click outside them does: its popup grab, then any popup left.
+    fn close_window_popups(&mut self, id: u64) {
+        let Some(root) = self
+            .arbor
+            .layout
+            .windows()
+            .find(|(_, m)| m.id().get() == id)
+            .and_then(|(_, m)| m.window.toplevel().map(|t| t.wl_surface().clone()))
+        else {
+            return;
+        };
+        if let Some(grab) = self.arbor.popup_grab.as_mut().filter(|g| g.root == root) {
+            grab.grab
+                .ungrab(smithay::desktop::PopupUngrabStrategy::All);
+            let had_keyboard = grab.has_keyboard_grab;
+            self.arbor.popup_grab = None;
+            let serial = SERIAL_COUNTER.next_serial();
+            let time = get_monotonic_time().as_millis() as u32;
+            if had_keyboard {
+                self.arbor.seat.get_keyboard().unwrap().unset_grab(self);
+            }
+            self.arbor
+                .seat
+                .get_pointer()
+                .unwrap()
+                .unset_grab(self, serial, time);
+        }
+        // Popups shown without a grab too: one whose grab was refused (a
+        // layer surface such as hearth's menu had the keyboard) stays up
+        // otherwise.
+        let popups: Vec<_> = smithay::desktop::PopupManager::popups_for_surface(&root)
+            .map(|(popup, _)| popup)
+            .collect();
+        for popup in popups.iter().rev() {
+            let _ = smithay::desktop::PopupManager::dismiss_popup(&root, popup);
+        }
     }
 
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {

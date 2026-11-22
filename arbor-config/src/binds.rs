@@ -160,6 +160,8 @@ pub enum Action {
     FocusWindow(u64),
     #[knuffel(skip)]
     ClickWindow(u64, f64, f64),
+    #[knuffel(skip)]
+    ClosePopups(u64),
     FocusWindowPrevious,
     FocusColumnLeft,
     #[knuffel(skip)]
@@ -482,6 +484,7 @@ impl From<arbor_ipc::Action> for Action {
             }
             arbor_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
             arbor_ipc::Action::ClickWindow { id, x, y } => Self::ClickWindow(id, x, y),
+            arbor_ipc::Action::ClosePopups { id } => Self::ClosePopups(id),
             arbor_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
             arbor_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
             arbor_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
