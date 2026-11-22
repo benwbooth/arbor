@@ -226,14 +226,21 @@ fn find_icon(app_id: &str) -> Option<PathBuf> {
     }
 
     for theme in icon_themes() {
-        for data in &dirs {
-            let theme_dir = data.join("icons").join(&theme);
-            if !theme_dir.is_dir() {
-                continue;
-            }
-            for (sub, _) in theme_dirs(&theme_dir) {
+        // A theme's index.theme is read from the first data dir that has one, and its
+        // directories are then searched in every data dir (icon theme spec): on NixOS the
+        // per-user profile's hicolor holds apps' icons (Brave, Claude...) but no index.theme.
+        let Some(subs) = dirs
+            .iter()
+            .map(|data| theme_dirs(&data.join("icons").join(&theme)))
+            .find(|subs| !subs.is_empty())
+        else {
+            continue;
+        };
+        for (sub, _) in &subs {
+            for data in &dirs {
+                let sub_dir = data.join("icons").join(&theme).join(sub);
                 for ext in ["svg", "png"] {
-                    let path = theme_dir.join(&sub).join(format!("{name}.{ext}"));
+                    let path = sub_dir.join(format!("{name}.{ext}"));
                     if path.exists() {
                         return Some(path);
                     }
