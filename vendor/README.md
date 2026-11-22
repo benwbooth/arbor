@@ -13,3 +13,10 @@ Changes:
   primary-selection `set_selection` from such a client is accepted without keyboard focus. arbor
   allows it for apps its supervisor's Wayland proxy is rebuilding after a restart, so the app
   that owned the clipboard keeps owning it.
+- ext-session-lock: the outputs a lock has surfaces for are kept per lock object
+  (`SessionLockState::locked_outputs`), not in one list on `SessionLockManagerState` that only
+  `unlock_and_destroy` cleared. Upstream, once a client's lock was refused, any later lock from
+  that client posted `duplicated_output` for the same output and killed the client.
+- ext-session-lock: `unlock_and_destroy` on a lock that was never confirmed posts
+  `invalid_unlock` and stops. Upstream it then unlocked anyway, so a client whose lock was
+  refused could unlock the session another client had locked.
