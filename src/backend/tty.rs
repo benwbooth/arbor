@@ -97,6 +97,11 @@ pub struct Tty {
     dmabuf_global: Option<DmabufGlobal>,
     // The output config had changed, but the session is paused, so we need to update it on resume.
     update_output_config_on_resume: bool,
+    // A mode change failed (e.g. its test commit was refused while a monitor was still waking
+    // up); a timer will run on_output_config_changed() again. Holds the attempts made so far.
+    mode_retry_attempts: u32,
+    // Whether a mode retry timer is already pending.
+    mode_retry_pending: bool,
     // Whether the debug tinting is enabled.
     debug_tint: bool,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
@@ -509,6 +514,8 @@ impl Tty {
             devices: HashMap::new(),
             dmabuf_global: None,
             update_output_config_on_resume: false,
+            mode_retry_attempts: 0,
+            mode_retry_pending: false,
             debug_tint: false,
             ipc_outputs: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -2438,8 +2445,17 @@ impl Tty {
 
         let mut to_disconnect = vec![];
         let mut to_connect = vec![];
+        let mut mode_change_failed = false;
 
         for (&node, device) in &mut self.devices {
+            // During a session resume devices are activated one by one, and each one's
+            // device_changed() lands here. A device that isn't active yet would refuse every
+            // change with DeviceInactive; it gets its own pass once it is activated.
+            if !device.drm.is_active() {
+                debug!("skipping inactive device {node:?} in output config update");
+                continue;
+            }
+
             for (&crtc, surface) in device.surfaces.iter_mut() {
                 let config = self
                     .config
@@ -2485,7 +2501,28 @@ impl Tty {
                     },
                 };
 
-                let change_mode = surface.compositor.pending_mode() != mode;
+                let current_mode = surface.compositor.pending_mode();
+                let change_mode = match decide_mode_change(
+                    current_mode,
+                    mode,
+                    fallback,
+                    config.modeline.is_none().then_some(config.mode).flatten(),
+                ) {
+                    ModeDecision::Keep => false,
+                    ModeDecision::KeepMissing => {
+                        // A waking monitor (or a dock still reading the EDID) can briefly
+                        // report a short mode list. Falling back to its preferred mode would
+                        // throw away a mode that works and was asked for; keep it, and the
+                        // next connector change will bring the full list back.
+                        debug!(
+                            "output {:?}: configured mode is missing from the connector's \
+                             mode list but is the current mode; keeping it",
+                            surface.name.connector
+                        );
+                        false
+                    }
+                    ModeDecision::Change => true,
+                };
 
                 // arbor: colour profile / HDR changes.
                 if let Some(gamma_props) = &mut surface.gamma_props {
@@ -2573,7 +2610,12 @@ impl Tty {
                         surface.name.connector
                     );
                     if let Err(err) = surface.compositor.use_mode(mode) {
-                        warn!("error changing mode: {err:?}");
+                        // The current mode stays in place, so the next pass will try again.
+                        warn!(
+                            "output {:?}: error changing mode, keeping the current one: {err:?}",
+                            surface.name.connector
+                        );
+                        mode_change_failed = true;
                         continue;
                     }
 
@@ -2624,6 +2666,12 @@ impl Tty {
             self.connector_disconnected(arbor, node, crtc);
         }
 
+        if mode_change_failed {
+            self.schedule_mode_retry(arbor);
+        } else {
+            self.mode_retry_attempts = 0;
+        }
+
         // Sort by output name to get more predictable first focused output at initial compositor
         // startup, when multiple connectors appear at once.
         to_connect.sort_unstable_by(|a, b| a.3.compare(&b.3));
@@ -2635,6 +2683,44 @@ impl Tty {
         }
 
         self.refresh_ipc_outputs(arbor);
+    }
+
+    /// Run on_output_config_changed() again a little later after a mode change failed.
+    ///
+    /// Monitors waking from sleep can refuse a modeset for a moment and then settle without
+    /// sending another hotplug event, which would otherwise leave the output stuck.
+    fn schedule_mode_retry(&mut self, arbor: &mut Arbor) {
+        const MAX_ATTEMPTS: u32 = 5;
+
+        if self.mode_retry_pending {
+            return;
+        }
+        if self.mode_retry_attempts >= MAX_ATTEMPTS {
+            warn!("giving up retrying mode changes after {MAX_ATTEMPTS} attempts");
+            self.mode_retry_attempts = 0;
+            return;
+        }
+
+        self.mode_retry_attempts += 1;
+        self.mode_retry_pending = true;
+        let delay = mode_retry_delay(self.mode_retry_attempts);
+        debug!(
+            "retrying mode changes in {delay:?} (attempt {})",
+            self.mode_retry_attempts
+        );
+
+        let res = arbor
+            .event_loop
+            .insert_source(Timer::from_duration(delay), |_, _, state| {
+                let tty = state.backend.tty();
+                tty.mode_retry_pending = false;
+                tty.on_output_config_changed(&mut state.arbor);
+                TimeoutAction::Drop
+            });
+        if let Err(err) = res {
+            warn!("error scheduling mode retry: {err:?}");
+            self.mode_retry_pending = false;
+        }
     }
 
     pub fn get_device_from_node(&mut self, node: DrmNode) -> Option<&mut OutputDevice> {
@@ -3253,6 +3339,61 @@ fn modeinfo_name_slice_from_string(mode_name: &str) -> [core::ffi::c_char; 32] {
     name
 }
 
+/// Whether `m` is the mode the config asks for: same size, same refresh rate when one is
+/// given, and not interlaced (interlaced modes don't appear to work).
+fn mode_matches_target(m: &control::Mode, target: &arbor_config::output::Mode) -> bool {
+    if m.size() != (target.mode.width, target.mode.height) {
+        return false;
+    }
+    if m.flags().contains(ModeFlags::INTERLACE) {
+        return false;
+    }
+    match target.mode.refresh {
+        Some(refresh) => Mode::from(*m).refresh == (refresh * 1000.).round() as i32,
+        None => true,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModeDecision {
+    /// The picked mode is the current one.
+    Keep,
+    /// The configured mode is missing from the connector's list, but it is what the output
+    /// already runs: keep it instead of falling back.
+    KeepMissing,
+    /// Switch to the picked mode.
+    Change,
+}
+
+/// Decide whether an enabled output should switch from `current` to the `picked` mode.
+///
+/// `fallback` is true when the configured mode `target` wasn't in the connector's mode list and
+/// `picked` is the preferred mode instead.
+fn decide_mode_change(
+    current: control::Mode,
+    picked: control::Mode,
+    fallback: bool,
+    target: Option<arbor_config::output::Mode>,
+) -> ModeDecision {
+    if current == picked {
+        return ModeDecision::Keep;
+    }
+    if fallback {
+        if let Some(target) = target {
+            if !target.custom && mode_matches_target(&current, &target) {
+                return ModeDecision::KeepMissing;
+            }
+        }
+    }
+    ModeDecision::Change
+}
+
+/// Delay before mode retry number `attempt` (1-based): 1 s, 2 s, 4 s, 8 s, then 15 s.
+fn mode_retry_delay(attempt: u32) -> Duration {
+    let secs = 1u64 << attempt.saturating_sub(1).min(4);
+    Duration::from_secs(secs.min(15))
+}
+
 fn pick_mode(
     connector: &connector::Info,
     target: Option<arbor_config::output::Mode>,
@@ -3273,23 +3414,14 @@ fn pick_mode(
             }
         }
 
-        let refresh = target_mode.refresh.map(|r| (r * 1000.).round() as i32);
         for m in connector.modes() {
-            if m.size() != (target.mode.width, target.mode.height) {
+            if !mode_matches_target(m, &target) {
                 continue;
             }
 
-            // Interlaced modes don't appear to work.
-            if m.flags().contains(ModeFlags::INTERLACE) {
-                continue;
-            }
-
-            if let Some(refresh) = refresh {
-                // If refresh is set, only pick modes with matching refresh.
-                let wl_mode = Mode::from(*m);
-                if wl_mode.refresh == refresh {
-                    mode = Some(m);
-                }
+            if target_mode.refresh.is_some() {
+                // If refresh is set, only modes with matching refresh got here.
+                mode = Some(m);
             } else if let Some(curr) = mode {
                 // If refresh isn't set, pick the mode with the highest refresh.
                 if curr.vrefresh() < m.vrefresh() {
@@ -3554,7 +3686,76 @@ mod tests {
     use arbor_ipc::{HSyncPolarity, VSyncPolarity};
     use insta::assert_debug_snapshot;
 
-    use crate::backend::tty::{calculate_drm_mode_from_modeline, calculate_mode_cvt};
+    use crate::backend::tty::{
+        calculate_drm_mode_from_modeline, calculate_mode_cvt, decide_mode_change, mode_retry_delay,
+        ModeDecision,
+    };
+
+    fn target_for(mode: smithay::reexports::drm::control::Mode) -> arbor_config::output::Mode {
+        let wl = smithay::output::Mode::from(mode);
+        arbor_config::output::Mode {
+            custom: false,
+            mode: arbor_ipc::ConfiguredMode {
+                width: mode.size().0,
+                height: mode.size().1,
+                refresh: Some(wl.refresh as f64 / 1000.),
+            },
+        }
+    }
+
+    // The LG 5120x2160 woke up and briefly listed only 3440x1440: the configured mode is
+    // missing, pick_mode() falls back to the preferred mode. Keep the working mode instead.
+    #[test]
+    fn short_mode_list_keeps_configured_current_mode() {
+        let current = calculate_mode_cvt(5120, 2160, 165.0);
+        let preferred = calculate_mode_cvt(3440, 1440, 100.0);
+        let target = target_for(current);
+
+        assert_eq!(
+            decide_mode_change(current, preferred, true, Some(target)),
+            ModeDecision::KeepMissing
+        );
+        // Once the full list is back, pick_mode() returns the configured mode again.
+        assert_eq!(
+            decide_mode_change(current, current, false, Some(target)),
+            ModeDecision::Keep
+        );
+    }
+
+    // If the output isn't running the configured mode (e.g. the user just set a mode the
+    // monitor doesn't offer), falling back to the preferred mode is still right.
+    #[test]
+    fn missing_mode_not_current_falls_back() {
+        let current = calculate_mode_cvt(2560, 1440, 60.0);
+        let wanted = calculate_mode_cvt(5120, 2160, 165.0);
+        let preferred = calculate_mode_cvt(3440, 1440, 100.0);
+
+        assert_eq!(
+            decide_mode_change(current, preferred, true, Some(target_for(wanted))),
+            ModeDecision::Change
+        );
+        // No configured mode at all: plain preferred-mode switching.
+        assert_eq!(
+            decide_mode_change(current, preferred, false, None),
+            ModeDecision::Change
+        );
+    }
+
+    #[test]
+    fn configured_mode_available_changes() {
+        let current = calculate_mode_cvt(3440, 1440, 100.0);
+        let wanted = calculate_mode_cvt(5120, 2160, 165.0);
+        assert_eq!(
+            decide_mode_change(current, wanted, false, Some(target_for(wanted))),
+            ModeDecision::Change
+        );
+    }
+
+    #[test]
+    fn mode_retry_backs_off() {
+        let secs: Vec<u64> = (1..=7).map(|n| mode_retry_delay(n).as_secs()).collect();
+        assert_eq!(secs, [1, 2, 4, 8, 15, 15, 15]);
+    }
 
     #[test]
     fn test_calculate_drmmode_from_modeline() {
