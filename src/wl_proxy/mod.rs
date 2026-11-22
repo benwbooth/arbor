@@ -44,16 +44,19 @@ pub struct Creds {
     pub gid: u32,
     /// The proxy is rebuilding this app's objects after a compositor change (not a new app).
     pub restore: bool,
+    /// A sandboxed app (connected through a `wp_security_context_v1` listener).
+    pub restricted: bool,
 }
 
 impl Creds {
-    /// pid, uid, gid, flags (bit 0: restore).
+    /// pid, uid, gid, flags (bit 0: restore, bit 1: restricted).
     fn to_bytes(self) -> [u8; 16] {
         let mut out = [0; 16];
         out[0..4].copy_from_slice(&self.pid.to_ne_bytes());
         out[4..8].copy_from_slice(&self.uid.to_ne_bytes());
         out[8..12].copy_from_slice(&self.gid.to_ne_bytes());
-        out[12..16].copy_from_slice(&(self.restore as u32).to_ne_bytes());
+        let flags = self.restore as u32 | (self.restricted as u32) << 1;
+        out[12..16].copy_from_slice(&flags.to_ne_bytes());
         out
     }
 
@@ -67,6 +70,7 @@ impl Creds {
             uid: u(4),
             gid: u(8),
             restore: b.len() == 16 && u(12) & 1 != 0,
+            restricted: b.len() == 16 && u(12) & 2 != 0,
         })
     }
 }
@@ -96,6 +100,7 @@ pub fn peer_creds(fd: BorrowedFd) -> io::Result<Creds> {
         uid: cred.uid,
         gid: cred.gid,
         restore: false,
+        restricted: false,
     })
 }
 
@@ -328,7 +333,7 @@ pub fn start(listener: UnixListener, hub: Arc<Hub>) -> io::Result<()> {
                     let hub = hub.clone();
                     if let Err(err) = thread::Builder::new()
                         .name("wl-proxy".to_owned())
-                        .spawn(move || serve_client(stream, &hub))
+                        .spawn(move || serve_client(stream, hub, false))
                     {
                         warn!("wl-proxy: error starting a thread: {err}");
                     }
@@ -352,9 +357,55 @@ fn process_name(pid: i32) -> String {
         .unwrap_or_else(|_| "?".to_owned())
 }
 
-fn serve_client(client: UnixStream, hub: &Hub) {
+/// Accepts sandboxed apps on a `wp_security_context_v1` listener (flatpak's), until its close
+/// fd hangs up. The proxy keeps these listeners itself, so sandboxed apps are proxied (and
+/// survive compositor changes) like any other.
+fn listen_sandboxed(listen: OwnedFd, close: OwnedFd, hub: Arc<Hub>, label: String) {
+    let res = thread::Builder::new()
+        .name("wl-proxy-sandbox".to_owned())
+        .spawn(move || {
+            let listener = UnixListener::from(listen);
+            if listener.set_nonblocking(true).is_err() {
+                return;
+            }
+            debug!("wl-proxy: listening for sandboxed apps ({label})");
+            loop {
+                let revents = match poll(
+                    &mut [
+                        (listener.as_fd(), libc::POLLIN),
+                        (close.as_fd(), libc::POLLIN),
+                    ],
+                    -1,
+                ) {
+                    Ok(r) => r,
+                    Err(_) => break,
+                };
+                if revents[1] & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+                    break;
+                }
+                loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let hub = hub.clone();
+                            let _ = thread::Builder::new()
+                                .name("wl-proxy".to_owned())
+                                .spawn(move || serve_client(stream, hub, true));
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::Interrupted => (),
+                        Err(_) => break,
+                    }
+                }
+            }
+            debug!("wl-proxy: sandbox listener closed ({label})");
+        });
+    if let Err(err) = res {
+        warn!("wl-proxy: error starting a sandbox listener: {err}");
+    }
+}
+
+fn serve_client(client: UnixStream, hub: Arc<Hub>, restricted: bool) {
     let creds = match peer_creds(client.as_fd()) {
-        Ok(c) => c,
+        Ok(c) => Creds { restricted, ..c },
         Err(err) => {
             warn!("wl-proxy: error reading the client's credentials: {err}");
             return;
@@ -371,7 +422,15 @@ fn serve_client(client: UnixStream, hub: &Hub) {
     debug!("wl-proxy: {label} connected");
     // A bug here must only cost this one app its connection.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Connection::new(hub, creds, generation, client, server, label.clone()).run()
+        Connection::new(
+            hub.clone(),
+            creds,
+            generation,
+            client,
+            server,
+            label.clone(),
+        )
+        .run()
     }));
     match result {
         Ok(end) => debug!("wl-proxy: {label}: {end}"),
@@ -515,8 +574,8 @@ struct ReplayState {
     auto_ack: bool,
 }
 
-struct Connection<'h> {
-    hub: &'h Hub,
+struct Connection {
+    hub: Arc<Hub>,
     creds: Creds,
     generation: u64,
     client: UnixStream,
@@ -538,9 +597,9 @@ enum Read {
     Closed,
 }
 
-impl<'h> Connection<'h> {
+impl Connection {
     fn new(
-        hub: &'h Hub,
+        hub: Arc<Hub>,
         creds: Creds,
         generation: u64,
         client: UnixStream,
@@ -654,9 +713,25 @@ impl<'h> Connection<'h> {
                     break;
                 }
             };
-            let (forward, synth) = self.model.on_request(&mut msg, iface, desc);
+            let (mut forward, synth) = self.model.on_request(&mut msg, iface, desc);
             for m in synth {
                 self.to_client.push_msg(m);
+            }
+            match (iface.name, desc.name) {
+                // Sandboxed apps' listeners stay with the proxy (listen_sandboxed); the
+                // compositor never sees them.
+                ("wp_security_context_manager_v1", "create_listener") => {
+                    forward = false;
+                    for arg in &msg.args {
+                        if let wire::A::New(id) = arg {
+                            if let Some(k) = self.model.key_of(*id) {
+                                self.model.objs.get_mut(&k).unwrap().on_server = false;
+                            }
+                        }
+                    }
+                }
+                ("wp_security_context_v1", "commit") => self.start_sandbox_listener(msg.object),
+                _ => (),
             }
             if forward {
                 if self.ids.request(&mut msg, iface, desc) {
@@ -671,6 +746,37 @@ impl<'h> Connection<'h> {
         }
         self.model.gc();
         Ok(())
+    }
+
+    fn start_sandbox_listener(&mut self, context: u32) {
+        let Some(o) = self.model.live(context) else {
+            return;
+        };
+        let model::Creation::Request(rec) = &o.creation else {
+            return;
+        };
+        let fds: Vec<_> = rec
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                model::V::Fd(fd) => fd.try_clone().ok(),
+                _ => None,
+            })
+            .collect();
+        let app_id = o.sets.get("set_app_id").and_then(|r| match r.args.first() {
+            Some(model::V::Str(Some(s))) => Some(String::from_utf8_lossy(s).into_owned()),
+            _ => None,
+        });
+        let [listen, close]: [OwnedFd; 2] = match fds.try_into() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let label = format!(
+            "{} for {}",
+            app_id.as_deref().unwrap_or("an app"),
+            self.label
+        );
+        listen_sandboxed(listen, close, self.hub.clone(), label);
     }
 
     /// Handles the complete events read so far.
@@ -953,6 +1059,7 @@ mod tests {
             uid: 1000,
             gid: 100,
             restore: true,
+            restricted: true,
         };
         let (mut ours, generation) = hub.connect(creds, 0).unwrap();
         assert_eq!(generation, 1);

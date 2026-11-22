@@ -139,6 +139,9 @@ pub struct SessionFile {
     /// Slot of the focused window.
     #[serde(default)]
     pub focused: Option<u32>,
+    /// In-place restarts: the GlobalShortcuts portal sessions apps have open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub portal_sessions: Vec<crate::global_shortcuts::SavedPortalSession>,
 }
 
 impl SessionFile {
@@ -445,6 +448,7 @@ impl State {
             windows,
             workspaces,
             focused,
+            portal_sessions: Vec::new(),
         }
     }
 
@@ -804,7 +808,8 @@ impl State {
         let Some(path) = crate::supervisor::state_path() else {
             return;
         };
-        let file = self.session_collect_for(true);
+        let mut file = self.session_collect_for(true);
+        file.portal_sessions = self.arbor.global_shortcuts.saved_sessions();
         match store(&path, &file) {
             Ok(()) => trace!("saved restart state ({} windows)", file.windows.len()),
             Err(err) => warn!("error saving restart state to {}: {err:?}", path.display()),
@@ -816,11 +821,15 @@ impl State {
     pub fn restart_start(&mut self, kind: crate::supervisor::StartKind) {
         if kind.is_restart() {
             match crate::supervisor::state_path().map(|p| (load(&p), p)) {
-                Some((Ok(file), _)) => {
+                Some((Ok(mut file), _)) => {
                     info!(
                         "in-place restart ({kind:?}): putting back {} windows",
                         file.windows.len()
                     );
+                    let portal_sessions = std::mem::take(&mut file.portal_sessions);
+                    self.arbor
+                        .global_shortcuts
+                        .restore_sessions(portal_sessions);
                     self.arbor.session_restore = Some(PendingRestore {
                         file,
                         deadline: Instant::now() + RESTART_TIMEOUT,
@@ -962,6 +971,7 @@ mod tests {
             windows: vec![win(0, 1, "a"), win(1, 1, "a"), win(2, 2, "b")],
             workspaces: vec![],
             focused: None,
+            portal_sessions: vec![],
         };
         assert_eq!(file.launch_commands(), [vec!["a"], vec!["b"]]);
 

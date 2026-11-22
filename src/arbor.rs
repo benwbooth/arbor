@@ -2576,7 +2576,7 @@ impl Arbor {
                         match crate::wl_proxy::recv_client(std::os::fd::AsFd::as_fd(&**chan)) {
                             Ok(Some((client, creds))) => state.arbor.insert_client(NewClient {
                                 client,
-                                restricted: false,
+                                restricted: creds.restricted,
                                 credentials_unknown: false,
                                 credentials: Some(Credentials {
                                     pid: creds.pid,

@@ -79,6 +79,8 @@ pub struct Obj {
     /// zwp_text_input_v3: commits so far (the compositor's `done` serial counts them, and the
     /// app ignores a `done` whose serial isn't its own count).
     pub commits: u32,
+    /// xdg_activation_token_v1: committed, its token not sent yet.
+    pub awaiting: bool,
 }
 
 /// How a request is remembered.
@@ -207,6 +209,11 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
             | "set_exclusive_edge",
         ) => Kind::Set(n),
         ("zwp_text_input_v3", "commit") => Kind::Special,
+        ("xdg_activation_token_v1", "commit") => Kind::Special,
+        ("wp_security_context_v1", "set_sandbox_engine" | "set_app_id" | "set_instance_id") => {
+            Kind::Set(n)
+        }
+        ("xdg_activation_token_v1", "set_serial" | "set_app_id" | "set_surface") => Kind::Set(n),
         (
             "wl_data_device"
             | "zwp_primary_selection_device_v1"
@@ -336,6 +343,7 @@ impl Model {
                 attach_pending: false,
                 serials: Vec::new(),
                 commits: 0,
+                awaiting: false,
             },
         );
         if let Some(old) = self.by_id.insert(id, key) {
@@ -470,6 +478,10 @@ impl Model {
         let mut stale_ack = false;
         if kind == Kind::Special && desc.name == "commit" && iface.name == "zwp_text_input_v3" {
             self.objs.get_mut(&key).unwrap().commits += 1;
+        }
+        if kind == Kind::Special && desc.name == "commit" && iface.name == "xdg_activation_token_v1"
+        {
+            self.objs.get_mut(&key).unwrap().awaiting = true;
         }
         if kind == Kind::Special && desc.name == "ack_configure" {
             if let Some(A::Uint(serial)) = msg.args.first() {
@@ -617,6 +629,11 @@ impl Model {
                     self.globals.remove(name);
                 }
             }
+            ("xdg_activation_token_v1", "done") => {
+                if let Some(o) = key.and_then(|k| self.objs.get_mut(&k)) {
+                    o.awaiting = false;
+                }
+            }
             ("wl_buffer", "release") => {
                 if let Some(o) = key.and_then(|k| self.objs.get_mut(&k)) {
                     o.busy = false;
@@ -687,6 +704,8 @@ impl Model {
         global
             || REPLAYABLE.contains(&o.iface.name)
             || (SOURCES.contains(&o.iface.name) && self.holds_selection(key))
+            // A token the app is still waiting for: asked for again.
+            || (o.iface.name == "xdg_activation_token_v1" && o.awaiting)
     }
 
     /// A selection source some device's last set_selection / set_primary_selection names.
@@ -1002,5 +1021,24 @@ mod tests {
         let synth = m.detach();
         assert!(synth.iter().any(|e| e.object == 24));
         assert!(!synth.iter().any(|e| e.object == 23));
+    }
+
+    #[test]
+    fn pending_activation_tokens_persist() {
+        let mut m = toplevel();
+        feed(&mut m, Dir::Event, &global(4, "xdg_activation_v1", 1));
+        feed(&mut m, Dir::Request, &bind(4, "xdg_activation_v1", 1, 20));
+        req(&mut m, 20, "get_activation_token", &[21]);
+        let key = m.key_of(21).unwrap();
+        assert!(!m.persists(key));
+        req(&mut m, 21, "commit", &[]);
+        assert!(m.persists(key));
+        // Once the token came, there's nothing to ask for again.
+        let iface = m.iface_of(21).unwrap();
+        let op = event_by_name(iface, "done").unwrap();
+        let mut ev = vec![];
+        ev.extend(string("token"));
+        feed(&mut m, Dir::Event, &raw(21, op, &ev));
+        assert!(!m.persists(key));
     }
 }

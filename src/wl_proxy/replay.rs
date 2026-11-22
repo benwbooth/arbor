@@ -22,7 +22,7 @@ use super::{interfaces, poll, recv_with_fds, Connection, ReplayState};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-impl Connection<'_> {
+impl Connection {
     /// Queues a rebuilding request (logged at trace level).
     fn send_replay(&mut self, msg: Msg, iface: &'static Interface) {
         if tracing::enabled!(tracing::Level::TRACE) {
@@ -352,6 +352,22 @@ impl Connection<'_> {
             // Requests about objects that weren't rebuilt are left out (or sent with null).
             if let Some(m) = self.build(&rec, iface, s, &mut ks) {
                 self.send_replay(m, iface);
+            }
+        }
+
+        // Activation tokens the app is still waiting for: asked for again (their state is set).
+        let tokens: Vec<Key> = wanted
+            .iter()
+            .filter(|k| {
+                let o = &self.model.objs[*k];
+                o.alive && o.awaiting && ks.contains_key(*k)
+            })
+            .copied()
+            .collect();
+        for k in tokens {
+            let iface = self.model.objs[&k].iface;
+            if let Some(op) = request_by_name(iface, "commit") {
+                self.send_replay(Msg::new(ks[&k], op, vec![]), iface);
             }
         }
 

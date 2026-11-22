@@ -900,7 +900,8 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
     selection and data-control devices, pointer lock/confine, relative
     pointer, gestures, idle inhibitors and notifications, shortcut
     inhibitors, tablet seats, gtk_surface1 and KDE appmenu (global menus),
-    background-effect regions, virtual keyboard/pointer. Selection sources
+    background-effect regions, virtual keyboard/pointer, and activation
+    tokens the app is still waiting for (asked for again). Selection sources
     come back while a device's last `set_selection` names them; the
     vendored smithay accepts that `set_selection` without keyboard focus
     from an app being restored (the clients channel flags restores;
@@ -921,9 +922,17 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   - Cost: a roundtrip takes ~37 µs through the proxy against ~20 µs direct
     (release, nested), the same before and after a change. A rebuild takes
     ~150–190 ms per app (all apps in parallel).
+  - Sandboxed apps (flatpak's `wp_security_context_v1`): the proxy keeps
+    the listener itself instead of passing it on, accepts the sandboxed
+    apps until the close fd hangs up, and hands them over flagged
+    restricted, so they're proxied (and survive) like the rest.
   - The supervisor and the compositor must both have the proxy; a new
     compositor still works under an older supervisor (no proxy until the
-    next login).
+    next login). devloop swaps only sessions whose environment has
+    `ARBOR_WAYLAND_PROXY=1`.
+- GlobalShortcuts portal sessions apps have open are saved with the
+  restart layout and exported again by the next compositor, so portal
+  shortcuts keep working (xdg-desktop-portal never notices).
 - With the proxy, the focused window keeps the focus: windows mapping later
   during the restore give it back.
 
@@ -1046,10 +1055,9 @@ binary in a test profile, a GTK app and foot surviving `reload-binary`):
 | 1 | **Done.** Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations, data device, cursor shape; id and global translation. Verified nested: foot, zenity (GTK4), Konsole (with Qt's own reconnect off) and Brave survive `reload-binary` twice and a SIGKILL crash, same pids, drawing, keyboard input working (foot runs typed commands, Brave's address bar navigates). Window tokens not needed yet (app id + title matching works since the pids stay). | ~1.5k |
 | 2 | **Done.** text-input, pointer constraints/relative, gestures, idle inhibit/notify, primary selection and data control, the clipboard owner keeps the selection (smithay vendored for it), gtk_surface1/appmenu. Verified nested: Brave and the Claude app (test profile) survive with the same pids and keep drawing. xdg-activation tokens pending at a swap are not rebuilt (an app waiting on one gets no answer). | ~0.5k |
 | 3 | **Done.** xwayland-satellite under the supervisor; layer-shell (hearth keeps running); crash restarts use the same path. Verified nested: hearth, xterm (X11), foot, Brave and wl-copy's clipboard survive reloads and a SIGKILL crash. | ~0.3k |
-| 4 | The remaining globals, security-context, tests (replay fuzzing against a nested arbor). | ~1.5k |
+| 4 | **Done.** Activation tokens, security-context (flatpak) listeners in the proxy, portal shortcut sessions kept; devloop swaps again (only proxied sessions). Not done: replay fuzzing. Not carried over: xdg-foreign handles (a portal dialog's parent), screencopy/export frames in flight (they fail and are asked again). | ~0.3k |
 
-That comes to about 10k lines in total. Each stage ships on its own. Until
-stage 2 works, devloop's automatic swaps stay off (`no-reload`).
+It came to about 3.5k lines (plus vendored smithay).
 
 **Risks:**
 

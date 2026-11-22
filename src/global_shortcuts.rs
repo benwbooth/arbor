@@ -43,6 +43,16 @@ pub enum GlobalShortcutsEvent {
         session: String,
         shortcuts: Vec<ShortcutInfo>,
     },
+    /// Export the session object again (after an in-place restart).
+    Restore { session: String },
+}
+
+/// An open portal session, kept across in-place restarts (in the restart state file).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedPortalSession {
+    pub handle: String,
+    pub app_id: String,
+    pub active: Vec<String>,
 }
 
 /// Who registered a shortcut.
@@ -388,6 +398,40 @@ impl GlobalShortcuts {
             })
             .unwrap_or_default();
         self.sessions.insert(session, Session { app_id, active });
+    }
+
+    /// The open portal sessions, for the next compositor after an in-place restart.
+    pub fn saved_sessions(&self) -> Vec<SavedPortalSession> {
+        let mut out: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|(handle, s)| SavedPortalSession {
+                handle: handle.clone(),
+                app_id: s.app_id.clone(),
+                active: s.active.clone(),
+            })
+            .collect();
+        out.sort_by(|a, b| a.handle.cmp(&b.handle));
+        out
+    }
+
+    /// After an in-place restart: the portal's sessions are still open on its side, so take
+    /// them back (and export their objects again) instead of the apps losing their shortcuts.
+    pub fn restore_sessions(&mut self, saved: Vec<SavedPortalSession>) {
+        for s in saved {
+            if let Some(events) = &self.events {
+                let _ = events.try_send(GlobalShortcutsEvent::Restore {
+                    session: s.handle.clone(),
+                });
+            }
+            self.sessions.insert(
+                s.handle,
+                Session {
+                    app_id: s.app_id,
+                    active: s.active,
+                },
+            );
+        }
     }
 
     pub fn close_session(&mut self, session: &str) {

@@ -257,6 +257,8 @@ async fn emit(conn: &zbus::Connection, event: GlobalShortcutsEvent) -> zbus::Res
             )
             .await
         }
+        // Handled in start().
+        GlobalShortcutsEvent::Restore { .. } => Ok(()),
         GlobalShortcutsEvent::ShortcutsChanged { session, shortcuts } => {
             GlobalShortcutsPortal::shortcuts_changed(
                 &emitter,
@@ -271,6 +273,7 @@ async fn emit(conn: &zbus::Connection, event: GlobalShortcutsEvent) -> zbus::Res
 impl Start for GlobalShortcutsPortal {
     fn start(self) -> anyhow::Result<zbus::blocking::Connection> {
         let from_arbor = self.from_arbor.clone();
+        let to_arbor = self.to_arbor.clone();
 
         let conn = zbus::blocking::Connection::session()?;
         let flags = RequestNameFlags::AllowReplacement
@@ -287,6 +290,20 @@ impl Start for GlobalShortcutsPortal {
             let conn = async_conn.clone();
             async move {
                 while let Ok(event) = from_arbor.recv().await {
+                    if let GlobalShortcutsEvent::Restore { session } = &event {
+                        let obj = PortalSession {
+                            handle: session.clone(),
+                            to_arbor: to_arbor.clone(),
+                        };
+                        let path = match ObjectPath::try_from(session.clone()) {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
+                        if let Err(err) = conn.object_server().at(path, obj).await {
+                            warn!("error exporting a restored GlobalShortcuts session: {err:?}");
+                        }
+                        continue;
+                    }
                     if let Err(err) = emit(&conn, event).await {
                         warn!("error emitting GlobalShortcuts signal: {err:?}");
                     }
