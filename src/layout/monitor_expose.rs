@@ -6,7 +6,8 @@
 //! every visible window of the shown workspace moves from its real place to its exposé slot as
 //! the overview progress goes from 0 to 1 (the same progress the touchpad swipe scrubs), with
 //! its title and app icon under it, a hover outline and close button, a bar of workspace
-//! thumbnails along the top, and the wallpaper dimmed behind.
+//! thumbnails along the top (the workspace's real windows, live and scaled down, with each
+//! app's icon in front), and the wallpaper dimmed behind.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -19,7 +20,7 @@ use pangocairo::cairo::{self, ImageSurface};
 use pangocairo::pango::{Alignment, EllipsizeMode, FontDescription, Weight};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::utils::{
-    Relocate, RelocateRenderElement, RescaleRenderElement,
+    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesTexture;
@@ -98,6 +99,9 @@ type ThumbWindow = ((i32, i32, i32, i32), String, bool);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ThumbKey {
+    /// The layer under the live windows (background, the new workspace's "+") rather than the
+    /// one over them (app icons, name, border).
+    back: bool,
     size: (i32, i32),
     scale: u64,
     name: String,
@@ -128,7 +132,7 @@ pub(super) struct ExposeUi<Id> {
     /// The texture last shown in each workspace thumbnail's place (by workspace index). While a
     /// thumbnail's new look (hovered, a window moved...) is still being drawn, the old one stays
     /// on screen instead of the thumbnail blinking out for a frame or two.
-    shown_thumbs: RefCell<HashMap<usize, TexKey>>,
+    shown_thumbs: RefCell<HashMap<(usize, bool), TexKey>>,
     /// Each workspace's window slots, laid out once when the overview opens (and again only
     /// when its windows or the area change). Focusing a window raises it and moves the camera
     /// to it; laying the windows out again from those new places would swap their slots, so a
@@ -576,9 +580,11 @@ impl<W: LayoutElement> Monitor<W> {
             }
         }
 
-        // The workspace bar.
+        // The workspace bar: per thumbnail, its front layer (icons, name, border), the
+        // workspace's real windows scaled into it, then its back layer.
+        let view = self.view_size;
         for (idx, (rect, ws)) in thumbs.iter().zip(&self.workspaces).enumerate() {
-            let key = self.thumb_key(
+            let front = self.thumb_key(
                 ws,
                 *rect,
                 scale,
@@ -586,24 +592,27 @@ impl<W: LayoutElement> Monitor<W> {
                 hover_thumb == Some(idx) || drop_target == Some(idx),
                 idx + 1 == self.workspaces.len(),
             );
-            let key = TexKey::Thumb(key);
-            let ready = self.expose_texture(ctx.renderer, key.clone(), rect.loc, alpha);
-            let mut shown = self.expose.shown_thumbs.borrow_mut();
-            let elem = match ready {
-                Some(elem) => {
-                    shown.insert(idx, key);
-                    Some(elem)
-                }
-                // Not drawn yet: the previous look stands in (and stays cached meanwhile).
-                None => shown
-                    .get(&idx)
-                    .filter(|old| self.expose.textures.borrow().contains_key(*old))
-                    .cloned()
-                    .and_then(|old| self.expose_texture(ctx.renderer, old, rect.loc, alpha)),
+            let back = ThumbKey {
+                back: true,
+                is_hovered: false,
+                is_active: false,
+                name: String::new(),
+                windows: Vec::new(),
+                ..front.clone()
             };
-            if let Some(elem) = elem {
-                push(tex_elem(elem));
+            self.push_thumb_layer(ctx.renderer, idx, false, front, rect.loc, alpha, push);
+            if alpha > 0. {
+                let k = rect.size.w / view.w.max(1.);
+                // Topmost first, as the elements are pushed.
+                for (tile, pos, zoom) in ws.expose_tiles() {
+                    if drag.is_some_and(|d| &d.window == tile.window().id()) {
+                        continue;
+                    }
+                    let loc = rect.loc + Point::from((pos.x * k, pos.y * k));
+                    self.push_thumb_tile(ctx.r(), tile, loc, zoom * k, *rect, push);
+                }
             }
+            self.push_thumb_layer(ctx.renderer, idx, true, back, rect.loc, alpha, push);
         }
 
         // The windows.
@@ -634,6 +643,42 @@ impl<W: LayoutElement> Monitor<W> {
             .slots
             .borrow_mut()
             .retain(|id, _| self.workspaces.iter().any(|ws| ws.id() == *id));
+    }
+
+    /// One layer of a workspace thumbnail. Until a new look (hovered, a window moved...) is
+    /// drawn, the previous one stands in, instead of the thumbnail blinking out for a frame.
+    #[allow(clippy::too_many_arguments)]
+    fn push_thumb_layer<R: ArborRenderer>(
+        &self,
+        renderer: &mut R,
+        idx: usize,
+        back: bool,
+        key: ThumbKey,
+        loc: Point<f64, Logical>,
+        alpha: f32,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let key = TexKey::Thumb(key);
+        let ready = self.expose_texture(renderer, key.clone(), loc, alpha);
+        let elem = match ready {
+            Some(elem) => {
+                self.expose.shown_thumbs.borrow_mut().insert((idx, back), key);
+                Some(elem)
+            }
+            None => {
+                let old = self
+                    .expose
+                    .shown_thumbs
+                    .borrow()
+                    .get(&(idx, back))
+                    .filter(|old| self.expose.textures.borrow().contains_key(*old))
+                    .cloned();
+                old.and_then(|old| self.expose_texture(renderer, old, loc, alpha))
+            }
+        };
+        if let Some(elem) = elem {
+            push(tex_elem(elem));
+        }
     }
 
     /// Rounded outlines drawn by the border shader: no CPU rasterizing, whatever their size.
@@ -705,6 +750,42 @@ impl<W: LayoutElement> Monitor<W> {
         });
     }
 
+    /// A window in a workspace thumbnail: live, scaled down and cut to the thumbnail (windows
+    /// reaching past the screen edge would spill out of it).
+    fn push_thumb_tile<R: ArborRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        tile: &Tile<W>,
+        loc: Point<f64, Logical>,
+        tile_scale: f64,
+        clip: Rect,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let scale = self.scale.fractional_scale();
+        let output_scale = smithay::utils::Scale::from(scale);
+        let loc = loc.to_physical_precise_round(scale).to_logical(scale);
+        let clip = clip.to_physical_precise_round(scale);
+        let xray_pos = XrayPos::new(loc, tile_scale);
+        tile.render(ctx, Point::from((0., 0.)), xray_pos, false, &mut |elem| {
+            let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), tile_scale);
+            let elem = RelocateRenderElement::from_element(
+                elem,
+                loc.to_physical_precise_round(scale),
+                Relocate::Relative,
+            );
+            let Some(elem) = CropRenderElement::from_element(elem, output_scale, clip) else {
+                return;
+            };
+            let elem = MonitorInnerRenderElement::ExposeThumbTile(elem);
+            let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), 1.);
+            push(RelocateRenderElement::from_element(
+                elem,
+                Point::from((0, 0)),
+                Relocate::Relative,
+            ));
+        });
+    }
+
     fn thumb_key(
         &self,
         ws: &Workspace<W>,
@@ -742,6 +823,7 @@ impl<W: LayoutElement> Monitor<W> {
             .position(|w| w.id() == ws.id())
             .unwrap_or(0);
         ThumbKey {
+            back: false,
             size: (
                 to_physical_precise_round::<i32>(scale, rect.size.w),
                 to_physical_precise_round::<i32>(scale, rect.size.h),
@@ -950,9 +1032,27 @@ fn draw(key: &TexKey, scale: f64) -> anyhow::Result<Option<MemoryBuffer>> {
             let (wf, hf) = (f64::from(w), f64::from(h));
             let radius = 10. * s;
 
+            if key.back {
+                // Under the live windows: the background, and the new workspace's "+".
+                rounded_rect(&cr, 0., 0., wf, hf, radius);
+                cr.set_source_rgba(0.1, 0.11, 0.13, 0.82);
+                cr.fill()?;
+                if key.is_new {
+                    let a = hf.min(wf) * 0.14;
+                    cr.move_to(wf / 2. - a, hf / 2.);
+                    cr.line_to(wf / 2. + a, hf / 2.);
+                    cr.move_to(wf / 2., hf / 2. - a);
+                    cr.line_to(wf / 2., hf / 2. + a);
+                    cr.set_source_rgba(1., 1., 1., 0.55);
+                    cr.set_line_width((2. * s).max(1.));
+                    cr.set_line_cap(cairo::LineCap::Round);
+                    cr.stroke()?;
+                }
+                return Ok(Some(finish(surf, cr, s)?));
+            }
+
+            // Over the live windows: each app's icon in front of its window, like macOS.
             rounded_rect(&cr, 0., 0., wf, hf, radius);
-            cr.set_source_rgba(0.1, 0.11, 0.13, 0.82);
-            cr.fill_preserve()?;
             cr.save()?;
             cr.clip();
             for ((x, y, ww, hh), app_id, _) in &key.windows {
@@ -963,42 +1063,22 @@ fn draw(key: &TexKey, scale: f64) -> anyhow::Result<Option<MemoryBuffer>> {
                 if ww < 1. || hh < 1. {
                     continue;
                 }
-                let inset = s.max(1.);
-                let (r, g, b) = app_color(app_id);
-                rounded_rect(
-                    &cr,
-                    x + inset,
-                    y + inset,
-                    ww - inset * 2.,
-                    hh - inset * 2.,
-                    3. * s,
-                );
-                cr.set_source_rgba(r, g, b, 0.95);
-                cr.fill_preserve()?;
-                cr.set_source_rgba(1., 1., 1., 0.25);
-                cr.set_line_width(s.max(1.));
-                cr.stroke()?;
-                let side = (ww.min(hh) * 0.5).min(32. * s);
-                if side >= 6. {
-                    if let Some(icon) = (!app_id.is_empty()).then(|| app_icon(app_id)).flatten() {
-                        paint_icon(&cr, &icon, x + (ww - side) / 2., y + (hh - side) / 2., side)?;
+                let side = (ww.min(hh) * 0.55).min(28. * s);
+                if side < 6. {
+                    continue;
+                }
+                let (ix, iy) = (x + (ww - side) / 2., y + (hh - side) / 2.);
+                match (!app_id.is_empty()).then(|| app_icon(app_id)).flatten() {
+                    Some(icon) => paint_icon(&cr, &icon, ix, iy, side)?,
+                    None => {
+                        let (r, g, b) = app_color(app_id);
+                        rounded_rect(&cr, ix, iy, side, side, side * 0.22);
+                        cr.set_source_rgb(r, g, b);
+                        cr.fill()?;
                     }
                 }
             }
             cr.restore()?;
-
-            if key.is_new {
-                // The empty workspace at the end: a "+" to drop windows on.
-                let a = hf.min(wf) * 0.14;
-                cr.move_to(wf / 2. - a, hf / 2.);
-                cr.line_to(wf / 2. + a, hf / 2.);
-                cr.move_to(wf / 2., hf / 2. - a);
-                cr.line_to(wf / 2., hf / 2. + a);
-                cr.set_source_rgba(1., 1., 1., 0.55);
-                cr.set_line_width((2. * s).max(1.));
-                cr.set_line_cap(cairo::LineCap::Round);
-                cr.stroke()?;
-            }
 
             // Name in the corner.
             let mut font = FontDescription::from_string("sans 9");

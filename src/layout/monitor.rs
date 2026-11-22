@@ -204,6 +204,8 @@ arbor_render_elements! {
         Shadow = ShadowRenderElement,
         SolidColor = SolidColorRenderElement,
         ExposeTile = super::tile::TileRenderElement<R>,
+        // A window drawn live in a workspace thumbnail of the overview's bar, cut to it.
+        ExposeThumbTile = CropRenderElement<RelocateRenderElement<RescaleRenderElement<super::tile::TileRenderElement<R>>>>,
         ExposeTexture = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
         ExposeOutline = crate::render_helpers::border::BorderRenderElement,
     }
