@@ -71,6 +71,20 @@ fn set_dbus_properties_and_release() {
     f.roundtrip(id);
     assert_eq!(window_gtk_menu(&mut f), None);
 
+    // No menus but the app's actions (libadwaita): kept, for the app menu.
+    gtk_surface.set_dbus_properties(
+        Some("org.example.App".to_owned()),
+        None,
+        None,
+        Some("/org/example/App/window/1".to_owned()),
+        Some("/org/example/App".to_owned()),
+        Some(":1.42".to_owned()),
+    );
+    f.roundtrip(id);
+    let menu = window_gtk_menu(&mut f).expect("actions-only address kept");
+    assert_eq!(menu.menubar_path, "");
+    assert_eq!(menu.application_object_path, "/org/example/App");
+
     gtk_surface.set_dbus_properties(
         None,
         Some("/org/example/App/menus/appmenu".to_owned()),

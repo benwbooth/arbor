@@ -235,8 +235,15 @@ where
                     application_object_path: application_object_path.unwrap_or_default(),
                 };
                 trace!("gtk menus for {surface:?}: {address:?}");
+                // Kept without menus too: a libadwaita app (no menu bar,
+                // a ☰ instead) still exports its `app.`/`win.` actions
+                // (about, preferences, shortcuts, quit...), which the shell
+                // offers in its app menu.
                 let useful = !address.unique_bus_name.is_empty()
-                    && !(address.menubar_path.is_empty() && address.app_menu_path.is_empty());
+                    && !(address.menubar_path.is_empty()
+                        && address.app_menu_path.is_empty()
+                        && address.window_object_path.is_empty()
+                        && address.application_object_path.is_empty());
                 set_gtk_menu_address(&surface, useful.then_some(address));
             }
             gtk_surface1::Request::Release => set_gtk_menu_address(&surface, None),
