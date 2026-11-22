@@ -644,6 +644,26 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
+    /// Click a window at a point, without moving the pointer.
+    ///
+    /// For accessibility tools: hearth's global menu opens an app's in-window
+    /// menu button this way (Claude Desktop's menu, VS Code's custom title
+    /// bar), which ignore AT-SPI's "press" action. A left click (press and
+    /// release) goes to the window's surface under the point; the window is
+    /// not focused or raised, and the pointer stays where it is.
+    ClickWindow {
+        /// Id of the window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Logical pixels from the left edge of the window's main surface
+        /// (client-side shadows included: what AT-SPI's window coordinates
+        /// measure from).
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+        /// Logical pixels from the top edge of the window's main surface.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+    },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
     /// Focus the column to the left.

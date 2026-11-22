@@ -952,6 +952,7 @@ impl State {
                     self.focus_window(&window);
                 }
             }
+            Action::ClickWindow(id, x, y) => self.click_window(id, x, y),
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
                 if let Some(window) = self
@@ -3010,6 +3011,71 @@ impl State {
         // Redraw to update the cursor position.
         // FIXME: redraw only outputs overlapping the cursor.
         self.arbor.queue_redraw_all();
+    }
+
+    /// IPC ClickWindow: a left click on window `id` at (x, y) from its main
+    /// surface's origin, without moving the pointer or focusing the window. The
+    /// pointer focus is pointed at the window's surface for the click (placed
+    /// so that the unmoved pointer is over the point), then put back on what
+    /// is really under the pointer.
+    fn click_window(&mut self, id: u64, x: f64, y: f64) {
+        let Some(window) = self
+            .arbor
+            .layout
+            .windows()
+            .find(|(_, m)| m.id().get() == id)
+            .map(|(_, m)| m.window.clone())
+        else {
+            return;
+        };
+        let pointer = self.arbor.seat.get_pointer().unwrap();
+        // Not in the middle of a real click or drag.
+        if pointer.is_grabbed() {
+            return;
+        }
+        let in_window = Point::<f64, Logical>::from((x, y));
+        let Some((surface, surface_loc)) =
+            window.surface_under(in_window, smithay::desktop::WindowSurfaceType::ALL)
+        else {
+            return;
+        };
+        let location = pointer.current_location();
+        let origin = location - (in_window - surface_loc.to_f64());
+        let time = get_monotonic_time().as_millis() as u32;
+        pointer.motion(
+            self,
+            Some((surface, origin)),
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
+        const BTN_LEFT: u32 = 0x110;
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button: BTN_LEFT,
+                    state,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+            pointer.frame(self);
+        }
+        let under = self.arbor.contents_under(location);
+        pointer.motion(
+            self,
+            under.surface,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
     }
 
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
