@@ -157,6 +157,13 @@
 
           # ever since this commit:
           # https://github.com/niri-wm/niri/commit/771ea1e81557ffe7af9cbdbec161601575b64d81
+          # (No test run in the system build: it compiled every dependency
+          # again from scratch, in a throwaway target directory, three of
+          # the four minutes a new revision took. The tests run with cargo
+          # test in the dev tree; `nix build .#arbor.overrideAttrs (_:
+          # { doCheck = true; })` still can.)
+          doCheck = false;
+
           # niri now runs an actual instance of the real compositor (with a mock backend) during tests
           # and thus creates a real socket file in the runtime dir.
           # this is fine for our build, we just need to make sure it has a directory to write to.
