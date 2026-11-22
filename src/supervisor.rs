@@ -65,6 +65,8 @@ const ENV_CLIENTS_FD: &str = "ARBOR_SUPERVISED_CLIENTS_FD";
 const ENV_X11_BY_SUPERVISOR: &str = "ARBOR_SUPERVISED_X11_BY_SUPERVISOR";
 const ENV_START: &str = "ARBOR_SUPERVISED_START";
 const ENV_STATE: &str = "ARBOR_SUPERVISED_STATE";
+/// The previous compositor crashed while the screen was locked: start locked.
+const ENV_START_LOCKED: &str = "ARBOR_SUPERVISED_START_LOCKED";
 
 /// Why the compositor is starting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +180,9 @@ pub fn take_from_env() {
         _ => StartKind::First,
     };
     let state_path = env_take(ENV_STATE).map(PathBuf::from);
+    if env_take(ENV_START_LOCKED).is_some() {
+        START_LOCKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     let mut inherited = Inherited::default();
     let wayland_name = env_take(ENV_WAYLAND_NAME);
@@ -276,6 +281,16 @@ fn send(line: &str) {
 /// Tells the supervisor this compositor is up.
 pub fn notify_ready() {
     send("READY");
+    // This build starts locked when asked to (a restart after a crash while locked).
+    send("CAN_START_LOCKED");
+}
+
+static START_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The previous compositor crashed while the screen was locked: this one starts locked (until
+/// the lock screen locks again) instead of showing the session.
+pub fn start_locked() -> bool {
+    START_LOCKED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Tells the supervisor the session lock state.
@@ -364,6 +379,8 @@ fn open_sockets(x11: bool) -> anyhow::Result<Sockets> {
 struct Binary {
     file: File,
     path: PathBuf,
+    /// Said it can start locked (CAN_START_LOCKED) when it ran.
+    can_start_locked: bool,
 }
 
 impl Binary {
@@ -371,6 +388,7 @@ impl Binary {
         Ok(Self {
             file: File::open(path)?,
             path: path.to_owned(),
+            can_start_locked: false,
         })
     }
 
@@ -378,12 +396,14 @@ impl Binary {
         Ok(Self {
             file: self.file.try_clone()?,
             path: self.path.clone(),
+            can_start_locked: self.can_start_locked,
         })
     }
 }
 
 enum Msg {
     Ready,
+    CanStartLocked,
     Reload(PathBuf),
     Locked(bool),
 }
@@ -407,6 +427,10 @@ struct Supervisor {
     hub: Option<std::sync::Arc<crate::wl_proxy::Hub>>,
     /// The supervisor runs xwayland-satellite (with the proxy).
     x11_by_supervisor: bool,
+    /// The current compositor said it can start locked.
+    child_can_start_locked: bool,
+    /// Start the next compositor locked (the previous one crashed while locked).
+    start_locked: bool,
 }
 
 impl Supervisor {
@@ -432,6 +456,7 @@ impl Supervisor {
                         Some(("RELOAD", path)) => Msg::Reload(PathBuf::from(path)),
                         _ => match line.as_str() {
                             "READY" => Msg::Ready,
+                            "CAN_START_LOCKED" => Msg::CanStartLocked,
                             "LOCKED" => Msg::Locked(true),
                             "UNLOCKED" => Msg::Locked(false),
                             _ => continue,
@@ -453,6 +478,9 @@ impl Supervisor {
             .env(ENV_IPC_PATH, &s.ipc_path)
             .env(ENV_START, start.as_str())
             .env(ENV_STATE, &self.state_path);
+        if self.start_locked {
+            cmd.env(ENV_START_LOCKED, "1");
+        }
         let mut clients = None;
         if self.hub.is_some() {
             let (ours, theirs) = crate::wl_proxy::seqpacket_pair()?;
@@ -517,6 +545,7 @@ impl Supervisor {
                     }
                 }
                 Msg::Locked(l) => *locked = l,
+                Msg::CanStartLocked => self.child_can_start_locked = true,
                 Msg::Reload(path) => *reload = Some(path),
             }
         }
@@ -571,6 +600,8 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
         notified_systemd: false,
         hub: None,
         x11_by_supervisor: false,
+        child_can_start_locked: false,
+        start_locked: false,
     };
 
     if env::var_os("ARBOR_NO_PROXY").is_some_and(|v| !v.is_empty() && v != "0") {
@@ -640,7 +671,8 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
         }
 
         let generation = sup.generation;
-        let mut locked = false;
+        sup.child_can_start_locked = false;
+        let mut locked = sup.start_locked;
         let mut reload = None;
         let status = loop {
             sup.drain(generation, &mut locked, &mut reload);
@@ -668,6 +700,9 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
             break status.code().unwrap_or(0);
         }
 
+        if sup.child_can_start_locked {
+            current.can_start_locked = true;
+        }
         match status.code() {
             Some(0) => {
                 info!("supervisor: compositor quit");
@@ -689,6 +724,7 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
                     }
                 }
                 start = StartKind::Reload;
+                sup.start_locked = false;
                 crashes.clear();
                 continue;
             }
@@ -697,9 +733,29 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
 
         // A crash.
         warn!("supervisor: compositor crashed: {status}");
+        if sup.child_can_start_locked {
+            current.can_start_locked = true;
+        }
+        sup.start_locked = false;
         if locked {
-            warn!("supervisor: the screen was locked; ending the session instead of restarting");
-            break status.code().unwrap_or(1);
+            // The next compositor starts locked (its outputs show the locked frame until the lock
+            // screen locks again), so restarting doesn't unlock. Only a build known to do that.
+            let next_ok = if started.elapsed() < PROBATION {
+                previous
+                    .as_ref()
+                    .map_or(current.can_start_locked, |p| p.can_start_locked)
+            } else {
+                current.can_start_locked
+            };
+            if !next_ok {
+                warn!(
+                    "supervisor: the screen was locked and the next build can't start locked; \
+                     ending the session instead of restarting"
+                );
+                break status.code().unwrap_or(1);
+            }
+            warn!("supervisor: the screen was locked; restarting locked");
+            sup.start_locked = true;
         }
         if started.elapsed() < PROBATION {
             if let Some(prev) = previous.take() {

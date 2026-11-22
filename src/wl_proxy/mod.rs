@@ -1242,6 +1242,12 @@ impl Connection {
             }
         }
         match (iface.name, desc.name) {
+            // A rebuilt lock: the lock screen knows it's locked already.
+            ("ext_session_lock_v1", "locked") => {
+                if self.model.live(c).is_some_and(|o| o.rebuilt) {
+                    return Ok(());
+                }
+            }
             // A rebuilt export got a new handle: the app keeps its first one, which now
             // stands for this one.
             ("zxdg_exported_v2", "handle") => {

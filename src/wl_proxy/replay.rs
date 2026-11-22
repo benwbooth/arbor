@@ -426,7 +426,12 @@ impl Connection {
         let surface_iface = interfaces::by_name("wl_surface").unwrap();
         let commit = request_by_name(surface_iface, "commit").unwrap();
         for k in &surfaces {
-            if role_of.get(k).is_some_and(|x| ks.contains_key(x)) {
+            // Toplevels and layer surfaces get their first configure for a bufferless commit;
+            // a lock surface gets it when created (and may not commit before acking it).
+            let wants_first_commit = role_of.get(k).is_some_and(|x| {
+                ks.contains_key(x) && self.model.objs[x].iface.name != "ext_session_lock_surface_v1"
+            });
+            if wants_first_commit {
                 self.send_replay(Msg::new(ks[k], commit, vec![]), surface_iface);
             }
         }

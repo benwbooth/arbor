@@ -859,8 +859,14 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   the previous binary (the supervisor keeps it open, so a newer file at the
   same path doesn't matter). Other crashes restart the same binary, up to 3
   within a minute; then the session ends. A crash while the screen is
-  locked ends the session (restarting would unlock it), and
-  `reload-binary` is refused while locked.
+  locked restarts *locked*: the next compositor starts in a locked state
+  with no lock client (`LockState::LockedNoClient`: outputs show the locked
+  frame, apps get no input, screenshots are refused) until the lock screen
+  locks again: the proxy rebuilds its lock and lock surfaces (it never sees
+  `finished`), or a restarted lock screen takes over. Only a build that said
+  it can (`CAN_START_LOCKED` on the control pipe) is restarted locked;
+  otherwise the session ends as before. `reload-binary` is still refused
+  while locked.
 - With no `--path`, `reload-binary` runs the binary the session started
   from, re-read from its path (devloop's build is replaced at the same path).
   devloop (home-services `apps/arbor.conf`) swaps the session onto each new
@@ -900,7 +906,9 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
     selection and data-control devices, pointer lock/confine, relative
     pointer, gestures, idle inhibitors and notifications, shortcut
     inhibitors, tablet seats, gtk_surface1 and KDE appmenu (global menus),
-    background-effect regions, virtual keyboard/pointer, activation
+    background-effect regions, virtual keyboard/pointer, the session lock
+    and its lock surfaces (configured at creation, so no first commit;
+    the rebuilt lock's `locked` is kept from the app), activation
     tokens the app is still waiting for (asked for again), xdg-foreign
     exports and imports, screen copies in flight, input methods (with their
     keyboard grab and popups) and gamma ramps (night light; the ramp's fd

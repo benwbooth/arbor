@@ -610,6 +610,10 @@ pub enum LockState {
     },
     Locking(SessionLocker),
     Locked(ExtSessionLockV1),
+    /// Locked with no lock client (yet): a compositor started after its predecessor crashed
+    /// while the screen was locked (supervisor.rs). Outputs show the locked frame until the
+    /// lock screen locks again (its proxied objects are rebuilt, or it's restarted).
+    LockedNoClient,
 }
 
 #[derive(PartialEq, Eq)]
@@ -2828,7 +2832,12 @@ impl Arbor {
             horizontal_finger_scroll_tracker: ScrollTracker::new(10),
             mods_with_finger_scroll_binds,
 
-            lock_state: LockState::Unlocked,
+            // After a crash while locked, start locked (supervisor.rs).
+            lock_state: if crate::supervisor::start_locked() {
+                LockState::LockedNoClient
+            } else {
+                LockState::Unlocked
+            },
             locked_hint: None,
 
             screenshot_ui,
@@ -6251,7 +6260,7 @@ impl Arbor {
     pub fn is_locked(&self) -> bool {
         match self.lock_state {
             LockState::Unlocked | LockState::WaitingForSurfaces { .. } => false,
-            LockState::Locking(_) | LockState::Locked(_) => true,
+            LockState::Locking(_) | LockState::Locked(_) | LockState::LockedNoClient => true,
         }
     }
 
@@ -6266,13 +6275,16 @@ impl Arbor {
         }
 
         // Check if we're already locked with an active client.
-        if let LockState::Locked(lock) = &self.lock_state {
-            if lock.is_alive() {
-                info!("refusing lock as already locked with an active client");
-                return;
+        if matches!(self.lock_state, LockState::Locked(_) | LockState::LockedNoClient) {
+            if let LockState::Locked(lock) = &self.lock_state {
+                if lock.is_alive() {
+                    info!("refusing lock as already locked with an active client");
+                    return;
+                }
             }
 
-            // If the client had died, continue with the new lock.
+            // If the client had died (or there was none: a restart while locked), continue with
+            // the new lock.
             info!("locking session (replacing existing dead lock)");
 
             // Since the session was already locked, we know that the outputs are blanked, and
@@ -6441,7 +6453,10 @@ impl Arbor {
         // Consider only the fully locked state here. When using the locked hint with sleep
         // inhibitor tools, we want to allow sleep only after the screens are fully cleared with
         // the lock screen, which corresponds to the Locked state.
-        let locked = matches!(self.lock_state, LockState::Locked(_));
+        let locked = matches!(
+            self.lock_state,
+            LockState::Locked(_) | LockState::LockedNoClient
+        );
 
         if self.locked_hint.is_some_and(|h| h == locked) {
             return;
@@ -6473,6 +6488,10 @@ impl Arbor {
             LockState::WaitingForSurfaces { confirmation, .. } => confirmation.ext_session_lock(),
             LockState::Locking(confirmation) => confirmation.ext_session_lock(),
             LockState::Locked(lock) => lock,
+            LockState::LockedNoClient => {
+                debug!("ignoring lock surface: no lock client yet");
+                return;
+            }
         };
 
         if lock.client() != surface.wl_surface().client() {

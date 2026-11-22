@@ -162,6 +162,8 @@ const REPLAYABLE: &[&str] = &[
     "zwp_input_method_keyboard_grab_v2",
     "zwp_input_popup_surface_v2",
     "zwlr_gamma_control_v1",
+    "ext_session_lock_v1",
+    "ext_session_lock_surface_v1",
 ];
 
 /// Selection sources: rebuilt only while they hold a selection (a device's last
@@ -186,7 +188,11 @@ pub const HANDLES: &[&str] = &[
 ];
 
 /// Role objects whose surface gets a first commit without a buffer and a configure to ack.
-pub const CONFIGURED_ROLES: &[&str] = &["xdg_surface", "zwlr_layer_surface_v1"];
+pub const CONFIGURED_ROLES: &[&str] = &[
+    "xdg_surface",
+    "zwlr_layer_surface_v1",
+    "ext_session_lock_surface_v1",
+];
 
 /// Events (without arguments) that tell an app an object it holds is over, sent for objects
 /// that aren't carried over to the new compositor.
@@ -228,7 +234,10 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
         ("wl_subsurface", "set_sync" | "set_desync") => Kind::Set("sync"),
         ("xdg_positioner", _) => Kind::Set(n),
         ("xdg_surface", "set_window_geometry") => Kind::Set(n),
-        ("xdg_surface" | "zwlr_layer_surface_v1", "ack_configure") => Kind::Special,
+        (
+            "xdg_surface" | "zwlr_layer_surface_v1" | "ext_session_lock_surface_v1",
+            "ack_configure",
+        ) => Kind::Special,
         (
             "zwlr_layer_surface_v1",
             "set_size"
@@ -727,7 +736,10 @@ impl Model {
                     o.busy = false;
                 }
             }
-            ("xdg_surface" | "zwlr_layer_surface_v1", "configure") => {
+            (
+                "xdg_surface" | "zwlr_layer_surface_v1" | "ext_session_lock_surface_v1",
+                "configure",
+            ) => {
                 if let (Some(A::Uint(serial)), Some(o)) =
                     (msg.args.first(), key.and_then(|k| self.objs.get_mut(&k)))
                 {
