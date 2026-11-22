@@ -59,6 +59,8 @@ const ENV_X11_DISPLAY: &str = "ARBOR_SUPERVISED_X11_DISPLAY";
 const ENV_X11_UNIX_FD: &str = "ARBOR_SUPERVISED_X11_UNIX_FD";
 const ENV_X11_ABSTRACT_FD: &str = "ARBOR_SUPERVISED_X11_ABSTRACT_FD";
 const ENV_CLIENTS_FD: &str = "ARBOR_SUPERVISED_CLIENTS_FD";
+/// The supervisor runs xwayland-satellite for this display itself.
+const ENV_X11_BY_SUPERVISOR: &str = "ARBOR_SUPERVISED_X11_BY_SUPERVISOR";
 const ENV_START: &str = "ARBOR_SUPERVISED_START";
 const ENV_STATE: &str = "ARBOR_SUPERVISED_STATE";
 
@@ -94,6 +96,9 @@ pub struct Inherited {
     /// With the supervisor's Wayland proxy (`wl_proxy`): the channel new connections arrive on,
     /// and the Wayland socket's name.
     pub proxy_clients: Option<(OwnedFd, OsString)>,
+    /// The X11 display whose xwayland-satellite the supervisor runs (the compositor only
+    /// exports `$DISPLAY`).
+    pub x11_by_supervisor: Option<String>,
     pub ipc: Option<(UnixListener, PathBuf)>,
     pub x11: Option<InheritedX11>,
 }
@@ -174,6 +179,7 @@ pub fn take_from_env() {
     let wayland_name = env_take(ENV_WAYLAND_NAME);
     if let (Some(fd), Some(name)) = (env_fd(ENV_CLIENTS_FD), wayland_name.clone()) {
         inherited.proxy_clients = Some((fd, name));
+        PROXIED.store(true, std::sync::atomic::Ordering::Relaxed);
     } else if let (Some(fd), Some(name)) = (env_fd(ENV_WAYLAND_FD), wayland_name) {
         let listener = UnixListener::from(fd);
         let _ = listener.set_nonblocking(true);
@@ -186,6 +192,11 @@ pub fn take_from_env() {
         inherited.ipc = Some((listener, PathBuf::from(path)));
     }
     let x11_display = env_take(ENV_X11_DISPLAY);
+    if env_take(ENV_X11_BY_SUPERVISOR).is_some() {
+        inherited.x11_by_supervisor = x11_display
+            .as_ref()
+            .map(|d| d.to_string_lossy().into_owned());
+    }
     let x11_abstract = env_fd(ENV_X11_ABSTRACT_FD);
     if let (Some(unix_fd), Some(display)) = (env_fd(ENV_X11_UNIX_FD), x11_display) {
         inherited.x11 = Some(InheritedX11 {
@@ -209,6 +220,13 @@ pub fn take_wayland() -> Option<(UnixListener, OsString)> {
     INHERITED.lock().unwrap().as_mut()?.wayland.take()
 }
 
+static PROXIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the supervisor proxies the Wayland socket (apps' connections outlive this process).
+pub fn is_proxied() -> bool {
+    PROXIED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The supervisor's clients channel (it proxies the Wayland socket) and the socket's name.
 pub fn take_proxy_clients() -> Option<(OwnedFd, OsString)> {
     INHERITED.lock().unwrap().as_mut()?.proxy_clients.take()
@@ -217,6 +235,16 @@ pub fn take_proxy_clients() -> Option<(OwnedFd, OsString)> {
 /// The inherited IPC listening socket and its path.
 pub fn take_ipc() -> Option<(UnixListener, PathBuf)> {
     INHERITED.lock().unwrap().as_mut()?.ipc.take()
+}
+
+/// The X11 display whose xwayland-satellite the supervisor runs, if it does.
+pub fn x11_by_supervisor() -> Option<String> {
+    INHERITED
+        .lock()
+        .unwrap()
+        .as_ref()?
+        .x11_by_supervisor
+        .clone()
 }
 
 /// The inherited X11 display sockets.
@@ -366,6 +394,8 @@ struct Supervisor {
     notified_systemd: bool,
     /// The Wayland proxy, unless `ARBOR_NO_PROXY=1`.
     hub: Option<std::sync::Arc<crate::wl_proxy::Hub>>,
+    /// The supervisor runs xwayland-satellite (with the proxy).
+    x11_by_supervisor: bool,
 }
 
 impl Supervisor {
@@ -419,7 +449,10 @@ impl Supervisor {
             cmd.env(ENV_WAYLAND_FD, s.wayland.as_fd().as_raw_fd().to_string());
             fds.push(s.wayland.as_fd().as_raw_fd());
         }
-        if let Some(x11) = &s.x11 {
+        if let (Some(x11), true) = (&s.x11, self.x11_by_supervisor) {
+            cmd.env(ENV_X11_DISPLAY, &x11.display_name)
+                .env(ENV_X11_BY_SUPERVISOR, "1");
+        } else if let Some(x11) = &s.x11 {
             cmd.env(ENV_X11_DISPLAY, &x11.display_name)
                 .env(ENV_X11_UNIX_FD, x11.unix_fd.as_raw_fd().to_string());
             fds.push(x11.unix_fd.as_raw_fd());
@@ -483,10 +516,11 @@ extern "C" fn forward_signal(sig: libc::c_int) {
 
 /// Runs the supervisor: starts the compositor (this binary, with `args`) and restarts it on
 /// reloads and crashes. Returns the exit code for the process.
-pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
+/// `satellite`: xwayland-satellite's path, or None without X11.
+pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32> {
     let exe = env::current_exe().context("error finding our own binary")?;
     let mut current = Binary::open(&exe).context("error opening our own binary")?;
-    let sockets = open_sockets(x11)?;
+    let sockets = open_sockets(satellite.is_some())?;
     info!(
         "supervisor: Wayland socket {}, IPC {}",
         sockets.wayland_name.to_string_lossy(),
@@ -514,6 +548,7 @@ pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
         generation: 0,
         notified_systemd: false,
         hub: None,
+        x11_by_supervisor: false,
     };
 
     if env::var_os("ARBOR_NO_PROXY").is_some_and(|v| !v.is_empty() && v != "0") {
@@ -531,6 +566,14 @@ pub fn run(args: Vec<OsString>, x11: bool) -> anyhow::Result<i32> {
             Ok(()) => sup.hub = Some(hub),
             Err(err) => warn!("supervisor: error starting the Wayland proxy: {err:?}"),
         }
+    }
+    // With the proxy, xwayland-satellite (and with it every X11 app) can outlive compositors.
+    if let (Some(_), Some(x11), Some(path)) = (&sup.hub, &sup.sockets.x11, &satellite) {
+        sup.x11_by_supervisor = crate::utils::xwayland::satellite::run_in_supervisor(
+            path.clone(),
+            x11,
+            sup.sockets.wayland_name.clone(),
+        );
     }
 
     let mut start = StartKind::First;

@@ -36,6 +36,10 @@ pub fn setup(state: &mut State) {
     if state.arbor.satellite.is_some() {
         return;
     }
+    // The supervisor runs it (run_in_supervisor).
+    if crate::supervisor::x11_by_supervisor().is_some() {
+        return;
+    }
 
     let config = state.arbor.config.borrow();
     let xwls_config = &config.xwayland_satellite;
@@ -349,4 +353,74 @@ fn spawn_and_wait(
 
     // This is most likely a crash, hence warn!().
     warn!("xwayland-satellite exited with: {status}");
+}
+
+/// Under the supervisor with its Wayland proxy (supervisor.rs, wl_proxy), the supervisor runs
+/// xwayland-satellite itself: then it, its Xwayland and the X11 apps on it outlive compositors
+/// (it's a Wayland client of the proxy like any other app). Started on demand like the
+/// compositor does it: when an X11 client connects. False if this satellite can't do on-demand
+/// starts (the compositor then manages it as before).
+pub(crate) fn run_in_supervisor(
+    path: String,
+    x11: &X11Connection,
+    wayland_display: std::ffi::OsString,
+) -> bool {
+    if !test_ondemand(&path) {
+        return false;
+    }
+    let (Ok(unix_fd), abstract_fd) = (
+        x11.unix_fd.try_clone(),
+        x11.abstract_fd.as_ref().and_then(|fd| fd.try_clone().ok()),
+    ) else {
+        return false;
+    };
+    let display_name = x11.display_name.clone();
+    let res = thread::Builder::new()
+        .name("xwayland-satellite".to_owned())
+        .spawn(move || loop {
+            let unix = clear_out_pending_connections(unix_fd.try_clone().unwrap());
+            let abs = abstract_fd
+                .as_ref()
+                .map(|fd| clear_out_pending_connections(fd.try_clone().unwrap()));
+            // Wait for an X11 client.
+            let mut pfds = vec![libc::pollfd {
+                fd: unix.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            }];
+            if let Some(abs) = &abs {
+                pfds.push(libc::pollfd {
+                    fd: abs.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+            }
+            // SAFETY: pfds is a valid array of pollfd.
+            let ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, -1) };
+            if ret <= 0 {
+                thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+
+            let mut exe = PathBuf::from(&path);
+            if let Ok(Some(expanded)) = expand_home(&exe) {
+                exe = expanded;
+            }
+            let mut process = Command::new(&exe);
+            process
+                .arg(&display_name)
+                .env_remove("DISPLAY")
+                .env("WAYLAND_DISPLAY", &wayland_display)
+                .env_remove("RUST_BACKTRACE")
+                .env_remove("RUST_LIB_BACKTRACE")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe { process.pre_exec(crate::utils::signals::unblock_all) };
+            info!("supervisor: X11 client connecting; starting xwayland-satellite");
+            spawn_and_wait(&exe, process, abs, unix);
+            // Not straight back into a crash loop.
+            thread::sleep(std::time::Duration::from_secs(1));
+        });
+    res.is_ok()
 }

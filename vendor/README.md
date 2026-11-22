@@ -9,3 +9,7 @@
   re-apply the changes below, and check `cargo build` and `cargo test`.
 
 Changes:
+- `SelectionHandler::selection_without_focus_allowed` (default false): `wl_data_device` and
+  primary-selection `set_selection` from such a client is accepted without keyboard focus. arbor
+  allows it for apps its supervisor's Wayland proxy is rebuilding after a restart, so the app
+  that owned the clipboard keeps owning it.

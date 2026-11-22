@@ -284,6 +284,15 @@ delegate_keyboard_shortcuts_inhibit!(State);
 impl SelectionHandler for State {
     type SelectionUserData = SelectionData;
 
+    /// Apps the supervisor's proxy is rebuilding after a restart set their selection again
+    /// (the one that owned the clipboard keeps it), with or without keyboard focus.
+    fn selection_without_focus_allowed(&self, client: &smithay::reexports::wayland_server::Client) -> bool {
+        client
+            .get_data::<crate::arbor::ClientState>()
+            .and_then(|d| d.restored_at)
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(15))
+    }
+
     fn new_selection(
         &mut self,
         ty: SelectionTarget,
@@ -517,6 +526,7 @@ impl SecurityContextHandler for State {
                     restricted: true,
                     credentials_unknown: false,
                     credentials: None,
+                    restored: false,
                 });
             })
             .unwrap();

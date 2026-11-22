@@ -102,6 +102,7 @@ impl Fixture {
             restricted: false,
             credentials_unknown: false,
             credentials: None,
+            restored: false,
         });
 
         let client = Client::new(sock2);

@@ -2583,6 +2583,7 @@ impl Arbor {
                                     uid: creds.uid,
                                     gid: creds.gid,
                                 }),
+                                restored: creds.restore,
                             }),
                             Ok(None) => break,
                             Err(err) => {
@@ -2611,6 +2612,7 @@ impl Arbor {
                                 restricted: false,
                                 credentials_unknown: false,
                                 credentials: None,
+                                restored: false,
                             }),
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                             Err(e) => return Err(e),
@@ -2638,6 +2640,7 @@ impl Arbor {
                             restricted: false,
                             credentials_unknown: false,
                             credentials: None,
+                            restored: false,
                         });
                     })
                     .unwrap();
@@ -2875,6 +2878,7 @@ impl Arbor {
             restricted,
             credentials_unknown,
             credentials,
+            restored,
         } = client;
 
         let config = self.config.borrow();
@@ -2887,6 +2891,7 @@ impl Arbor {
             restricted,
             credentials_unknown,
             credentials,
+            restored_at: restored.then(Instant::now),
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -6882,6 +6887,8 @@ pub struct NewClient {
     pub credentials_unknown: bool,
     /// The app's credentials when the socket's own are someone else's (the supervisor's proxy).
     pub credentials: Option<Credentials>,
+    /// The supervisor's proxy is rebuilding this app's objects after a restart (not a new app).
+    pub restored: bool,
 }
 
 pub struct ClientState {
@@ -6894,6 +6901,8 @@ pub struct ClientState {
     pub credentials_unknown: bool,
     /// The app's real credentials, when the socket is the supervisor's proxy.
     pub credentials: Option<Credentials>,
+    /// When the supervisor's proxy started rebuilding this app after a restart.
+    pub restored_at: Option<Instant>,
 }
 
 impl ClientData for ClientState {

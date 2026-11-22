@@ -74,8 +74,11 @@ pub struct Obj {
     pub busy: bool,
     /// wl_surface: attached since the last commit.
     pub attach_pending: bool,
-    /// xdg_surface: configure serials from this compositor not yet acked.
+    /// xdg_surface / layer surface: configure serials from this compositor not yet acked.
     pub serials: Vec<u32>,
+    /// zwp_text_input_v3: commits so far (the compositor's `done` serial counts them, and the
+    /// app ignores a `done` whose serial isn't its own count).
+    pub commits: u32,
 }
 
 /// How a request is remembered.
@@ -117,7 +120,40 @@ const REPLAYABLE: &[&str] = &[
     "zwp_linux_dmabuf_feedback_v1",
     "zxdg_output_v1",
     "wp_cursor_shape_device_v1",
+    // Stage 2.
+    "zwlr_layer_surface_v1",
+    "zwp_text_input_v3",
+    "zwp_primary_selection_device_v1",
+    "zwlr_data_control_device_v1",
+    "ext_data_control_device_v1",
+    "zwp_locked_pointer_v1",
+    "zwp_confined_pointer_v1",
+    "zwp_relative_pointer_v1",
+    "zwp_pointer_gesture_swipe_v1",
+    "zwp_pointer_gesture_pinch_v1",
+    "zwp_pointer_gesture_hold_v1",
+    "zwp_idle_inhibitor_v1",
+    "zwp_keyboard_shortcuts_inhibitor_v1",
+    "ext_idle_notification_v1",
+    "zwp_tablet_seat_v2",
+    "gtk_surface1",
+    "org_kde_kwin_appmenu",
+    "ext_background_effect_surface_v1",
+    "zwp_virtual_keyboard_v1",
+    "zwlr_virtual_pointer_v1",
 ];
+
+/// Selection sources: rebuilt only while they hold a selection (a device's last
+/// `set_selection` / `set_primary_selection` names them).
+const SOURCES: &[&str] = &[
+    "wl_data_source",
+    "zwp_primary_selection_source_v1",
+    "zwlr_data_control_source_v1",
+    "ext_data_control_source_v1",
+];
+
+/// Role objects whose surface gets a first commit without a buffer and a configure to ack.
+pub const CONFIGURED_ROLES: &[&str] = &["xdg_surface", "zwlr_layer_surface_v1"];
 
 /// Events (without arguments) that tell an app an object it holds is over, sent for objects
 /// that aren't carried over to the new compositor.
@@ -159,7 +195,40 @@ pub fn kind(iface: &str, desc: &MessageDesc) -> Kind {
         ("wl_subsurface", "set_sync" | "set_desync") => Kind::Set("sync"),
         ("xdg_positioner", _) => Kind::Set(n),
         ("xdg_surface", "set_window_geometry") => Kind::Set(n),
-        ("xdg_surface", "ack_configure") => Kind::Special,
+        ("xdg_surface" | "zwlr_layer_surface_v1", "ack_configure") => Kind::Special,
+        (
+            "zwlr_layer_surface_v1",
+            "set_size"
+            | "set_anchor"
+            | "set_exclusive_zone"
+            | "set_margin"
+            | "set_keyboard_interactivity"
+            | "set_layer"
+            | "set_exclusive_edge",
+        ) => Kind::Set(n),
+        ("zwp_text_input_v3", "commit") => Kind::Special,
+        (
+            "wl_data_device"
+            | "zwp_primary_selection_device_v1"
+            | "zwlr_data_control_device_v1"
+            | "ext_data_control_device_v1",
+            "set_selection" | "set_primary_selection",
+        ) => Kind::Set(n),
+        (
+            "wl_data_source"
+            | "zwp_primary_selection_source_v1"
+            | "zwlr_data_control_source_v1"
+            | "ext_data_control_source_v1",
+            "offer",
+        ) => Kind::Accum,
+        ("wl_data_source", "set_actions") => Kind::Set(n),
+        ("zwp_locked_pointer_v1", "set_cursor_position_hint" | "set_region") => Kind::Set(n),
+        ("zwp_confined_pointer_v1", "set_region") => Kind::Set(n),
+        ("gtk_surface1", "set_dbus_properties") => Kind::Set(n),
+        ("gtk_surface1", "set_modal" | "unset_modal") => Kind::Set("modal"),
+        ("org_kde_kwin_appmenu", "set_address") => Kind::Set(n),
+        ("ext_background_effect_surface_v1", "set_blur_region") => Kind::Set(n),
+        ("zwp_virtual_keyboard_v1", "keymap") => Kind::Set(n),
         (
             "xdg_toplevel",
             "set_parent" | "set_title" | "set_app_id" | "set_max_size" | "set_min_size",
@@ -210,6 +279,8 @@ pub struct Model {
     pub swapped: bool,
     /// A protocol error the compositor sent.
     pub error: Option<String>,
+    /// One past the highest compositor-made id the client has seen.
+    pub server_end: u32,
 }
 
 impl Default for Model {
@@ -226,6 +297,7 @@ impl Default for Model {
             focus: HashMap::new(),
             swapped: false,
             error: None,
+            server_end: SERVER_ID_START,
         };
         m.insert(1, display, 1, None, Creation::Display, true);
         m
@@ -263,6 +335,7 @@ impl Model {
                 busy: false,
                 attach_pending: false,
                 serials: Vec::new(),
+                commits: 0,
             },
         );
         if let Some(old) = self.by_id.insert(id, key) {
@@ -395,6 +468,9 @@ impl Model {
 
         let kind = kind(iface.name, desc);
         let mut stale_ack = false;
+        if kind == Kind::Special && desc.name == "commit" && iface.name == "zwp_text_input_v3" {
+            self.objs.get_mut(&key).unwrap().commits += 1;
+        }
         if kind == Kind::Special && desc.name == "ack_configure" {
             if let Some(A::Uint(serial)) = msg.args.first() {
                 let serial = *serial;
@@ -455,7 +531,7 @@ impl Model {
                 let rec = self.record(msg, &new_keys);
                 self.objs.get_mut(&key).unwrap().accum.push(rec);
             }
-            Kind::Special if desc.name == "commit" => {
+            Kind::Special if desc.name == "commit" && iface.name == "wl_surface" => {
                 let o = self.objs.get_mut(&key).unwrap();
                 if o.attach_pending {
                     o.attach_pending = false;
@@ -500,6 +576,9 @@ impl Model {
             };
             let version = key.map_or(1, |k| self.objs[&k].version);
             let _ = i;
+            if id >= SERVER_ID_START {
+                self.server_end = self.server_end.max(id + 1);
+            }
             self.insert(id, child, version, key, Creation::Event, true);
         }
 
@@ -543,21 +622,26 @@ impl Model {
                     o.busy = false;
                 }
             }
-            ("xdg_surface", "configure") => {
+            ("xdg_surface" | "zwlr_layer_surface_v1", "configure") => {
                 if let (Some(A::Uint(serial)), Some(o)) =
                     (msg.args.first(), key.and_then(|k| self.objs.get_mut(&k)))
                 {
                     o.serials.push(*serial);
                 }
             }
-            ("wl_pointer" | "wl_keyboard", "enter") => {
-                if let (Some(k), Some(A::Obj(s))) = (key, msg.args.get(1)) {
+            ("wl_pointer" | "wl_keyboard" | "zwp_text_input_v3", "enter") => {
+                let i = if iface.name == "zwp_text_input_v3" {
+                    0
+                } else {
+                    1
+                };
+                if let (Some(k), Some(A::Obj(s))) = (key, msg.args.get(i)) {
                     if let Some(sk) = self.key_of(*s) {
                         self.focus.insert(k, sk);
                     }
                 }
             }
-            ("wl_pointer" | "wl_keyboard", "leave") => {
+            ("wl_pointer" | "wl_keyboard" | "zwp_text_input_v3", "leave") => {
                 if let Some(k) = key {
                     self.focus.remove(&k);
                 }
@@ -585,9 +669,7 @@ impl Model {
                 let global = o
                     .parent
                     .is_some_and(|p| self.objs[&p].iface.name == "wl_registry");
-                (global || REPLAYABLE.contains(&o.iface.name))
-                    && parent_ok(o.parent)
-                    && self.role_ok(key)
+                (global || self.replayable_iface(key)) && parent_ok(o.parent) && self.role_ok(key)
             }
             // A buffer made by zwp_linux_buffer_params.create.
             Creation::Event => o.iface.name == "wl_buffer" && parent_ok(o.parent),
@@ -602,7 +684,21 @@ impl Model {
                 .get(&p)
                 .is_some_and(|p| p.iface.name == "wl_registry")
         });
-        global || REPLAYABLE.contains(&o.iface.name)
+        global
+            || REPLAYABLE.contains(&o.iface.name)
+            || (SOURCES.contains(&o.iface.name) && self.holds_selection(key))
+    }
+
+    /// A selection source some device's last set_selection / set_primary_selection names.
+    pub fn holds_selection(&self, key: Key) -> bool {
+        self.objs.values().any(|d| {
+            d.alive
+                && ["set_selection", "set_primary_selection"].iter().any(|n| {
+                    d.sets.get(n).is_some_and(
+                        |r| matches!(r.args.first(), Some(V::Obj(Some(k))) if *k == key),
+                    )
+                })
+        })
     }
 
     /// An xdg_surface is only rebuilt with its toplevel (popups aren't).
@@ -636,7 +732,12 @@ impl Model {
                 continue;
             }
             if let Some(op) = event_by_name(d.iface, "leave") {
-                out.push(Msg::new(d.id, op, vec![A::Uint(0), A::Obj(s.id)]));
+                let args = if d.iface.name == "zwp_text_input_v3" {
+                    vec![A::Obj(s.id)]
+                } else {
+                    vec![A::Uint(0), A::Obj(s.id)]
+                };
+                out.push(Msg::new(d.id, op, args));
             }
             if d.iface.name == "wl_pointer" && d.version >= 5 {
                 if let Some(op) = event_by_name(d.iface, "frame") {
@@ -667,10 +768,13 @@ impl Model {
             let iface = o.iface;
             let id = o.id;
 
-            if let Some(op) = event_by_name(iface, "selection") {
-                if let [ArgumentType::Object(AllowNull::Yes)] = iface.events[op as usize].signature
-                {
-                    out.push(Msg::new(id, op, vec![A::Obj(0)]));
+            for name in ["selection", "primary_selection"] {
+                if let Some(op) = event_by_name(iface, name) {
+                    if let [ArgumentType::Object(AllowNull::Yes)] =
+                        iface.events[op as usize].signature
+                    {
+                        out.push(Msg::new(id, op, vec![A::Obj(0)]));
+                    }
                 }
             }
             if iface.name == "wl_buffer" && o.busy && !current.contains(&key) {
@@ -844,5 +948,59 @@ mod tests {
         assert_eq!(popup_done.opcode, 1);
         assert!(!m.persists(m.key_of(10).unwrap()));
         assert!(m.persists(m.key_of(6).unwrap()));
+    }
+
+    /// A request by name (opcode looked up) with plain u32 args.
+    fn req(m: &mut Model, id: u32, name: &str, args: &[u32]) -> (bool, Vec<Msg>) {
+        let iface = m.iface_of(id).unwrap();
+        let op = request_by_name(iface, name).unwrap();
+        feed(m, Dir::Request, &raw(id, op, args)).remove(0)
+    }
+
+    #[test]
+    fn text_input_commits_are_counted() {
+        let mut m = toplevel();
+        let mut ev = global(4, "wl_seat", 8);
+        ev.extend(global(5, "zwp_text_input_manager_v3", 1));
+        feed(&mut m, Dir::Event, &ev);
+        feed(&mut m, Dir::Request, &bind(4, "wl_seat", 8, 20));
+        feed(
+            &mut m,
+            Dir::Request,
+            &bind(5, "zwp_text_input_manager_v3", 1, 21),
+        );
+        req(&mut m, 21, "get_text_input", &[22, 20]);
+        for _ in 0..3 {
+            req(&mut m, 22, "commit", &[]);
+        }
+        assert_eq!(m.live(22).unwrap().commits, 3);
+        assert!(m.persists(m.key_of(22).unwrap()));
+    }
+
+    #[test]
+    fn only_the_selection_source_persists() {
+        let mut m = toplevel();
+        let mut ev = global(4, "wl_seat", 8);
+        ev.extend(global(5, "wl_data_device_manager", 3));
+        feed(&mut m, Dir::Event, &ev);
+        feed(&mut m, Dir::Request, &bind(4, "wl_seat", 8, 20));
+        feed(
+            &mut m,
+            Dir::Request,
+            &bind(5, "wl_data_device_manager", 3, 21),
+        );
+        req(&mut m, 21, "get_data_device", &[22, 20]);
+        req(&mut m, 21, "create_data_source", &[23]);
+        req(&mut m, 21, "create_data_source", &[24]);
+        let mut offer = vec![];
+        offer.extend(string("text/plain"));
+        req(&mut m, 23, "offer", &offer);
+        req(&mut m, 22, "set_selection", &[23, 5]);
+        assert!(m.persists(m.key_of(23).unwrap()));
+        assert!(!m.persists(m.key_of(24).unwrap()));
+        // The kept source isn't cancelled; the other one is.
+        let synth = m.detach();
+        assert!(synth.iter().any(|e| e.object == 24));
+        assert!(!synth.iter().any(|e| e.object == 23));
     }
 }

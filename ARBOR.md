@@ -836,19 +836,25 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
   the focused window and each workspace's camera. The next compositor puts
   reconnecting windows back (matched by app id, preferring the same title),
   floating windows again once the shell's bar is back.
-- **Every other Wayland app is carried over by the supervisor's proxy**
-  (below): GTK, Electron/Chromium (Brave, VS Code, the Claude app), foot.
-  Its connection never drops; the proxy rebuilds its windows in the new
-  compositor.
-- **Apps that still exit** (X11 apps: xwayland-satellite goes with the
-  compositor; apps the proxy couldn't carry over) exit; 2 s and 8 s after the
+- **Every other app is carried over by the supervisor's proxy** (below):
+  GTK, Electron/Chromium (Brave, VS Code, the Claude app), foot, hearth,
+  and X11 apps: the supervisor runs xwayland-satellite itself (started on
+  demand when an X11 client connects, as the compositor did), so it and its
+  Xwayland are a Wayland client of the proxy like any other. Connections
+  never drop; the proxy rebuilds each app's windows in the new compositor.
+  The app that owned the clipboard keeps owning it.
+- **Apps that still exit** (ones the proxy couldn't carry over, or
+  everything with `ARBOR_NO_PROXY=1`) exit; 2 s and 8 s after the
   restart, the ones whose process is gone and none of whose windows came
   back are relaunched through session restore's commands.
   `session-restore { exclude-app-ids }` apps are put back but never
   relaunched (hearth lists `org.quickshell`: the shell restarts itself).
-- **hearth** quits (exit 75) when its arbor event stream drops and its
-  wrapper starts it again: Quickshell's own Wayland objects don't survive
-  Qt's reconnect.
+- **hearth** keeps running: with the proxy (`ARBOR_WAYLAND_PROXY=1` in the
+  session's environment) its layer surfaces are carried over and it just
+  reconnects its IPC streams (the first events re-send the whole state, and
+  glass shapes are sent again). Without the proxy it quits (exit 75) when
+  its event stream drops and its wrapper starts it again (Quickshell's own
+  Wayland objects don't survive Qt's reconnect).
 - **Failures:** a build that crashes within 20 s of a reload is replaced by
   the previous binary (the supervisor keeps it open, so a newer file at the
   same path doesn't matter). Other crashes restart the same binary, up to 3
@@ -888,8 +894,19 @@ so nothing sees the names change. `ARBOR_NO_SUPERVISOR=1` turns it off.
     global, and for the rest core surfaces/regions/subsurfaces, shm and
     dmabuf buffers, seat devices, data devices, xdg-shell toplevels and
     positioners, decorations, viewports, fractional scale, xdg-output,
-    cursor-shape. Everything else ends as above (popups, layer surfaces,
-    text-input, primary selection, ...) and requests to it are dropped, so
+    cursor-shape, layer-shell surfaces (with the same first commit and
+    configure as toplevels), text-input (its `done` serial counts commits,
+    so the proxy sends the app's number of commits again), primary
+    selection and data-control devices, pointer lock/confine, relative
+    pointer, gestures, idle inhibitors and notifications, shortcut
+    inhibitors, tablet seats, gtk_surface1 and KDE appmenu (global menus),
+    background-effect regions, virtual keyboard/pointer. Selection sources
+    come back while a device's last `set_selection` names them; the
+    vendored smithay accepts that `set_selection` without keyboard focus
+    from an app being restored (the clients channel flags restores;
+    15 s). Everything else ends as above (popups, presentation feedback,
+    foreign-toplevel and workspace handles, which the new compositor
+    announces again) and requests to it are dropped, so
     a gap means a missing feature until the app recreates the object, never
     a protocol error. Requests the table doesn't know are simply not
     replayed.
@@ -1027,8 +1044,8 @@ binary in a test profile, a GTK app and foot surviving `reload-binary`):
 |---|-------|-----------|
 | 0 | **Done.** Pass-through proxy: wire codec, fd passing, object table, real credentials (sent over the clients channel instead of `arbor_restore_v1`). Nothing survives yet. Verified nested: foot, zenity (GTK4), Konsole, Brave, xwayland-satellite and the portals through it, with no decoding gaps; reload and crash restart behave as before. | ~1k lines |
 | 1 | **Done.** Replay of core + xdg-shell + shm/dmabuf + seat/output + viewporter, fractional-scale, decorations, data device, cursor shape; id and global translation. Verified nested: foot, zenity (GTK4), Konsole (with Qt's own reconnect off) and Brave survive `reload-binary` twice and a SIGKILL crash, same pids, drawing, keyboard input working (foot runs typed commands, Brave's address bar navigates). Window tokens not needed yet (app id + title matching works since the pids stay). | ~1.5k |
-| 2 | What Electron/Chromium uses: text-input, pointer constraints/relative, presentation, idle-inhibit, primary selection, data device (selection kept), xdg-activation. Brave and the Claude app survive. | ~2k |
-| 3 | xwayland-satellite under the supervisor; layer-shell (hearth stops restarting itself); a crash restart uses the same path. | ~1.5k |
+| 2 | **Done.** text-input, pointer constraints/relative, gestures, idle inhibit/notify, primary selection and data control, the clipboard owner keeps the selection (smithay vendored for it), gtk_surface1/appmenu. Verified nested: Brave and the Claude app (test profile) survive with the same pids and keep drawing. xdg-activation tokens pending at a swap are not rebuilt (an app waiting on one gets no answer). | ~0.5k |
+| 3 | **Done.** xwayland-satellite under the supervisor; layer-shell (hearth keeps running); crash restarts use the same path. Verified nested: hearth, xterm (X11), foot, Brave and wl-copy's clipboard survive reloads and a SIGKILL crash. | ~0.3k |
 | 4 | The remaining globals, security-context, tests (replay fuzzing against a nested arbor). | ~1.5k |
 
 That comes to about 10k lines in total. Each stage ships on its own. Until
@@ -1190,6 +1207,10 @@ default-column-display }`, the `default-column-display` window rule,
 - `src/input/dock_divider.rs`: divider hover cursor and drag start.
 - `src/layout/workspace.rs`: a workspace: the `DockSpace` (`dock`) and the
   `FloatingSpace` (the Desktop).
+- `vendor/smithay`, `vendor/smithay-drm-extras`: Smithay, vendored so arbor
+  can change it (`vendor/README.md` lists the changes).
+- `src/supervisor.rs`, `src/wl_proxy/`: the supervisor and its Wayland
+  proxy (Restarting in place).
 - `src/arbor.rs`: compositor state (`State`, `Arbor`); `src/input/`: input
   handling and bind dispatch; `arbor-config/`: config parsing;
   `arbor-ipc/`: IPC types.

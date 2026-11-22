@@ -308,6 +308,17 @@ impl Connection<'_> {
             self.send_replay(msg, target_iface);
             let Some(&s) = ks.get(&k) else { continue };
 
+            // The compositor's text-input `done` serial counts commits; catch it up with the
+            // app's count (an empty commit on a fresh text input changes nothing).
+            if iface.name == "zwp_text_input_v3" {
+                let n = self.model.objs[&k].commits.min(1 << 20);
+                if let Some(op) = request_by_name(iface, "commit") {
+                    for _ in 0..n {
+                        self.to_server.push_msg(Msg::new(s, op, vec![]));
+                    }
+                }
+            }
+
             let o = &self.model.objs[&k];
             let recs: Vec<Rec> = o
                 .sets
@@ -352,7 +363,7 @@ impl Connection<'_> {
             .copied()
             .collect();
         // Surface -> its xdg_surface (rebuilt or not).
-        let mut xdg_of: HashMap<Key, Key> = HashMap::new();
+        let mut role_of: HashMap<Key, Key> = HashMap::new();
         // Subsurface tree: surface -> parent surface.
         let mut parent_of: HashMap<Key, Key> = HashMap::new();
         for (k, o) in &self.model.objs {
@@ -363,9 +374,9 @@ impl Connection<'_> {
                 continue;
             };
             match o.iface.name {
-                "xdg_surface" => {
+                name if super::model::CONFIGURED_ROLES.contains(&name) => {
                     if let Some(V::Obj(Some(surface))) = rec.args.get(1) {
-                        xdg_of.insert(*surface, *k);
+                        role_of.insert(*surface, *k);
                     }
                 }
                 "wl_subsurface" if ks.contains_key(k) => {
@@ -381,7 +392,7 @@ impl Connection<'_> {
         let surface_iface = interfaces::by_name("wl_surface").unwrap();
         let commit = request_by_name(surface_iface, "commit").unwrap();
         for k in &surfaces {
-            if xdg_of.get(k).is_some_and(|x| ks.contains_key(x)) {
+            if role_of.get(k).is_some_and(|x| ks.contains_key(x)) {
                 self.send_replay(Msg::new(ks[k], commit, vec![]), surface_iface);
             }
         }
@@ -403,7 +414,7 @@ impl Connection<'_> {
         };
         let mut order: Vec<Key> = surfaces
             .iter()
-            .filter(|k| xdg_of.get(*k).is_none_or(|x| ks.contains_key(x)))
+            .filter(|k| role_of.get(*k).is_none_or(|x| ks.contains_key(x)))
             .copied()
             .collect();
         order.sort_by_key(|k| std::cmp::Reverse(depth(*k)));

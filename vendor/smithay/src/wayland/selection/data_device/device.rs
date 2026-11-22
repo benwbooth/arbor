@@ -147,10 +147,16 @@ where
             }
             wl_data_device::Request::SetSelection { source, .. } => {
                 let seat_data = match seat.get_keyboard() {
-                    Some(keyboard) if keyboard.client_of_object_has_focus(&resource.id()) => seat
+                    // arbor: or an app the compositor is restoring after a restart.
+                    Some(keyboard)
+                        if keyboard.client_of_object_has_focus(&resource.id())
+                            || handler.selection_without_focus_allowed(client) =>
+                    {
+                        seat
                         .user_data()
                         .get::<RefCell<SeatData<D::SelectionUserData>>>()
-                        .unwrap(),
+                        .unwrap()
+                    }
                     _ => {
                         debug!(
                             client = ?client,

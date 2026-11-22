@@ -32,6 +32,13 @@ pub trait SelectionHandler: Sized + SeatHandler {
     /// UserData attached to server-side selections.
     type SelectionUserData: Clone + Send + Sync + 'static;
 
+    /// arbor: whether `client` may set the selection without having keyboard focus (an app the
+    /// compositor is restoring after an in-place restart).
+    #[allow(unused_variables)]
+    fn selection_without_focus_allowed(&self, client: &wayland_server::Client) -> bool {
+        false
+    }
+
     /// A client has set the selection
     #[allow(unused_variables)]
     fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, seat: Seat<Self>) {}

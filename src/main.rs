@@ -110,12 +110,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && env::var_os("ARBOR_NO_SUPERVISOR").is_none_or(|x| x != "1")
     {
         // Become the supervisor; the compositor runs as our child, with the same arguments.
-        let x11 = match config_path(cli.config.clone()).load().config {
-            Ok(config) => !config.xwayland_satellite.off,
-            Err(_) => true,
+        let satellite = match config_path(cli.config.clone()).load().config {
+            Ok(config) => {
+                (!config.xwayland_satellite.off).then(|| config.xwayland_satellite.path.clone())
+            }
+            Err(_) => Some(arbor_config::XwaylandSatellite::default().path),
         };
         let args = env::args_os().skip(1).collect();
-        let code = arbor::supervisor::run(args, x11)?;
+        let code = arbor::supervisor::run(args, satellite)?;
         std::process::exit(code);
     }
 
@@ -231,6 +233,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         *CHILD_DISPLAY.write().unwrap() = Some(name.to_owned());
         env::set_var("DISPLAY", name);
         info!("listening on X11 socket: {name}");
+    } else if let Some(name) = arbor::supervisor::x11_by_supervisor() {
+        // The supervisor runs xwayland-satellite (it outlives this compositor).
+        *CHILD_DISPLAY.write().unwrap() = Some(name.clone());
+        env::set_var("DISPLAY", &name);
+        info!("X11 display {name} (xwayland-satellite run by the supervisor)");
     } else {
         // Avoid spawning children in the host X11.
         env::remove_var("DISPLAY");
@@ -242,6 +249,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         // arbor can restart in place (supervisor.rs): Qt apps reconnect instead of exiting.
         env::set_var("QT_WAYLAND_RECONNECT", "1");
+    }
+    if arbor::supervisor::is_proxied() {
+        // Apps' Wayland connections outlive this compositor (wl_proxy): shells that watch
+        // arbor's IPC (hearth) reconnect to it instead of starting over.
+        env::set_var("ARBOR_WAYLAND_PROXY", "1");
     }
 
     if cli.session {
@@ -345,6 +357,7 @@ fn import_environment() {
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
         "QT_WAYLAND_RECONNECT",
+        "ARBOR_WAYLAND_PROXY",
         SOCKET_PATH_ENV,
         COMPAT_SOCKET_PATH_ENV,
     ]

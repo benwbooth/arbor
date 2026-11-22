@@ -11,9 +11,6 @@ use wayland_backend::protocol::{Interface, MessageDesc};
 
 use super::wire::{Msg, A, SERVER_ID_START};
 
-/// Client-view ids for compositor-made objects that would clash with ones the app still has.
-const FRESH_SERVER_IDS: u32 = 0xff80_0000;
-
 #[derive(Debug, Default)]
 pub struct Ids {
     /// False until the first compositor change: everything is the same on both sides.
@@ -26,6 +23,9 @@ pub struct Ids {
     pub temps: HashMap<u32, &'static Interface>,
     gc2s: HashMap<u32, u32>,
     gs2c: HashMap<u32, u32>,
+    /// Client-view ids for compositor-made objects that would clash with ones the app still
+    /// has are appended here (libwayland only takes a new id at the end of its table or in a
+    /// slot it has seen).
     next_fresh: u32,
 }
 
@@ -40,7 +40,7 @@ impl Ids {
         *self = Ids {
             active: true,
             next_s: 2,
-            next_fresh: self.next_fresh.max(FRESH_SERVER_IDS),
+            next_fresh: self.next_fresh,
             ..Default::default()
         };
         self.pair(1, 1);
@@ -135,13 +135,15 @@ impl Ids {
     }
 
     /// Translates the arguments of an event (its object is already the client's).
-    /// `in_use(id)`: whether the client has a live object with that id.
+    /// `in_use(id)`: whether the client has a live object with that id; `server_end`: one past
+    /// the highest compositor-made id the client has seen.
     pub fn event(
         &mut self,
         msg: &mut Msg,
         iface: &Interface,
         desc: &MessageDesc,
         in_use: impl Fn(u32) -> bool,
+        server_end: u32,
     ) -> Fate {
         if !self.active {
             return Fate::Keep;
@@ -203,13 +205,13 @@ impl Ids {
                 A::Obj(id) => *id = self.s2c.get(id).copied().unwrap_or(0),
                 A::New(id) => {
                     let s = *id;
-                    let c = if !in_use(s) && !self.c2s.contains_key(&s) {
+                    let end = server_end.max(self.next_fresh);
+                    let c = if s <= end && !in_use(s) && !self.c2s.contains_key(&s) {
                         s
                     } else {
-                        let c = self.next_fresh;
-                        self.next_fresh += 1;
-                        c
+                        end
                     };
+                    self.next_fresh = self.next_fresh.max(c + 1);
                     self.pair(c, s);
                     *id = c;
                 }

@@ -42,23 +42,31 @@ pub struct Creds {
     pub pid: i32,
     pub uid: u32,
     pub gid: u32,
+    /// The proxy is rebuilding this app's objects after a compositor change (not a new app).
+    pub restore: bool,
 }
 
 impl Creds {
-    fn to_bytes(self) -> [u8; 12] {
-        let mut out = [0; 12];
+    /// pid, uid, gid, flags (bit 0: restore).
+    fn to_bytes(self) -> [u8; 16] {
+        let mut out = [0; 16];
         out[0..4].copy_from_slice(&self.pid.to_ne_bytes());
         out[4..8].copy_from_slice(&self.uid.to_ne_bytes());
         out[8..12].copy_from_slice(&self.gid.to_ne_bytes());
+        out[12..16].copy_from_slice(&(self.restore as u32).to_ne_bytes());
         out
     }
 
     fn from_bytes(b: &[u8]) -> Option<Self> {
-        let b: &[u8; 12] = b.try_into().ok()?;
+        if b.len() != 12 && b.len() != 16 {
+            return None;
+        }
+        let u = |i: usize| u32::from_ne_bytes(b[i..i + 4].try_into().unwrap());
         Some(Self {
-            pid: i32::from_ne_bytes(b[0..4].try_into().unwrap()),
-            uid: u32::from_ne_bytes(b[4..8].try_into().unwrap()),
-            gid: u32::from_ne_bytes(b[8..12].try_into().unwrap()),
+            pid: u(0) as i32,
+            uid: u(4),
+            gid: u(8),
+            restore: b.len() == 16 && u(12) & 1 != 0,
         })
     }
 }
@@ -87,6 +95,7 @@ pub fn peer_creds(fd: BorrowedFd) -> io::Result<Creds> {
         pid: cred.pid,
         uid: cred.uid,
         gid: cred.gid,
+        restore: false,
     })
 }
 
@@ -214,7 +223,7 @@ pub fn send_with_fds(fd: BorrowedFd, bytes: &[u8], fds: &[OwnedFd]) -> io::Resul
 /// Reads one new connection from the clients channel (compositor side). `Ok(None)`: nothing
 /// waiting.
 pub fn recv_client(chan: BorrowedFd) -> io::Result<Option<(UnixStream, Creds)>> {
-    let mut buf = [0u8; 12];
+    let mut buf = [0u8; 16];
     let mut fds = Vec::new();
     loop {
         match recv_with_fds(chan, &mut buf, &mut fds) {
@@ -730,10 +739,14 @@ impl<'h> Connection<'h> {
             self.model
                 .decode(Dir::Event, header, c, body, &mut self.from_server.fds)?;
         let model = &self.model;
-        if let Fate::Swallow = self
-            .ids
-            .event(&mut msg, iface, desc, |id| model.by_id.contains_key(&id))
-        {
+        let server_end = model.server_end;
+        if let Fate::Swallow = self.ids.event(
+            &mut msg,
+            iface,
+            desc,
+            |id| model.by_id.contains_key(&id),
+            server_end,
+        ) {
             return Ok(());
         }
         if let Some(rp) = &rp {
@@ -750,7 +763,10 @@ impl<'h> Connection<'h> {
         }
         let forward = self.model.on_event(&msg, iface, desc);
         if let Some(rp) = rp {
-            if rp.auto_ack && iface.name == "xdg_surface" && desc.name == "configure" {
+            if rp.auto_ack
+                && model::CONFIGURED_ROLES.contains(&iface.name)
+                && desc.name == "configure"
+            {
                 if let Some(wire::A::Uint(serial)) = msg.args.first() {
                     let serial = *serial;
                     if let (Some(key), Some(s), Some(op)) = (
@@ -871,7 +887,13 @@ impl<'h> Connection<'h> {
 
         let (server, generation) = self
             .hub
-            .connect(self.creds, self.generation)
+            .connect(
+                Creds {
+                    restore: true,
+                    ..self.creds
+                },
+                self.generation,
+            )
             .map_err(|e| End::Error("compositor", e))?;
         self.server = server;
         self.generation = generation;
@@ -930,6 +952,7 @@ mod tests {
             pid: 42,
             uid: 1000,
             gid: 100,
+            restore: true,
         };
         let (mut ours, generation) = hub.connect(creds, 0).unwrap();
         assert_eq!(generation, 1);
