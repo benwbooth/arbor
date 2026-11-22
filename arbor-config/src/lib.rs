@@ -1494,6 +1494,7 @@ mod tests {
                     ),
                 ],
                 empty_workspace_above_first: false,
+                fullscreen_own_workspace: true,
                 gaps: 8.0,
                 struts: Struts {
                     left: FloatOrInt(

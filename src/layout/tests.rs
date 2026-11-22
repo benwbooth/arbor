@@ -3948,3 +3948,154 @@ fn keyboard_snap_into_zone() {
     assert_eq!(rect.loc.x, area[0] + (area[2] * 0.75).round());
     assert_eq!(rect.size.w, (area[2] * 0.25).round());
 }
+
+// arbor: fullscreen and maximized windows get a workspace of their own (own_space.rs).
+
+fn own_space_ws_of(layout: &Layout<TestWindow>, id: usize) -> WorkspaceId {
+    layout
+        .workspaces()
+        .find(|(_, _, ws)| ws.has_window(&id))
+        .map(|(_, _, ws)| ws.id())
+        .unwrap()
+}
+
+fn own_space_two_windows() -> Vec<Op> {
+    vec![
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ]
+}
+
+#[test]
+fn fullscreen_moves_to_own_workspace_and_back() {
+    let mut ops = own_space_two_windows();
+    ops.extend([Op::FullscreenWindow(1), Op::CompleteAnimations]);
+    let mut layout = check_ops(ops);
+
+    let home = own_space_ws_of(&layout, 2);
+    let own = own_space_ws_of(&layout, 1);
+    assert_ne!(home, own);
+    assert_eq!(layout.active_workspace().unwrap().id(), own);
+    let order: Vec<_> = layout.workspaces().map(|(_, _, ws)| ws.id()).collect();
+    let home_idx = order.iter().position(|id| *id == home).unwrap();
+    assert_eq!(
+        order[home_idx + 1],
+        own,
+        "own workspace comes right after home"
+    );
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::FullscreenWindow(1), Op::CompleteAnimations],
+    );
+    assert_eq!(own_space_ws_of(&layout, 1), home);
+    assert_eq!(layout.active_workspace().unwrap().id(), home);
+    // Home plus the spare empty one: the window's own workspace is gone.
+    assert_eq!(layout.workspaces().count(), 2);
+}
+
+#[test]
+fn maximize_moves_to_own_workspace_and_back() {
+    let mut ops = own_space_two_windows();
+    ops.extend([
+        Op::MaximizeWindowToEdges { id: Some(1) },
+        Op::CompleteAnimations,
+    ]);
+    let mut layout = check_ops(ops);
+    let home = own_space_ws_of(&layout, 2);
+    assert_ne!(own_space_ws_of(&layout, 1), home);
+    let (_, win) = layout.windows().find(|(_, w)| *w.id() == 1).unwrap();
+    assert_eq!(win.pending_sizing_mode(), SizingMode::Maximized);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::MaximizeWindowToEdges { id: Some(1) },
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(own_space_ws_of(&layout, 1), home);
+    let (_, win) = layout.windows().find(|(_, w)| *w.id() == 1).unwrap();
+    assert_eq!(win.pending_sizing_mode(), SizingMode::Normal);
+}
+
+#[test]
+fn closing_own_workspace_window_shows_home() {
+    let mut ops = own_space_two_windows();
+    ops.extend([
+        Op::FullscreenWindow(1),
+        Op::CompleteAnimations,
+        Op::CloseWindow(1),
+        Op::CompleteAnimations,
+    ]);
+    let layout = check_ops(ops);
+    assert_eq!(
+        layout.active_workspace().unwrap().id(),
+        own_space_ws_of(&layout, 2)
+    );
+}
+
+#[test]
+fn fullscreen_alone_stays_put() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FullscreenWindow(1),
+        Op::CompleteAnimations,
+    ];
+    let layout = check_ops(ops);
+    assert_eq!(layout.workspaces().count(), 2);
+}
+
+#[test]
+fn fullscreen_own_workspace_can_be_turned_off() {
+    let mut options = Options::default();
+    options.layout.fullscreen_own_workspace = false;
+    let mut ops = own_space_two_windows();
+    ops.extend([Op::FullscreenWindow(1), Op::CompleteAnimations]);
+    let layout = check_ops_with_options(options, ops);
+    assert_eq!(own_space_ws_of(&layout, 1), own_space_ws_of(&layout, 2));
+}
+
+#[test]
+fn fullscreen_returns_to_same_dock_place() {
+    let mut ops = own_space_two_windows();
+    ops.push(Op::AddWindow {
+        params: TestWindowParams::new(3),
+    });
+    let mut layout = check_ops(ops);
+    let before = layout.active_workspace().unwrap().dock_shape();
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FullscreenWindow(2),
+            Op::CompleteAnimations,
+            Op::FullscreenWindow(2),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(layout.active_workspace().unwrap().dock_shape(), before);
+}
+
+#[test]
+fn floating_fullscreen_returns_floating() {
+    let mut ops = own_space_two_windows();
+    ops.extend([
+        Op::ToggleWindowFloating { id: Some(1) },
+        Op::FullscreenWindow(1),
+        Op::CompleteAnimations,
+        Op::FullscreenWindow(1),
+        Op::CompleteAnimations,
+    ]);
+    let layout = check_ops(ops);
+    assert_eq!(own_space_ws_of(&layout, 1), own_space_ws_of(&layout, 2));
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.is_floating(&1));
+}

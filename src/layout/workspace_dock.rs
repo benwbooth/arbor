@@ -33,6 +33,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.dock.restore_camera(mode, view);
     }
 
+    /// Whether `window`'s dock column is maximized (floating windows never are).
+    pub fn is_pending_maximized(&self, window: &W::Id) -> bool {
+        self.dock
+            .columns()
+            .find(|col| col.contains(window))
+            .is_some_and(|col| col.is_pending_maximized())
+    }
+
     /// Rearranges the docked windows into `shape` (session restore).
     pub fn apply_dock_shape(&mut self, shape: &crate::layout::dock::DockShape<W::Id>) {
         self.dock.apply_shape(shape);

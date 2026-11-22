@@ -21,6 +21,9 @@ pub struct Layout {
     pub default_column_width: Option<PresetSize>,
     pub preset_window_heights: Vec<PresetSize>,
     pub empty_workspace_above_first: bool,
+    /// arbor: a window that goes fullscreen or maximizes moves to a workspace of its own,
+    /// right after the one it was on, and goes back when restored (as on macOS).
+    pub fullscreen_own_workspace: bool,
     pub gaps: f64,
     pub struts: Struts,
     pub background_color: Color,
@@ -45,6 +48,7 @@ impl Default for Layout {
             ],
             default_column_width: Some(PresetSize::Proportion(0.5)),
             empty_workspace_above_first: false,
+            fullscreen_own_workspace: true,
             gaps: 16.,
             struts: Struts::default(),
             preset_window_heights: vec![
@@ -71,6 +75,7 @@ impl MergeWith<LayoutPart> for Layout {
             title_bars,
             camera,
             empty_workspace_above_first,
+            fullscreen_own_workspace,
             gaps,
         );
 
@@ -116,6 +121,9 @@ pub struct LayoutPart {
     pub preset_window_heights: Option<Vec<PresetSize>>,
     #[knuffel(child)]
     pub empty_workspace_above_first: Option<Flag>,
+    /// arbor: `fullscreen-own-workspace false` keeps fullscreen/maximized windows in place.
+    #[knuffel(child)]
+    pub fullscreen_own_workspace: Option<Flag>,
     #[knuffel(child, unwrap(argument))]
     pub gaps: Option<FloatOrInt<0, 65535>>,
     #[knuffel(child)]

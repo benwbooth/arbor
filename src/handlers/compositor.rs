@@ -237,6 +237,7 @@ impl CompositorHandler for State {
                     }
 
                     self.session_restore_place(&window);
+                    self.arbor.layout.own_space_on_map(&window);
 
                     if let Some(output) = output {
                         self.arbor.layout.start_open_animation_for_window(&window);

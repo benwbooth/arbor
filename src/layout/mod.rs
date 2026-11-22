@@ -76,14 +76,15 @@ pub mod camera;
 pub mod closing_window;
 pub mod dock;
 mod dock_ops;
-mod memory_ops;
 pub mod expose;
 pub mod floating;
 pub mod focus_ring;
 pub mod icon_tile;
 pub mod insert_hint_element;
+mod memory_ops;
 pub mod monitor;
 pub mod opening_window;
+mod own_space;
 pub mod shadow;
 pub mod sizing;
 pub mod tab_indicator;
@@ -385,6 +386,8 @@ pub struct Layout<W: LayoutElement> {
     zones: arbor_ipc::SetZones,
     /// arbor: whether Shift is held, for zone snapping during an interactive move.
     zone_modifier_held: bool,
+    /// arbor: windows moved to a workspace of their own by going fullscreen or maximizing.
+    own_spaces: Vec<own_space::OwnSpace<W::Id>>,
 }
 
 /// arbor: the zone under the pointer of an interactive move, if the move snaps into zones:
@@ -759,6 +762,7 @@ impl<W: LayoutElement> Layout<W> {
             interactive_move: None,
             zones: arbor_ipc::SetZones::default(),
             zone_modifier_held: false,
+            own_spaces: Vec::new(),
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -786,6 +790,7 @@ impl<W: LayoutElement> Layout<W> {
             interactive_move: None,
             zones: arbor_ipc::SetZones::default(),
             zone_modifier_held: false,
+            own_spaces: Vec::new(),
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -1177,6 +1182,12 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         transaction: Transaction,
     ) -> Option<RemovedTile<W>> {
+        if let Some(space) = self.own_space_take_on_remove(window) {
+            let removed = self.remove_window(window, transaction);
+            self.own_space_removed(space);
+            return removed;
+        }
+
         if let Some(state) = &self.interactive_move {
             match state {
                 InteractiveMoveState::Starting { window_id, .. } => {
@@ -3468,12 +3479,16 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        let big_after = is_fullscreen || self.own_space_is_maximized(id);
+        let was_big = self.own_space_before_sizing(id, big_after);
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.set_fullscreen(id, is_fullscreen);
-                return;
+                break;
             }
         }
+        self.own_space_after_sizing(id, was_big);
     }
 
     pub fn toggle_fullscreen(&mut self, id: &W::Id) {
@@ -3483,16 +3498,21 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        let big_after = !self.own_space_is_fullscreen(id) || self.own_space_is_maximized(id);
+        let was_big = self.own_space_before_sizing(id, big_after);
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.toggle_fullscreen(id);
-                return;
+                break;
             }
         }
+        self.own_space_after_sizing(id, was_big);
     }
 
     pub fn toggle_windowed_fullscreen(&mut self, id: &W::Id) {
         let (_, window) = self.windows().find(|(_, win)| win.id() == id).unwrap();
+        let was_big = !window.pending_sizing_mode().is_normal();
         if window.pending_sizing_mode().is_fullscreen() {
             // Remove the real fullscreen.
             for ws in self.workspaces_mut() {
@@ -3509,6 +3529,7 @@ impl<W: LayoutElement> Layout<W> {
                 window.request_windowed_fullscreen(!window.is_pending_windowed_fullscreen());
             }
         });
+        self.own_space_after_sizing(id, was_big);
     }
 
     pub fn set_maximized(&mut self, id: &W::Id, maximize: bool) {
@@ -3518,12 +3539,16 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        let big_after = maximize || self.own_space_is_fullscreen(id);
+        let was_big = self.own_space_before_sizing(id, big_after);
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.set_maximized(id, maximize);
-                return;
+                break;
             }
         }
+        self.own_space_after_sizing(id, was_big);
     }
 
     pub fn toggle_maximized(&mut self, id: &W::Id) {
@@ -3533,12 +3558,16 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        let big_after = !self.own_space_is_maximized(id) || self.own_space_is_fullscreen(id);
+        let was_big = self.own_space_before_sizing(id, big_after);
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.toggle_maximized(id);
-                return;
+                break;
             }
         }
+        self.own_space_after_sizing(id, was_big);
     }
 
     pub fn workspace_switch_gesture_begin(&mut self, output: &Output, is_touchpad: bool) {

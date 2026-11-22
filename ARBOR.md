@@ -794,6 +794,17 @@ restoring their own windows) is not implemented; smithay has no support.
 Code: `src/session.rs`, `src/layout/dock_shape.rs`; tests in
 `src/tests/session.rs`.
 
+## Fullscreen and maximized windows get their own workspace
+
+As on macOS, a window that goes fullscreen or maximizes while sharing its workspace moves to a new
+workspace right after that one, and the view slides over to it. Restoring it (unfullscreen,
+unmaximize) puts it back on the workspace it came from: into the same place in the dock tree if
+that tree is arranged as it was, floating where it floated if it was floating. The emptied
+workspace then goes away. Closing or hiding it shows the workspace it came from. A window alone on
+its workspace stays put, and so does one that opens already fullscreen or maximized while alone;
+one that opens that way beside others gets its own workspace too. `layout { fullscreen-own-workspace false }`
+turns this off. Code: src/layout/own_space.rs.
+
 ## Window memory (every app opens where it was)
 
 Separate from session restore: whenever a window closes, hides (an app hiding to the tray
@@ -1191,7 +1202,7 @@ Top-level sections, mostly as in niri:
 | --- | --- |
 | `input` | keyboard (xkb, repeat, numlock), touchpad, mouse, trackpoint, tablet, touch; `focus-follows-mouse`, `warp-mouse-to-focus`, `workspace-auto-back-and-forth`, `mod-key` |
 | `output "NAME"` | `mode`, `scale`, `transform`, `position`, `variable-refresh-rate`, `off`; arbor: `color-profile`, `hdr { ... }` (see Colour management) |
-| `layout` | `gaps`, `struts`, `focus-ring`, `border`, `shadow`, `tab-indicator` (tab groups), `insert-hint` (drag-to-dock preview), `preset-column-widths` / `preset-window-heights` (what `switch-preset-*` cycles through), `default-column-width` (new floating windows), `background-color`, `empty-workspace-above-first`; arbor: `camera { ... }`, `title-bars { ... }` |
+| `layout` | `gaps`, `struts`, `focus-ring`, `border`, `shadow`, `tab-indicator` (tab groups), `insert-hint` (drag-to-dock preview), `preset-column-widths` / `preset-window-heights` (what `switch-preset-*` cycles through), `default-column-width` (new floating windows), `background-color`, `empty-workspace-above-first`; arbor: `camera { ... }`, `title-bars { ... }`, `fullscreen-own-workspace false` (keep fullscreen/maximized windows where they are) |
 | `window-rule` | `match` / `exclude` on app-id, title, state; `open-floating`, arbor's `open-docked`, `open-maximized`, `open-fullscreen`, `open-on-output` / `open-on-workspace`, sizes, `geometry-corner-radius`, `clip-to-geometry`, `opacity`, `block-out-from`, `title-bar false`, ... |
 | `layer-rule` | the same idea for layer-shell surfaces (panels, wallpapers) |
 | `glass` | arbor: liquid glass defaults (see Liquid glass) |
@@ -1248,6 +1259,8 @@ default-column-display }`, the `default-column-display` window rule,
 - `src/layout/dock_ops.rs`, `src/layout/workspace_dock.rs`: dock-tree
   operations on `Layout` / `Workspace` (minimize, restore, tabs, title bars,
   camera).
+- `src/layout/own_space.rs`: fullscreen/maximized windows on a workspace of
+  their own (macOS style).
 - `src/layout/sizing.rs`: column widths, working area and toplevel bounds
   shared by the dock tree and the floating space.
 - `src/layout/title_bar.rs`, `src/input/title_bar.rs`,
