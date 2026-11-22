@@ -952,7 +952,7 @@ impl State {
                     self.focus_window(&window);
                 }
             }
-            Action::ClickWindow(id, x, y) => self.click_window(id, x, y),
+            Action::ClickWindow(id, x, y, geometry) => self.click_window(id, x, y, geometry),
             Action::ClosePopups(id) => self.close_window_popups(id),
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
@@ -3019,7 +3019,7 @@ impl State {
     /// pointer focus is pointed at the window's surface for the click (placed
     /// so that the unmoved pointer is over the point), then put back on what
     /// is really under the pointer.
-    fn click_window(&mut self, id: u64, x: f64, y: f64) {
+    fn click_window(&mut self, id: u64, x: f64, y: f64, from_geometry: bool) {
         let Some(window) = self
             .arbor
             .layout
@@ -3030,11 +3030,22 @@ impl State {
             return;
         };
         let pointer = self.arbor.seat.get_pointer().unwrap();
-        // Not in the middle of a real click or drag.
-        if pointer.is_grabbed() {
+        // Not in the middle of a real click or drag. An open menu's popup
+        // grab is fine: clicking an item in it is the point (GTK 4's menu
+        // items ignore AT-SPI's click action).
+        let popup_grab = pointer
+            .with_grab(|_, grab| {
+                grab.as_any()
+                    .is::<smithay::desktop::PopupPointerGrab<Self>>()
+            })
+            .unwrap_or(false);
+        if pointer.is_grabbed() && !popup_grab {
             return;
         }
-        let in_window = Point::<f64, Logical>::from((x, y));
+        let mut in_window = Point::<f64, Logical>::from((x, y));
+        if from_geometry {
+            in_window += window.geometry().loc.to_f64();
+        }
         let Some((surface, surface_loc)) =
             window.surface_under(in_window, smithay::desktop::WindowSurfaceType::ALL)
         else {

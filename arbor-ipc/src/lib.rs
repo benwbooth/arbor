@@ -663,6 +663,12 @@ pub enum Action {
         /// Logical pixels from the top edge of the window's main surface.
         #[cfg_attr(feature = "clap", arg(long))]
         y: f64,
+        /// x and y are from the window's geometry (its visible frame,
+        /// without client-side shadows) instead: what GTK's accessibility
+        /// coordinates measure from.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)]
+        geometry: bool,
     },
     /// Close a window's open popup menus, as a click outside them would.
     ///
