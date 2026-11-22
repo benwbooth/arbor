@@ -390,3 +390,31 @@ fn glass_dropped_when_surface_unmaps() {
     assert!(f.arbor().glass.is_empty());
     assert!(!has(&mut f));
 }
+
+#[test]
+#[ignore = "needs a GPU/EGL; run with --ignored"]
+fn glass_on_commit_waits_for_the_surface() {
+    let (mut f, _, id) = scene(1., false);
+    let mut req = plain((100., 100., 300., 200., 40.));
+    req.on_commit = true;
+    f.arbor().set_glass(req.clone());
+    assert!(f.arbor().glass.is_empty(), "on_commit glass applied before a commit");
+
+    // "glassy" is the last layer surface the scene creates.
+    let surface = f.client(id).state.layers.last().unwrap().surface.clone();
+    f.client(id).layer(&surface).commit();
+    f.double_roundtrip(id);
+    assert!(!f.arbor().glass.is_empty(), "on_commit glass not applied by the commit");
+    assert!(f.arbor().pending_glass.is_empty());
+
+    // A newer request replaces a pending one; only the newest applies.
+    let mut moved = plain((150., 100., 300., 200., 40.));
+    moved.on_commit = true;
+    f.arbor().set_glass(req);
+    f.arbor().set_glass(moved);
+    assert_eq!(f.arbor().pending_glass.len(), 1);
+    f.client(id).layer(&surface).commit();
+    f.double_roundtrip(id);
+    let x = f.arbor().glass.entries()[0].shapes[0].shape.x;
+    assert_eq!(x, 150.);
+}

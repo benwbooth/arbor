@@ -114,8 +114,11 @@ impl State {
             .unwrap();
         // arbor: set when this commit unmapped the surface, for its glass shapes.
         let mut unmapped_namespace = None;
+        // arbor: the namespace of a mapped surface that committed, for glass waiting on it.
+        let mut committed_namespace = None;
 
         if is_mapped(surface) {
+            committed_namespace = Some(layer.namespace().to_owned());
             let was_unmapped = self.arbor.unmapped_layer_surfaces.remove(surface);
 
             // Resolve rules for newly mapped layer surfaces.
@@ -217,6 +220,12 @@ impl State {
         }
 
         drop(map);
+
+        // arbor: glass sent for this commit (`SetGlass` `on_commit`) takes effect with it, in
+        // the same frame as the buffer.
+        if let Some(namespace) = &committed_namespace {
+            self.arbor.take_pending_glass(namespace, &output.name());
+        }
 
         // arbor: liquid glass follows layer surfaces mapping, unmapping and resizing.
         if let Some(namespace) = unmapped_namespace {

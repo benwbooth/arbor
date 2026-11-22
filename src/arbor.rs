@@ -197,6 +197,10 @@ const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 // should be ~1.995 seconds.
 const FRAME_CALLBACK_THROTTLE: Option<Duration> = Some(Duration::from_millis(995));
 
+/// arbor: how long an `on_commit` `SetGlass` waits for its surface to commit before it applies
+/// anyway.
+const PENDING_GLASS_TIMEOUT: Duration = Duration::from_millis(100);
+
 pub struct Arbor {
     pub config: Rc<RefCell<Config>>,
 
@@ -251,6 +255,9 @@ pub struct Arbor {
     pub mapped_layer_surfaces: HashMap<LayerSurface, MappedLayer>,
     /// arbor: liquid glass shapes registered over IPC.
     pub glass: crate::glass::GlassRegistry,
+    /// arbor: `SetGlass` requests waiting for their surface's next commit (`on_commit`), with
+    /// when they arrived.
+    pub pending_glass: Vec<(arbor_ipc::SetGlass, Instant)>,
 
     // Cached root surface for every surface, so that we can access it in destroyed() where the
     // normal get_parent() is cleared out.
@@ -2728,6 +2735,7 @@ impl Arbor {
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
             glass: crate::glass::GlassRegistry::default(),
+            pending_glass: Vec::new(),
             root_surface: HashMap::new(),
             dmabuf_pre_commit_hook: HashMap::new(),
             blocker_cleared_tx,
@@ -4778,8 +4786,68 @@ impl Arbor {
         }
     }
 
-    /// arbor: applies a `SetGlass` IPC request.
+    /// arbor: handles a `SetGlass` IPC request: applies it, or with `on_commit` keeps it until
+    /// its surface's next commit (`take_pending_glass()`), so the glass moves in the same frame
+    /// as the content drawn over it. Applied at once, the shapes of a magnifying dock reached the
+    /// screen a frame before or after the dock's own buffer, depending on which arrived first.
     pub fn set_glass(&mut self, req: arbor_ipc::SetGlass) {
+        let same = |p: &arbor_ipc::SetGlass| {
+            p.namespace == req.namespace
+                && p.output == req.output
+                && p.popup == req.popup
+                && p.key == req.key
+        };
+        self.pending_glass.retain(|(p, _)| !same(p));
+        if req.on_commit && !req.popup && !req.shapes.is_empty() {
+            self.pending_glass.push((req, Instant::now()));
+            // In case the surface doesn't commit again (it stopped drawing).
+            let _ = self.event_loop.insert_source(
+                Timer::from_duration(PENDING_GLASS_TIMEOUT),
+                |_, _, state| {
+                    state.arbor.apply_stale_glass();
+                    TimeoutAction::Drop
+                },
+            );
+            return;
+        }
+        self.apply_glass(req);
+    }
+
+    /// arbor: applies the pending `on_commit` glass requests for a layer surface with `namespace`
+    /// on `output` that has just committed. Returns whether the registry changed (the caller
+    /// refreshes).
+    pub fn take_pending_glass(&mut self, namespace: &str, output: &str) -> bool {
+        if self.pending_glass.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        let mut i = 0;
+        while i < self.pending_glass.len() {
+            let p = &self.pending_glass[i].0;
+            if p.namespace == namespace && p.output.as_deref().is_none_or(|o| o == output) {
+                let (req, _) = self.pending_glass.remove(i);
+                changed |= self.glass.set(req);
+            } else {
+                i += 1;
+            }
+        }
+        changed
+    }
+
+    /// arbor: applies pending `on_commit` glass requests that waited longer than
+    /// `PENDING_GLASS_TIMEOUT` for a commit.
+    fn apply_stale_glass(&mut self) {
+        let now = Instant::now();
+        let (stale, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_glass)
+            .into_iter()
+            .partition(|(_, at)| now.duration_since(*at) >= PENDING_GLASS_TIMEOUT);
+        self.pending_glass = keep;
+        for (req, _) in stale {
+            self.apply_glass(req);
+        }
+    }
+
+    fn apply_glass(&mut self, req: arbor_ipc::SetGlass) {
         // Logged when an entry comes or goes (not on every move), so entries a shell leaves
         // behind show up as a growing count.
         let before = self.glass.entries().len();

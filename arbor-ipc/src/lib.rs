@@ -251,6 +251,13 @@ pub struct SetGlass {
     pub surface_size: Option<(f64, f64)>,
     /// The glass shapes, in surface-local logical coordinates. Empty clears.
     pub shapes: Vec<GlassShape>,
+    /// Apply the shapes with the target surface's next commit instead of at once, so glass
+    /// under moving content (a magnifying dock) changes in the same frame as the content.
+    ///
+    /// Send the request before committing the buffer it belongs to. A pending request is
+    /// replaced by a newer one for the same target, and applied anyway when no commit comes
+    /// within 100 ms. Ignored for `popup` targets (applied at once).
+    pub on_commit: bool,
 }
 
 /// One liquid-glass shape: a rounded rectangle in surface-local logical coordinates.

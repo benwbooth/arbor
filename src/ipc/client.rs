@@ -69,6 +69,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             popup: *popup,
             key: key.clone(),
             surface_size: None,
+            on_commit: false,
             shapes: shapes
                 .iter()
                 .cloned()
