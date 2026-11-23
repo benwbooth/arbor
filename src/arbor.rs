@@ -366,6 +366,9 @@ pub struct Arbor {
     pub seat: Seat<State>,
     /// Scancodes of the keys to suppress.
     pub suppressed_keys: HashSet<Keycode>,
+    /// arbor: the mod key went down alone (its keycode and when); a release soon after with
+    /// nothing in between is a tap (`input { mod-tap-overview }`).
+    pub mod_tap: Option<(Keycode, std::time::Instant)>,
     /// Global shortcuts that apps registered through the GlobalShortcuts portal.
     pub global_shortcuts: crate::global_shortcuts::GlobalShortcuts,
     pub remote_input: crate::remote_input::RemoteInputState,
@@ -2785,6 +2788,7 @@ impl Arbor {
             popups: PopupManager::default(),
             popup_grab: None,
             suppressed_keys: HashSet::new(),
+            mod_tap: None,
             global_shortcuts: Default::default(),
             remote_input: Default::default(),
             remote_clipboard: Default::default(),

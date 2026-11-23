@@ -502,6 +502,27 @@ impl State {
                     return FilterResult::Intercept(None);
                 }
 
+                // arbor: a lone tap of the mod key toggles the overview (input
+                // { mod-tap-overview }). Any other key, click, scroll or gesture in between, or
+                // holding it longer, makes it an ordinary modifier press.
+                if mod_key == ModKey::Super {
+                    let is_mod = matches!(modified, Keysym::Super_L | Keysym::Super_R);
+                    if pressed {
+                        let alone = is_mod && !mods.shift && !mods.ctrl && !mods.alt;
+                        this.arbor.mod_tap = (alone
+                            && this.arbor.config.borrow().input.mod_tap_overview)
+                            .then(|| (key_code, std::time::Instant::now()));
+                    } else if let Some((code, at)) = this.arbor.mod_tap.take() {
+                        if code == key_code
+                            && at.elapsed() < std::time::Duration::from_millis(300)
+                            && !this.arbor.is_locked()
+                            && !is_inhibiting_shortcuts
+                        {
+                            this.do_action(Action::ToggleOverview, false);
+                        }
+                    }
+                }
+
                 // arbor: Shift switches zone snapping during a window drag.
                 if this.arbor.layout.set_zone_modifier_held(mods.shift) {
                     this.arbor.queue_redraw_all();
@@ -3201,6 +3222,8 @@ impl State {
     }
 
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         let pointer = self.arbor.seat.get_pointer().unwrap();
 
         let serial = SERIAL_COUNTER.next_serial();
@@ -3515,6 +3538,8 @@ impl State {
     }
 
     fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         #[cfg(feature = "dbus")]
         if self.input_capture_scroll(
             (
@@ -4022,6 +4047,8 @@ impl State {
     }
 
     fn on_tablet_tool_tip<I: InputBackend>(&mut self, event: I::TabletToolTipEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         let tool = self.arbor.seat.tablet_seat().get_tool(&event.tool());
 
         let Some(tool) = tool else {
@@ -4183,6 +4210,8 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         if self.arbor.window_mru_ui.is_open() {
             // Don't start swipe gestures while in the MRU.
             return;
@@ -4360,6 +4389,8 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         // arbor: Mod+pinch zooms the camera.
         if self.camera_pinch_begin() {
             return;
@@ -4490,6 +4521,8 @@ impl State {
     }
 
     fn on_touch_down<I: InputBackend>(&mut self, evt: I::TouchDownEvent) {
+        // arbor: Super used with the mouse, touchpad or touch is no tap.
+        self.arbor.mod_tap = None;
         let Some(handle) = self.arbor.seat.get_touch() else {
             return;
         };

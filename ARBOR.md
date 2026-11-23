@@ -1206,6 +1206,7 @@ Top-level sections, mostly as in niri:
 | `input` | keyboard (xkb, repeat, numlock), touchpad, mouse, trackpoint, tablet, touch; `focus-follows-mouse`, `warp-mouse-to-focus`, `workspace-auto-back-and-forth`, `mod-key` |
 | `output "NAME"` | `mode`, `scale`, `transform`, `position`, `variable-refresh-rate`, `off`; arbor: `color-profile`, `hdr { ... }` (see Colour management) |
 | `layout` | `gaps`, `struts`, `focus-ring`, `border`, `shadow`, `tab-indicator` (tab groups), `insert-hint` (drag-to-dock preview), `preset-column-widths` / `preset-window-heights` (what `switch-preset-*` cycles through), `default-column-width` (new floating windows), `background-color`, `empty-workspace-above-first`; arbor: `camera { ... }`, `title-bars { ... }`, `fullscreen-own-workspace false` (keep fullscreen/maximized windows where they are) |
+| `input` | arbor adds `mod-tap-overview`: tapping Super alone (down and up within 300 ms, no key, click, scroll or gesture in between) toggles the overview |
 | `window-rule` | `match` / `exclude` on app-id, title, state; `open-floating`, arbor's `open-docked`, `open-maximized`, `open-fullscreen`, `open-on-output` / `open-on-workspace`, sizes, `geometry-corner-radius`, `clip-to-geometry`, `opacity`, `block-out-from`, `title-bar false`, ... |
 | `layer-rule` | the same idea for layer-shell surfaces (panels, wallpapers) |
 | `glass` | arbor: liquid glass defaults (see Liquid glass) |

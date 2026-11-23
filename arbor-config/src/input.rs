@@ -21,6 +21,9 @@ pub struct Input {
     pub warp_mouse_to_focus: Option<WarpMouseToFocus>,
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
     pub workspace_auto_back_and_forth: bool,
+    /// arbor: tapping the mod key alone (pressed and released within a moment, nothing else in
+    /// between) toggles the overview, as tapping Super does on GNOME and KDE.
+    pub mod_tap_overview: bool,
     pub mod_key: Option<ModKey>,
     pub mod_key_nested: Option<ModKey>,
 }
@@ -49,6 +52,8 @@ pub struct InputPart {
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
     #[knuffel(child)]
     pub workspace_auto_back_and_forth: Option<Flag>,
+    #[knuffel(child)]
+    pub mod_tap_overview: Option<Flag>,
     #[knuffel(child, unwrap(argument, str))]
     pub mod_key: Option<ModKey>,
     #[knuffel(child, unwrap(argument, str))]
@@ -62,6 +67,7 @@ impl MergeWith<InputPart> for Input {
             keyboard,
             disable_power_key_handling,
             workspace_auto_back_and_forth,
+            mod_tap_overview,
         );
 
         merge_clone!(

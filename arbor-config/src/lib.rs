@@ -1144,6 +1144,7 @@ mod tests {
                     },
                 ),
                 workspace_auto_back_and_forth: true,
+                mod_tap_overview: false,
                 mod_key: Some(
                     IsoLevel3Shift,
                 ),
