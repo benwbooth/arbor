@@ -703,6 +703,22 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         keys: String,
     },
+    /// Let an accessibility tool read a window's menus unseen.
+    ///
+    /// For the shell's global menu: an app whose menu items exist only
+    /// while its own menu is open (Electron, GTK 4 popovers, ☰ menus) has
+    /// that menu opened for a moment to be read. While the probe lasts, the
+    /// window's popups are not drawn and a popup grab doesn't take the
+    /// keyboard, so nothing flickers and the user's typing stays where it
+    /// was. Ends after `seconds` (at most 5), or now with 0.
+    ProbeWindow {
+        /// Id of the window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// How long, at most 5; 0 ends the probe.
+        #[cfg_attr(feature = "clap", arg(long))]
+        seconds: f64,
+    },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
     /// Focus the column to the left.

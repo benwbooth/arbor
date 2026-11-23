@@ -115,6 +115,11 @@ pub struct Mapped {
     /// Whether the next configure should be animated, if the configured state changed.
     animate_next_configure: bool,
 
+    /// Until when an accessibility tool is reading this window's menus
+    /// (IPC ProbeWindow): its popups aren't drawn and its popup grabs don't
+    /// take the keyboard, so a menu opened only to be read never shows.
+    probe_until: Option<std::time::Instant>,
+
     /// Serials of commits that should be animated.
     animate_serials: Vec<Serial>,
 
@@ -309,6 +314,7 @@ impl Mapped {
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
             blur_config: config.blur,
             animate_next_configure: false,
+            probe_until: None,
             animate_serials: Vec::new(),
             animation_snapshot: None,
             request_size_once: None,
@@ -633,6 +639,18 @@ impl Mapped {
         self.need_to_recompute_rules |= changed;
     }
 
+    /// Under an accessibility probe (IPC ProbeWindow), until its deadline.
+    pub fn is_probed(&self) -> bool {
+        self.probe_until.is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    /// Start (`seconds` > 0, at most 5) or end (0) a probe of this window.
+    pub fn set_probe(&mut self, seconds: f64) {
+        self.probe_until = (seconds > 0.).then(|| {
+            std::time::Instant::now() + std::time::Duration::from_secs_f64(seconds.min(5.))
+        });
+    }
+
     pub fn is_urgent(&self) -> bool {
         self.is_urgent
     }
@@ -708,6 +726,10 @@ impl LayoutElement for Mapped {
         push: &mut dyn FnMut(LayoutElementRenderElement<R>),
     ) {
         if ctx.target.should_block_out(self.rules.block_out_from) {
+            return;
+        }
+        // A menu opened only to be read (ProbeWindow) is never shown.
+        if self.is_probed() {
             return;
         }
 

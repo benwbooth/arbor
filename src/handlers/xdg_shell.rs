@@ -376,6 +376,16 @@ impl XdgShellHandler for State {
                 })
                 .unwrap_or(true);
 
+        // A popup opened while an accessibility tool reads the window's
+        // menus (ProbeWindow) gets the pointer grab only: the keyboard stays
+        // where the user is (hearth's own menu).
+        let probed = self
+            .arbor
+            .layout
+            .windows()
+            .any(|(_, m)| m.is_probed() && m.toplevel().wl_surface() == &root);
+        let can_receive_keyboard_focus = can_receive_keyboard_focus && !probed;
+
         let keyboard_grab_mismatches = keyboard.is_grabbed()
             && !(keyboard.has_grab(serial)
                 || grab.previous_serial().is_none_or(|s| keyboard.has_grab(s)));

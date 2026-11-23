@@ -976,6 +976,17 @@ impl State {
             Action::ClickWindow(id, x, y, geometry) => self.click_window(id, x, y, geometry),
             Action::ClosePopups(id) => self.close_window_popups(id),
             Action::SendKeys(id, keys) => self.send_keys_to_window(id, &keys),
+            Action::ProbeWindow(id, seconds) => {
+                let window = self
+                    .arbor
+                    .layout
+                    .workspaces_mut()
+                    .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
+                if let Some(window) = window {
+                    window.set_probe(seconds);
+                }
+                self.arbor.queue_redraw_all();
+            }
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
                 if let Some(window) = self

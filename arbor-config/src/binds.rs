@@ -164,6 +164,8 @@ pub enum Action {
     ClosePopups(u64),
     #[knuffel(skip)]
     SendKeys(u64, String),
+    #[knuffel(skip)]
+    ProbeWindow(u64, f64),
     FocusWindowPrevious,
     FocusColumnLeft,
     #[knuffel(skip)]
@@ -488,6 +490,7 @@ impl From<arbor_ipc::Action> for Action {
             arbor_ipc::Action::ClickWindow { id, x, y, geometry } => Self::ClickWindow(id, x, y, geometry),
             arbor_ipc::Action::ClosePopups { id } => Self::ClosePopups(id),
             arbor_ipc::Action::SendKeys { id, keys } => Self::SendKeys(id, keys),
+            arbor_ipc::Action::ProbeWindow { id, seconds } => Self::ProbeWindow(id, seconds),
             arbor_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
             arbor_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
             arbor_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
