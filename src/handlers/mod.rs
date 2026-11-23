@@ -823,13 +823,30 @@ impl XdgActivationHandler for State {
 
         // Check the serial against both a keyboard and a pointer, since layer-shell surfaces
         // with no keyboard interactivity won't have any keyboard focus.
-        let kb_last_enter = seat.get_keyboard().unwrap().last_enter();
-        if kb_last_enter.is_some_and(|last_enter| serial.is_no_older_than(&last_enter)) {
-            return true;
+        let keyboard = seat.get_keyboard().unwrap();
+        let pointer = seat.get_pointer().unwrap();
+        let kb_last_enter = keyboard.last_enter();
+        let pointer_last_enter = pointer.last_enter();
+        let serial_ok = kb_last_enter.is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
+            || pointer_last_enter.is_some_and(|last_enter| serial.is_no_older_than(&last_enter));
+        if !serial_ok {
+            return false;
         }
 
-        let pointer_last_enter = seat.get_pointer().unwrap().last_enter();
-        pointer_last_enter.is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
+        // arbor: focus-stealing prevention (as KDE and macOS do). A token raises a window only
+        // if the app that made it holds the keyboard or the pointer right now: the dock, the
+        // launcher or a notification you just clicked, or the app you're using opening its own
+        // window. An app raising itself in the background (Claude's app did whenever a chat
+        // finished, switching away from a fullscreen video) only marks its window urgent.
+        let creator = data.client_id.clone();
+        let holds = |focus: Option<WlSurface>| {
+            creator.is_some() && focus.and_then(|s| s.client()).map(|c| c.id()) == creator
+        };
+        if holds(keyboard.current_focus()) || holds(pointer.current_focus()) {
+            return true;
+        }
+        data.user_data.insert_if_missing(|| UrgentOnlyMarker);
+        true
     }
 
     fn request_activation(
