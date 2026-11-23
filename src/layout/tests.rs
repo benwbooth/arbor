@@ -4099,3 +4099,39 @@ fn floating_fullscreen_returns_floating() {
     let ws = layout.active_workspace().unwrap();
     assert!(ws.is_floating(&1));
 }
+
+#[test]
+fn new_window_does_not_open_over_fullscreen() {
+    let mut ops = own_space_two_windows();
+    ops.extend([
+        Op::FullscreenWindow(1),
+        Op::CompleteAnimations,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let layout = check_ops(ops);
+    let own = own_space_ws_of(&layout, 1);
+    // The new window opened where window 1 came from, and the view stayed on the video.
+    assert_eq!(own_space_ws_of(&layout, 3), own_space_ws_of(&layout, 2));
+    assert_eq!(layout.active_workspace().unwrap().id(), own);
+}
+
+#[test]
+fn new_window_does_not_open_over_lone_maximized() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MaximizeWindowToEdges { id: Some(1) },
+        Op::CompleteAnimations,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ];
+    let layout = check_ops(ops);
+    assert_ne!(own_space_ws_of(&layout, 2), own_space_ws_of(&layout, 1));
+}

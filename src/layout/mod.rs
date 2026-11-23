@@ -1068,6 +1068,34 @@ impl<W: LayoutElement> Layout<W> {
                         }
                     }
                 };
+                // arbor: nothing opens over a fullscreen or maximized window (as on macOS). A
+                // new window that would go to such a workspace opens on the one it came from
+                // (or the nearest without one) instead, and only takes the view along when the
+                // user launched it (activation token), not when an app opens it by itself.
+                let (target, activate) = match target {
+                    MonitorAddWindowTarget::Auto => {
+                        let mon = &monitors[mon_idx];
+                        match own_space::calm_workspace(
+                            &self.own_spaces,
+                            mon,
+                            mon.active_workspace_idx,
+                        ) {
+                            Some(id) => (
+                                MonitorAddWindowTarget::Workspace {
+                                    id,
+                                    column_idx: None,
+                                },
+                                if activate == ActivateWindow::Yes {
+                                    ActivateWindow::Yes
+                                } else {
+                                    ActivateWindow::No
+                                },
+                            ),
+                            None => (target, activate),
+                        }
+                    }
+                    target => (target, activate),
+                };
                 let mon = &mut monitors[mon_idx];
 
                 let (ws_idx, _) = mon.resolve_add_window_target(target);

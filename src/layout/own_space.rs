@@ -7,6 +7,7 @@
 
 use super::dock::DockShape;
 use super::workspace::WorkspaceId;
+use super::monitor::Monitor;
 use super::{ActivateWindow, Layout, LayoutElement, MonitorSet};
 
 /// A window living on a workspace of its own.
@@ -220,4 +221,37 @@ fn arrangement<Id: Clone + PartialEq>(shape: &DockShape<Id>) -> DockShape<Id> {
             }
         }
     }
+}
+
+/// Where a new window goes instead of `ws_idx` on `mon`, when that workspace shows a fullscreen
+/// or maximized window (nothing may cover one, as on macOS): the workspace that window came
+/// from, else the nearest one without such a window (the spare empty one at the end always
+/// qualifies). `None` when `ws_idx` is fine.
+pub(super) fn calm_workspace<W: LayoutElement>(
+    own_spaces: &[OwnSpace<W::Id>],
+    mon: &Monitor<W>,
+    ws_idx: usize,
+) -> Option<WorkspaceId> {
+    let is_big = |ws: &super::workspace::Workspace<W>| {
+        ws.windows().any(|win| !win.pending_sizing_mode().is_normal())
+    };
+    let ws = mon.workspaces.get(ws_idx)?;
+    if !is_big(ws) {
+        return None;
+    }
+    let id = ws.id();
+    if let Some(space) = own_spaces.iter().find(|s| s.own == id) {
+        if let Some(home) = mon.workspaces.iter().find(|ws| ws.id() == space.home) {
+            if !is_big(home) {
+                return Some(home.id());
+            }
+        }
+    }
+    let before = (0..ws_idx).rev();
+    let after = ws_idx + 1..mon.workspaces.len();
+    before
+        .chain(after)
+        .map(|idx| &mon.workspaces[idx])
+        .find(|ws| !is_big(ws))
+        .map(|ws| ws.id())
 }
