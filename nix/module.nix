@@ -59,8 +59,8 @@ in
 
     useNautilus = lib.mkEnableOption ''
       Nautilus as file chooser. Only useful if you add xdg-desktop-portal-gnome
-      yourself and route FileChooser to it; arbor's portal setup uses the KDE
-      portal for files and does not need GNOME
+      yourself and route FileChooser to it; arbor's portal setup uses the GTK
+      portal (or one you route FileChooser to, e.g. grove's) and does not need GNOME
     '';
 
     plasmaOnlyAutostart = lib.mkOption {
@@ -197,14 +197,11 @@ in
           # arbor implements screen sharing, screenshots, remote control, input
           # capture, global
           # shortcuts, wallpaper and idle inhibition itself
-          # (share/xdg-desktop-portal/portals/arbor.portal); the KDE portal covers
-          # the rest (file chooser, settings, notifications, access dialogs), with
-          # GTK as fallback. Nothing here needs GNOME.
+          # (share/xdg-desktop-portal/portals/arbor.portal); the GTK portal covers
+          # the rest (file chooser, settings, notifications, access dialogs).
+          # Nothing here needs GNOME or KDE.
           config.arbor = {
-            default = [
-              "kde"
-              "gtk"
-            ];
+            default = [ "gtk" ];
             "org.freedesktop.impl.portal.ScreenCast" = "arbor";
             "org.freedesktop.impl.portal.Screenshot" = "arbor";
             "org.freedesktop.impl.portal.RemoteDesktop" = "arbor";
@@ -216,7 +213,6 @@ in
           };
 
           extraPortals = [
-            pkgs.kdePackages.xdg-desktop-portal-kde
             pkgs.xdg-desktop-portal-gtk
             # arbor.portal: the backends arbor itself provides.
             cfg.package
