@@ -192,7 +192,7 @@ in
 
           # NOTE: `configPackages` is ignored when `xdg.portal.config.arbor` is
           # defined. No Secret portal here (set "org.freedesktop.impl.portal.Secret"
-          # yourself, e.g. to "kwallet").
+          # yourself, e.g. to "oo7-portal").
           #
           # arbor implements screen sharing, screenshots, remote control, input
           # capture, global
