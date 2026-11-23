@@ -687,6 +687,22 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
+    /// Type key chords into a window, as if pressed on the keyboard.
+    ///
+    /// For the shell's global menu: a menu item that stands for an app's
+    /// keyboard shortcut (an app that exports no menus, see hearth's menu
+    /// modules) sends that shortcut here. The window is focused first; the
+    /// keys go straight to it, not through arbor's own key bindings.
+    /// `keys` is one chord or several separated by spaces, written as in
+    /// menus: `Ctrl+Shift+S`, `F5`, `Ctrl+K Ctrl+O`, `Ctrl+?`, `Alt+F`.
+    SendKeys {
+        /// Id of the window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// The chords.
+        #[cfg_attr(feature = "clap", arg(long))]
+        keys: String,
+    },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
     /// Focus the column to the left.

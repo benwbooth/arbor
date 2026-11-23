@@ -954,6 +954,7 @@ impl State {
             }
             Action::ClickWindow(id, x, y, geometry) => self.click_window(id, x, y, geometry),
             Action::ClosePopups(id) => self.close_window_popups(id),
+            Action::SendKeys(id, keys) => self.send_keys_to_window(id, &keys),
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
                 if let Some(window) = self
@@ -3088,6 +3089,76 @@ impl State {
             },
         );
         pointer.frame(self);
+    }
+
+    /// IPC SendKeys: type `keys` (chords such as "Ctrl+Shift+S", several
+    /// separated by spaces) into window `id`, focused first. Each chord's
+    /// keys are pressed in order and released in reverse straight into the
+    /// focused client (`FilterResult::Forward`), so arbor's own bindings never
+    /// see them. Key names resolve through the current keymap
+    /// (`plan_keysym`), which adds the level modifier a symbol needs ("?" is
+    /// Shift+/ on a US layout). Skipped while a real key is held.
+    fn send_keys_to_window(&mut self, id: u64, keys: &str) {
+        let Some(window) = self
+            .arbor
+            .layout
+            .windows()
+            .find(|(_, m)| m.id().get() == id)
+            .map(|(_, m)| m.window.clone())
+        else {
+            return;
+        };
+        let chords: Option<Vec<_>> = keys.split_whitespace().map(parse_key_chord).collect();
+        let Some(chords) = chords else {
+            warn!("SendKeys: can't read {keys:?}");
+            return;
+        };
+        let keyboard = self.arbor.seat.get_keyboard().unwrap();
+        if !keyboard.pressed_keys().is_empty() {
+            warn!("SendKeys: a key is held, not typing {keys:?}");
+            return;
+        }
+        self.focus_window(&window);
+        for (mods, key) in chords {
+            let locked = keyboard.modifier_state().serialized.locked;
+            let codes = keyboard.with_xkb_state(self, |ctx| {
+                let xkb = ctx.xkb().lock().unwrap();
+                let layout = xkb.active_layout();
+                // SAFETY: the keymap reference does not outlive the lock.
+                let keymap = unsafe { xkb.keymap() };
+                let mut codes = Vec::new();
+                for &m in &mods {
+                    codes.push(crate::remote_input::plan_keysym(keymap, layout.0, locked, m)?.keycode);
+                }
+                let plan = crate::remote_input::plan_keysym(keymap, layout.0, locked, key)?;
+                for m in plan.mods {
+                    if !codes.contains(&m) {
+                        codes.push(m);
+                    }
+                }
+                codes.push(plan.keycode);
+                Some(codes)
+            });
+            let Some(codes) = codes else {
+                warn!("SendKeys: no key for {keys:?} in this keymap");
+                return;
+            };
+            let time = get_monotonic_time().as_millis() as u32;
+            for (code, state) in codes
+                .iter()
+                .map(|c| (*c, KeyState::Pressed))
+                .chain(codes.iter().rev().map(|c| (*c, KeyState::Released)))
+            {
+                keyboard.input::<(), _>(
+                    self,
+                    code,
+                    state,
+                    SERIAL_COUNTER.next_serial(),
+                    time,
+                    |_, _, _| FilterResult::Forward,
+                );
+            }
+        }
     }
 
     /// IPC ClosePopups: close window `id`'s popups (its open menus), as a
@@ -5788,5 +5859,86 @@ mod tests {
             ),
             None,
         );
+    }
+}
+
+/// One chord of IPC SendKeys ("Ctrl+Shift+S", "F5", "Ctrl+?", "Ctrl++"):
+/// its modifier keysyms and its key's keysym. None if a name is unknown.
+pub fn parse_key_chord(chord: &str) -> Option<(Vec<Keysym>, Keysym)> {
+    let (mods_part, key) = match chord.strip_suffix("++") {
+        Some(rest) => (rest, "+"),
+        None if chord == "+" => ("", "+"),
+        None => match chord.rsplit_once('+') {
+            Some((m, k)) => (m, k),
+            None => ("", chord),
+        },
+    };
+    let mut mods = Vec::new();
+    for m in mods_part.split('+').filter(|m| !m.is_empty()) {
+        mods.push(match m.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => Keysym::Control_L,
+            "shift" => Keysym::Shift_L,
+            "alt" => Keysym::Alt_L,
+            "super" | "meta" | "logo" | "win" | "cmd" => Keysym::Super_L,
+            "altgr" => Keysym::ISO_Level3_Shift,
+            _ => return None,
+        });
+    }
+    let named = match key.to_ascii_lowercase().as_str() {
+        "del" | "delete" => Some(Keysym::Delete),
+        "ins" | "insert" => Some(Keysym::Insert),
+        "esc" | "escape" => Some(Keysym::Escape),
+        "enter" | "return" => Some(Keysym::Return),
+        "space" => Some(Keysym::space),
+        "tab" => Some(Keysym::Tab),
+        "backspace" => Some(Keysym::BackSpace),
+        "pgup" | "pageup" | "page up" | "prior" => Some(Keysym::Prior),
+        "pgdown" | "pgdn" | "pagedown" | "page down" | "next" => Some(Keysym::Next),
+        "home" => Some(Keysym::Home),
+        "end" => Some(Keysym::End),
+        "left" => Some(Keysym::Left),
+        "right" => Some(Keysym::Right),
+        "up" => Some(Keysym::Up),
+        "down" => Some(Keysym::Down),
+        "menu" => Some(Keysym::Menu),
+        "print" => Some(Keysym::Print),
+        _ => None,
+    };
+    let sym = if let Some(sym) = named {
+        sym
+    } else if key.chars().count() == 1 {
+        // Letters as their lower-case symbol: Shift is spelled out in the
+        // chord ("Ctrl+Shift+S"), not implied by an upper-case letter.
+        let c = key.chars().next()?.to_lowercase().next()?;
+        smithay::input::keyboard::xkb::utf32_to_keysym(c as u32)
+    } else {
+        let sym = smithay::input::keyboard::xkb::keysym_from_name(
+            key,
+            smithay::input::keyboard::xkb::KEYSYM_CASE_INSENSITIVE,
+        );
+        if sym.raw() == 0 {
+            return None;
+        }
+        sym
+    };
+    Some((mods, sym))
+}
+
+#[cfg(test)]
+mod send_keys_tests {
+    use super::*;
+
+    #[test]
+    fn chords() {
+        assert_eq!(
+            parse_key_chord("Ctrl+Shift+S"),
+            Some((vec![Keysym::Control_L, Keysym::Shift_L], Keysym::s))
+        );
+        assert_eq!(parse_key_chord("F5"), Some((vec![], Keysym::F5)));
+        assert_eq!(parse_key_chord("Ctrl+?"), Some((vec![Keysym::Control_L], Keysym::question)));
+        assert_eq!(parse_key_chord("Ctrl++"), Some((vec![Keysym::Control_L], Keysym::plus)));
+        assert_eq!(parse_key_chord("Ctrl+,"), Some((vec![Keysym::Control_L], Keysym::comma)));
+        assert_eq!(parse_key_chord("Del"), Some((vec![], Keysym::Delete)));
+        assert_eq!(parse_key_chord("Hyper+X"), None);
     }
 }
