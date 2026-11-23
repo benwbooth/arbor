@@ -4746,9 +4746,6 @@ impl Arbor {
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
 
-        // Windows pouring into (or out of) the dock, over the dock and the other windows.
-        self.genie.render(output, |elem| push(elem.into()));
-
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
@@ -4762,6 +4759,10 @@ impl Arbor {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
 
+            // Windows pouring into (or out of) the dock: behind the dock, over the windows.
+            // (A fullscreen window is above them here, as it is above the dock.)
+            self.genie.render(output, |elem| push(elem.into()));
+
             push_popups_from_layer!(Layer::Bottom);
             push_popups_from_layer!(Layer::Background);
             push_normal_from_layer!(Layer::Bottom);
@@ -4774,6 +4775,9 @@ impl Arbor {
         } else {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
+
+            // Windows pouring into (or out of) the dock: behind the dock, over the windows.
+            self.genie.render(output, |elem| push(elem.into()));
 
             self.layout
                 .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
