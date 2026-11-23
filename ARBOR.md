@@ -162,6 +162,24 @@ presented frames and how many came later than 1.5 refresh intervals
 element count; plus liquid glass captures (count and Mpx) and overview
 texture drawing. When off it costs one boolean check per frame.
 
+## Headless sessions (test rigs)
+
+`ARBOR_BACKEND=headless` runs arbor with no screen and no host compositor:
+outputs from `ARBOR_HEADLESS_OUTPUTS` (`[NAME=]WIDTHxHEIGHT`, comma
+separated; default `headless-1=1920x1080`; naming one `DP-1` applies that
+monitor's output config) are drawn offscreen on the GPU at 60 Hz, with
+linux-dmabuf, screencopy, screenshots and the session lock working as on a
+real display. `ARBOR_HEADLESS_RENDER_NODE` picks the GPU (else
+`debug { render-drm-device }`, else Mesa's choice). There is no input
+device; drive it over IPC. hearth's smoke test, lock test, test session and
+menu rig run on it (they used a virtual KWin before Plasma went). Unit tests
+use the same backend bare: no renderer, frames only pretend to be presented.
+
+Hyprland nested in arbor (hearth's test session) attaches its first buffer
+without acking the initial configure; arbor's smithay takes a buffer after
+a sent initial configure as acking it (as KWin does) instead of a protocol
+error.
+
 ## Camera (milestone 2)
 
 The dock tree is laid out on a *canvas*: the working area, grown where

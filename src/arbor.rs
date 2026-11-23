@@ -798,6 +798,10 @@ impl State {
         let mut backend = if headless {
             let headless = Headless::new();
             Backend::Headless(headless)
+        } else if crate::backend::headless::requested() {
+            let headless = Headless::new_session(config.clone())
+                .context("error initializing the headless backend")?;
+            Backend::Headless(headless)
         } else if has_display {
             let winit = Winit::new(config.clone(), event_loop.clone())?;
             Backend::Winit(winit)

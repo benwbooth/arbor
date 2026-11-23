@@ -1606,11 +1606,25 @@ impl ToplevelSurface {
             let got_unmapped = had_buffer_before && !has_buffer;
 
             if has_buffer {
-                let Some(last_acked) = role.last_acked.clone() else {
-                    return Some((
-                        xdg_surface::Error::UnconfiguredBuffer,
-                        "must ack the initial configure before attaching buffer",
-                    ));
+                let last_acked = match role.last_acked.clone() {
+                    Some(last_acked) => last_acked,
+                    // arbor: a buffer before the ack of an initial configure that was already
+                    // sent counts as acking it, as KWin allows. Hyprland's Wayland backend
+                    // (aquamarine) sends its first frame without reading the configure. The
+                    // configure stays pending, so the client's late ack still matches.
+                    None => match role.pending_configures.first().cloned() {
+                        Some(initial) => {
+                            tracing::debug!("buffer attached before acking the initial configure; taking it as acked");
+                            role.last_acked = Some(initial.clone());
+                            initial
+                        }
+                        None => {
+                            return Some((
+                                xdg_surface::Error::UnconfiguredBuffer,
+                                "must ack the initial configure before attaching buffer",
+                            ));
+                        }
+                    },
                 };
 
                 // The surface remains, or became mapped, track the last acked state.

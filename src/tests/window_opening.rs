@@ -8,8 +8,9 @@ use super::*;
 use crate::layout::LayoutElement as _;
 use crate::utils::spawning::store_and_increase_nofile_rlimit;
 
+// A buffer before acking an initial configure that was already sent counts as acking it (as
+// KWin allows; Hyprland's Wayland backend does this), and the client's late ack still works.
 #[test]
-#[should_panic(expected = "Protocol error 3 on object xdg_surface")]
 fn dont_ack_initial_configure() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
@@ -23,6 +24,25 @@ fn dont_ack_initial_configure() {
     let window = f.client(id).window(&surface);
     window.attach_new_buffer();
     // Don't ack the configure.
+    window.commit();
+    f.double_roundtrip(id);
+
+    // The late ack of that configure is fine too.
+    let window = f.client(id).window(&surface);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+}
+
+// A buffer before any configure was sent is still a protocol error.
+#[test]
+#[should_panic(expected = "Protocol error 3 on object xdg_surface")]
+fn buffer_before_initial_configure() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    window.attach_new_buffer();
     window.commit();
     f.double_roundtrip(id);
 }
