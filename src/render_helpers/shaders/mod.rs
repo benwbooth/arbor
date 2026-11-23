@@ -19,6 +19,7 @@ pub struct Shaders {
     pub resize: Option<ShaderProgram>,
     pub gradient_fade: Option<GlesTexProgram>,
     pub blur: Option<BlurProgram>,
+    pub genie: Option<ShaderProgram>,
     pub custom_resize: RefCell<Option<ShaderProgram>>,
     pub custom_close: RefCell<Option<ShaderProgram>>,
     pub custom_open: RefCell<Option<ShaderProgram>>,
@@ -31,6 +32,7 @@ pub enum ProgramType {
     Resize,
     Close,
     Open,
+    Genie,
 }
 
 impl Shaders {
@@ -165,6 +167,25 @@ impl Shaders {
             })
             .ok();
 
+        let genie = ShaderProgram::compile(
+            renderer,
+            include_str!("genie.frag"),
+            &[
+                UniformName::new("input_to_canon", UniformType::Matrix3x3),
+                UniformName::new("canon_to_tex", UniformType::Matrix3x3),
+                UniformName::new("win", UniformType::_4f),
+                UniformName::new("tgt", UniformType::_4f),
+                UniformName::new("progress", UniformType::_1f),
+                UniformName::new("mode", UniformType::_1f),
+                UniformName::new("tex_size", UniformType::_2f),
+            ],
+            &["niri_tex"],
+        )
+        .map_err(|err| {
+            warn!("error compiling genie shader: {err:?}");
+        })
+        .ok();
+
         let blur = BlurProgram::compile(renderer)
             .map_err(|err| {
                 warn!("error compiling blur shaders: {err:?}");
@@ -180,6 +201,7 @@ impl Shaders {
             resize,
             gradient_fade,
             blur,
+            genie,
             custom_resize: RefCell::new(None),
             custom_close: RefCell::new(None),
             custom_open: RefCell::new(None),
@@ -231,6 +253,7 @@ impl Shaders {
                 .or_else(|| self.resize.clone()),
             ProgramType::Close => self.custom_close.borrow().clone(),
             ProgramType::Open => self.custom_open.borrow().clone(),
+            ProgramType::Genie => self.genie.clone(),
         }
     }
 }

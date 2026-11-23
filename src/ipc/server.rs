@@ -522,6 +522,15 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let _ = rx.recv().await;
             Response::Handled
         }
+        Request::SetDockTargets(req) => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                state.arbor.genie.set_targets(req);
+                let _ = tx.send_blocking(());
+            });
+            let _ = rx.recv().await;
+            Response::Handled
+        }
         Request::WorkingAreas => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {

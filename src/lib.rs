@@ -15,6 +15,7 @@ pub mod dbus;
 pub mod eis_server;
 pub mod frame_clock;
 pub mod frame_stats;
+pub mod genie;
 pub mod glass;
 pub mod global_shortcuts;
 pub mod handlers;

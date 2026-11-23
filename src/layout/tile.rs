@@ -111,6 +111,9 @@ pub struct Tile<W: LayoutElement> {
     /// Snapshot of the last render for use in the close animation.
     unmap_snapshot: Option<TileRenderSnapshot>,
 
+    /// arbor: not drawn, because the minimize effect is drawing it (coming out of the dock).
+    genie_hidden: bool,
+
     /// Extra damage for clipped surface corner radius changes.
     rounded_corner_damage: RoundedCornerDamage,
 
@@ -220,6 +223,7 @@ impl<W: LayoutElement> Tile<W> {
             alpha_animation: None,
             interactive_move_offset: Point::from((0., 0.)),
             unmap_snapshot: None,
+            genie_hidden: false,
             rounded_corner_damage: Default::default(),
             view_size,
             scale,
@@ -1438,7 +1442,27 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
+    /// arbor: hides (or shows again) the tile while the minimize effect draws it.
+    pub fn set_genie_hidden(&mut self, hidden: bool) {
+        self.genie_hidden = hidden;
+    }
+
     pub fn render<R: ArborRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        focus_ring: bool,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        if self.genie_hidden {
+            return;
+        }
+        self.render_unhidden(ctx, location, xray_pos, focus_ring, push);
+    }
+
+    /// Renders the tile even while the minimize effect hides it (for the effect's snapshot).
+    pub fn render_unhidden<R: ArborRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
@@ -1540,7 +1564,7 @@ impl<W: LayoutElement> Tile<W> {
         let _span = tracy_client::span!("Tile::render_snapshot");
 
         let mut contents = Vec::new();
-        self.render(
+        self.render_unhidden(
             RenderCtx {
                 target: RenderTarget::Output,
                 renderer,
@@ -1591,7 +1615,7 @@ impl<W: LayoutElement> Tile<W> {
                 xray.backdrop[output_idx] = screencast_backdrop.clone().unwrap();
 
                 let mut contents = Vec::new();
-                self.render(
+                self.render_unhidden(
                     RenderCtx {
                         target: RenderTarget::Output,
                         renderer,
@@ -1611,7 +1635,7 @@ impl<W: LayoutElement> Tile<W> {
 
         // A bit of a hack to render blocked out as for screencast, but I think it's fine here.
         let mut blocked_out_contents = Vec::new();
-        self.render(
+        self.render_unhidden(
             RenderCtx {
                 target: RenderTarget::Screencast,
                 renderer,

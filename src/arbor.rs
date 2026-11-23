@@ -160,6 +160,7 @@ use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::ArborRenderer;
+use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::TextureBuffer;
@@ -258,6 +259,9 @@ pub struct Arbor {
     /// arbor: `SetGlass` requests waiting for their surface's next commit (`on_commit`), with
     /// when they arrived.
     pub pending_glass: Vec<(arbor_ipc::SetGlass, Instant)>,
+
+    /// arbor: the minimize effect (windows pouring into their dock slot and back).
+    pub genie: crate::genie::Genie,
 
     // Cached root surface for every surface, so that we can access it in destroyed() where the
     // normal get_parent() is cleared out.
@@ -855,6 +859,8 @@ impl State {
         // it's good to advance every now and then so the workspace clean-up and animations don't
         // build up (the 1 second frame callback timer will call this line).
         self.arbor.advance_animations();
+
+        self.refresh_genie();
 
         self.arbor.redraw_queued_outputs(&mut self.backend);
 
@@ -2168,6 +2174,104 @@ impl State {
         self.arbor.queue_redraw_all();
     }
 
+    /// arbor: starts the minimize effect for windows minimized or restored since the last pass,
+    /// and shows windows whose restore effect ended.
+    fn refresh_genie(&mut self) {
+        use crate::genie::SeenWindow;
+
+        let _span = tracy_client::span!("State::refresh_genie");
+
+        let (config, enabled) = {
+            let config = self.arbor.config.borrow();
+            let anim = config.animations.window_minimize;
+            let enabled = !config.animations.off
+                && !anim.anim.off
+                && anim.effect != arbor_config::animations::MinimizeEffect::None;
+            (anim, enabled)
+        };
+
+        // Where every shown window is drawn, output-local.
+        let mut seen = HashMap::new();
+        for mon in self.arbor.layout.monitors() {
+            let output = mon.output();
+            let k = mon.overview_zoom();
+            for (ws, geo) in mon.workspaces_with_render_geo() {
+                for (tile, pos, zoom) in ws.expose_tiles() {
+                    let size = tile.tile_size().upscale(zoom * k);
+                    let loc = geo.loc + pos.upscale(k);
+                    seen.entry(tile.window().id().get())
+                        .or_insert_with(|| (output.clone(), Rectangle::new(loc, size)));
+                }
+            }
+        }
+        let windows: Vec<_> = self
+            .arbor
+            .layout
+            .windows()
+            .map(|(_, mapped)| {
+                let id = mapped.id().get();
+                SeenWindow {
+                    id,
+                    minimized: mapped.is_minimized(),
+                    seen: seen.remove(&id),
+                }
+            })
+            .collect();
+
+        let had_anims = self.arbor.genie.is_animating();
+        let (starts, unhide) = self.arbor.genie.update(windows, enabled);
+        self.arbor.genie.refresh_targets();
+        if starts.is_empty() && unhide.is_empty() {
+            if had_anims && !self.arbor.genie.is_animating() {
+                self.arbor.queue_redraw_all();
+            }
+            return;
+        }
+
+        let find_window = |layout: &Layout<Mapped>, id: u64| {
+            layout
+                .windows()
+                .find(|(_, m)| m.id().get() == id)
+                .map(|(_, m)| m.window.clone())
+        };
+        for id in unhide {
+            if let Some(window) = find_window(&self.arbor.layout, id) {
+                self.arbor.layout.set_genie_hidden(&window, false);
+            }
+        }
+
+        for start in starts {
+            let id = start.id;
+            let minimize = start.minimize;
+            let tile = self
+                .arbor
+                .layout
+                .workspaces()
+                .flat_map(|(_, _, ws)| ws.tiles())
+                .find(|tile| tile.window().id().get() == id);
+            let Some(tile) = tile else {
+                continue;
+            };
+            let genie = &mut self.arbor.genie;
+            let clock = self.arbor.clock.clone();
+            let res = self.backend.with_primary_renderer(|renderer| {
+                genie.start(renderer, tile, start, clock, config)
+            });
+            match res {
+                Some(Ok(())) => {
+                    if !minimize {
+                        if let Some(window) = find_window(&self.arbor.layout, id) {
+                            self.arbor.layout.set_genie_hidden(&window, true);
+                        }
+                    }
+                }
+                Some(Err(err)) => warn!("error starting the minimize effect: {err:?}"),
+                None => (),
+            }
+        }
+        self.arbor.queue_redraw_all();
+    }
+
     pub fn store_unmap_snapshot(&mut self, window: &Window, output: Option<&Output>) {
         // The unmapping tile may have an xray background, in which case we will render xray
         // elements, so they need to be updated.
@@ -2739,6 +2843,7 @@ impl Arbor {
             mapped_layer_surfaces: HashMap::new(),
             glass: crate::glass::GlassRegistry::default(),
             pending_glass: Vec::new(),
+            genie: Default::default(),
             root_surface: HashMap::new(),
             dmabuf_pre_commit_hook: HashMap::new(),
             blocker_cleared_tx,
@@ -4641,6 +4746,9 @@ impl Arbor {
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
 
+        // Windows pouring into (or out of) the dock, over the dock and the other windows.
+        self.genie.render(output, |elem| push(elem.into()));
+
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
@@ -5062,6 +5170,7 @@ impl Arbor {
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= state.screen_transition.is_some();
             state.unfinished_animations_remain |= self.screen_zoom.is_animating();
+            state.unfinished_animations_remain |= self.genie.is_animating_on(output);
 
             // Also keep redrawing if the current cursor is animated.
             state.unfinished_animations_remain |= self
@@ -7062,6 +7171,7 @@ arbor_render_elements! {
         WindowMruUi = WindowMruUiRenderElement<R>,
         ExitConfirmDialog = ExitConfirmDialogRenderElement,
         Texture = PrimaryGpuTextureRenderElement,
+        Genie = ShaderRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
     }

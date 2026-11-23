@@ -11,6 +11,7 @@ pub struct Animations {
     pub workspace_switch: WorkspaceSwitchAnim,
     pub window_open: WindowOpenAnim,
     pub window_close: WindowCloseAnim,
+    pub window_minimize: WindowMinimizeAnim,
     pub horizontal_view_movement: HorizontalViewMovementAnim,
     pub window_movement: WindowMovementAnim,
     pub window_resize: WindowResizeAnim,
@@ -31,6 +32,7 @@ impl Default for Animations {
             window_movement: Default::default(),
             window_open: Default::default(),
             window_close: Default::default(),
+            window_minimize: Default::default(),
             window_resize: Default::default(),
             config_notification_open_close: Default::default(),
             exit_confirmation_open_close: Default::default(),
@@ -55,6 +57,8 @@ pub struct AnimationsPart {
     pub window_open: Option<WindowOpenAnim>,
     #[knuffel(child)]
     pub window_close: Option<WindowCloseAnim>,
+    #[knuffel(child)]
+    pub window_minimize: Option<WindowMinimizeAnim>,
     #[knuffel(child)]
     pub horizontal_view_movement: Option<HorizontalViewMovementAnim>,
     #[knuffel(child)]
@@ -89,6 +93,7 @@ impl MergeWith<AnimationsPart> for Animations {
             workspace_switch,
             window_open,
             window_close,
+            window_minimize,
             horizontal_view_movement,
             window_movement,
             window_resize,
@@ -189,6 +194,54 @@ impl Default for WindowCloseAnim {
                 }),
             },
             custom_shader: None,
+        }
+    }
+}
+
+/// arbor: how a window goes into the dock when minimized (and comes back out when restored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MinimizeEffect {
+    /// The window bends into a funnel and pours into its dock slot (macOS's Genie).
+    #[default]
+    Genie,
+    /// The window shrinks into its dock slot.
+    Scale,
+    /// No animation.
+    None,
+}
+
+impl std::str::FromStr for MinimizeEffect {
+    type Err = miette::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "genie" => Ok(Self::Genie),
+            "scale" => Ok(Self::Scale),
+            "none" => Ok(Self::None),
+            _ => Err(miette::miette!(
+                r#"invalid minimize effect, can be "genie", "scale" or "none""#
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowMinimizeAnim {
+    pub anim: Animation,
+    pub effect: MinimizeEffect,
+}
+
+impl Default for WindowMinimizeAnim {
+    fn default() -> Self {
+        Self {
+            anim: Animation {
+                off: false,
+                kind: Kind::Easing(EasingParams {
+                    duration_ms: 500,
+                    curve: Curve::Linear,
+                }),
+            },
+            effect: MinimizeEffect::Genie,
         }
     }
 }
@@ -420,6 +473,33 @@ where
             anim,
             custom_shader,
         })
+    }
+}
+
+impl<S> knuffel::Decode<S> for WindowMinimizeAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().anim;
+        let mut effect = MinimizeEffect::default();
+        let anim = Animation::decode_node(node, ctx, default, |child, ctx| {
+            if &**child.node_name == "effect" {
+                let name: String = parse_arg_node("effect", child, ctx)?;
+                match name.parse() {
+                    Ok(e) => effect = e,
+                    Err(err) => ctx.emit_error(DecodeError::conversion(&child.node_name, err)),
+                }
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+
+        Ok(Self { anim, effect })
     }
 }
 

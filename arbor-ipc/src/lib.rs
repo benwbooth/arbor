@@ -163,6 +163,49 @@ pub enum Request {
     /// arbor: the working area (the output minus panels' exclusive zones and struts) of every
     /// output's active workspace. Replies [`Response::WorkingAreas`].
     WorkingAreas,
+    /// arbor: where each window goes when it is minimized: its slot in the shell's dock (the
+    /// app's icon, or the window's own minimized item) on one output.
+    ///
+    /// The minimize animation (`animations { window-minimize { effect "genie"; } }`) pours the
+    /// window into this rectangle, and restoring pours it back out. Replaces the targets
+    /// previously set for [`SetDockTargets::output`]; send it again whenever the dock's layout
+    /// changes. Windows without a target on their output shrink toward its bottom edge.
+    /// Replies [`Response::Handled`].
+    SetDockTargets(SetDockTargets),
+}
+
+/// Minimize targets on one output, see [`Request::SetDockTargets`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct SetDockTargets {
+    /// Output (connector) name the slots are on.
+    pub output: String,
+    /// Layer-shell namespace of the dock surface: the rectangles are then local to that
+    /// surface, wherever it sits on the output. `None`: output-local.
+    pub namespace: Option<String>,
+    /// The output edge the dock is on: `"bottom"`, `"left"`, `"right"` or `"top"` (the way
+    /// windows travel into it). `None`: the edge nearest to each slot.
+    pub edge: Option<String>,
+    /// One target per window.
+    pub targets: Vec<DockTarget>,
+}
+
+/// The dock slot a window minimizes into, see [`Request::SetDockTargets`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct DockTarget {
+    /// Window id (as in [`Window::id`]).
+    pub window_id: u64,
+    /// Left edge, logical px (see [`SetDockTargets::namespace`]).
+    pub x: f64,
+    /// Top edge.
+    pub y: f64,
+    /// Width.
+    pub width: f64,
+    /// Height.
+    pub height: f64,
 }
 
 /// Window zones, see [`Request::SetZones`].

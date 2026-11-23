@@ -240,4 +240,16 @@ impl<W: LayoutElement> Layout<W> {
         self.workspaces()
             .any(|(_, _, ws)| ws.has_window(window) && ws.is_minimized(window))
     }
+
+    /// arbor: hides (or shows again) a window's tile while the minimize effect draws it.
+    pub fn set_genie_hidden(&mut self, window: &W::Id, hidden: bool) {
+        for ws in self.workspaces_mut() {
+            for tile in ws.tiles_mut() {
+                if tile.window().id() == window {
+                    tile.set_genie_hidden(hidden);
+                    return;
+                }
+            }
+        }
+    }
 }
