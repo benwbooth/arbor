@@ -910,6 +910,8 @@ impl State {
             let workspace_id = ws_id.map(|id| id.get());
             let mut changed =
                 ipc_win.workspace_id != workspace_id || ipc_win.is_floating != mapped.is_floating();
+            // A minimized floating window keeps its layout, so nothing else would tell.
+            changed |= ipc_win.is_minimized != mapped.is_minimized();
 
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id
