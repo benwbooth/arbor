@@ -148,7 +148,9 @@ impl Data {
 
         logical_pos -= self.working_area.loc;
         logical_pos.x = f64::max(logical_pos.x, -max_off_screen_hor);
-        logical_pos.y = f64::max(logical_pos.y, -max_off_screen_ver);
+        // arbor: never above the working area's top. Up there is the shell's bar (exclusive
+        // zone), and the window's own title bar would end up under it, out of reach. Mutter's
+        // off-screen allowance stays for the other three edges (applied below).
         logical_pos.x = f64::min(
             logical_pos.x,
             self.working_area.size.w - self.size.w + max_off_screen_hor,
@@ -157,6 +159,7 @@ impl Data {
             logical_pos.y,
             self.working_area.size.h - self.size.h + max_off_screen_ver,
         );
+        logical_pos.y = f64::max(logical_pos.y, 0.);
         logical_pos += self.working_area.loc;
 
         self.logical_pos = logical_pos;
