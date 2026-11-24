@@ -20,7 +20,7 @@ Changes:
 - ext-session-lock: `unlock_and_destroy` on a lock that was never confirmed posts
   `invalid_unlock` and stops. Upstream it then unlocked anyway, so a client whose lock was
   refused could unlock the session another client had locked.
-- Surface damage at a fractional scale grows by one physical pixel on every side
+- Surface damage at a fractional scale grows by ceil(scale) physical pixels on every side
   (`WaylandSurfaceRenderElement::damage_since`): clients such as Qt round their buffer damage a
   pixel short there, and the missed row or column kept the previous frame's pixels, so moving
   text left a blurry ghost on screen only.
