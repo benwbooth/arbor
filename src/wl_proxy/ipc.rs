@@ -106,6 +106,44 @@ fn write_all(stream: &UnixStream, mut bytes: &[u8]) -> io::Result<()> {
 /// The `WAYLAND_DISPLAY` of the process at the other end of `client`, when it names a
 /// different compositor than ours (`wayland_name`): a test session's shell that inherited this
 /// session's ARBOR_SOCKET.
+/// The pid at the other end of `client` (SO_PEERCRED).
+fn peer_pid(client: &UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd as _;
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills a ucred of the given size.
+    let rv = unsafe {
+        libc::getsockopt(
+            client.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (rv == 0 && cred.pid > 0).then_some(cred.pid)
+}
+
+/// "pid command line (parent: pid command line)" for the log.
+fn describe_process(pid: i32) -> String {
+    let cmd = |pid: i32| {
+        std::fs::read(format!("/proc/{pid}/cmdline"))
+            .map(|c| {
+                let s: String = String::from_utf8_lossy(&c).replace('\0', " ");
+                s.trim().chars().take(200).collect::<String>()
+            })
+            .unwrap_or_default()
+    };
+    let ppid = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| {
+            let rest = &s[s.rfind(')')? + 2..];
+            rest.split_whitespace().nth(1)?.parse::<i32>().ok()
+        })
+        .unwrap_or(0);
+    format!("{pid} {} (parent: {ppid} {})", cmd(pid), cmd(ppid))
+}
+
 fn foreign_display(client: &UnixStream, wayland_name: &str) -> Option<String> {
     use std::os::fd::AsRawFd as _;
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
@@ -187,6 +225,16 @@ fn serve(client: UnixStream, hub: &Hub, wayland_name: &str) {
                 }
                 Ok(n) => {
                     for line in from_client.push(&buf[..n]) {
+                        // Who blanks the screen or quits arbor is otherwise impossible to find out.
+                        if refused_for_foreign(&line) {
+                            let who = peer_pid(&client)
+                                .map(describe_process)
+                                .unwrap_or_else(|| "unknown process".to_owned());
+                            warn!(
+                                "ipc-proxy: {} requested by {who}",
+                                String::from_utf8_lossy(&line).trim()
+                            );
+                        }
                         if let Some(their) = &foreign {
                             if refused_for_foreign(&line) {
                                 warn!(
