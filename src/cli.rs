@@ -105,6 +105,23 @@ pub enum Msg {
         #[command(subcommand)]
         action: OutputAction,
     },
+    /// Add a virtual output, like Hyprland's `hyprctl output create headless` (headless backend
+    /// only: test rigs plug and unplug monitors with it).
+    CreateOutput {
+        /// Connector name; the first free headless-N when left out.
+        #[arg()]
+        name: Option<String>,
+        /// Size in physical pixels.
+        #[arg(long, default_value = "1920x1080")]
+        size: String,
+    },
+    /// Remove an output the headless backend added, like Hyprland's `hyprctl output remove`: to
+    /// apps the monitor was unplugged.
+    RemoveOutput {
+        /// Connector name.
+        #[arg()]
+        name: String,
+    },
     /// Start continuously receiving events from the compositor.
     EventStream,
     /// Print the version of the running arbor instance.

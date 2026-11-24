@@ -31,7 +31,7 @@ use smithay::utils::SERIAL_COUNTER;
 use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
 use crate::arbor::State;
-use crate::backend::IpcOutputMap;
+use crate::backend::{Backend, IpcOutputMap};
 use crate::input::pick_window_grab::PickWindowGrab;
 use crate::layout::workspace::WorkspaceId;
 use crate::protocols::gtk_shell::gtk_menu_address;
@@ -468,6 +468,42 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             });
 
             Response::OutputConfigChanged(response)
+        }
+        Request::CreateOutput {
+            name,
+            width,
+            height,
+        } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let result = match &mut state.backend {
+                    Backend::Headless(headless) => {
+                        headless.create_output(&mut state.arbor, name, (width, height))
+                    }
+                    _ => Err(String::from(
+                        "only the headless backend (ARBOR_BACKEND=headless) can add outputs",
+                    )),
+                };
+                let _ = tx.send_blocking(result);
+            });
+            let result = rx.recv().await;
+            result.map_err(|_| String::from("error adding the output"))??;
+            Response::Handled
+        }
+        Request::RemoveOutput { name } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let result = match &mut state.backend {
+                    Backend::Headless(headless) => headless.remove_output(&mut state.arbor, &name),
+                    _ => Err(String::from(
+                        "only the headless backend (ARBOR_BACKEND=headless) can remove outputs",
+                    )),
+                };
+                let _ = tx.send_blocking(result);
+            });
+            let result = rx.recv().await;
+            result.map_err(|_| String::from("error removing the output"))??;
+            Response::Handled
         }
         Request::FocusedOutput => {
             let (tx, rx) = async_channel::bounded(1);

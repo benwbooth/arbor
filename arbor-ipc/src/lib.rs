@@ -101,6 +101,25 @@ pub enum Request {
         /// Configuration to apply.
         action: OutputAction,
     },
+    /// Add a virtual output, like Hyprland's `hyprctl output create headless`.
+    ///
+    /// Only the headless backend (`ARBOR_BACKEND=headless`) can: test rigs use it with
+    /// [`Request::RemoveOutput`] to plug and unplug a monitor. Replies `Handled`.
+    CreateOutput {
+        /// Connector name; the first free `headless-N` when unset.
+        name: Option<String>,
+        /// Width in physical pixels.
+        width: u16,
+        /// Height in physical pixels.
+        height: u16,
+    },
+    /// Remove an output added by the headless backend, like Hyprland's `hyprctl output remove`.
+    ///
+    /// To clients it is a monitor being unplugged. Replies `Handled`.
+    RemoveOutput {
+        /// Connector name.
+        name: String,
+    },
     /// Start continuously receiving events from the compositor.
     ///
     /// The compositor should reply with `Reply::Ok(Response::Handled)`, then continuously send

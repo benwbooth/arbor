@@ -46,6 +46,10 @@ const REFRESH: Duration = Duration::from_micros(16_667);
 pub struct Headless {
     renderer: Option<GlesRenderer>,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
+    /// Every output this backend made, by connector name (for `remove-output`).
+    outputs: HashMap<String, (Output, OutputId)>,
+    /// Serial numbers handed out so far.
+    serials: u32,
     /// Set for a session (`ARBOR_BACKEND=headless`), not in unit tests.
     live: Option<Live>,
 }
@@ -108,6 +112,8 @@ impl Headless {
         Self {
             renderer: None,
             ipc_outputs: Default::default(),
+            outputs: HashMap::new(),
+            serials: 0,
             live: None,
         }
     }
@@ -180,8 +186,8 @@ impl Headless {
         live.dmabuf_global = Some(global);
 
         let outputs = live.outputs.clone();
-        for (i, (name, size)) in outputs.into_iter().enumerate() {
-            self.add_named_output(arbor, name, (i + 1).to_string(), size);
+        for (name, size) in outputs {
+            self.add_named_output(arbor, name, size);
         }
     }
 
@@ -234,16 +240,54 @@ impl Headless {
     }
 
     pub fn add_output(&mut self, arbor: &mut Arbor, n: u8, size: (u16, u16)) {
-        self.add_named_output(arbor, format!("headless-{n}"), n.to_string(), size);
+        self.add_named_output(arbor, format!("headless-{n}"), size);
     }
 
-    fn add_named_output(
+    /// `arbor msg create-output`: plug in a monitor (Hyprland's `hyprctl output create
+    /// headless`).
+    pub fn create_output(
         &mut self,
         arbor: &mut Arbor,
-        connector: String,
-        serial: String,
+        name: Option<String>,
         size: (u16, u16),
-    ) {
+    ) -> Result<(), String> {
+        if size.0 == 0 || size.1 == 0 {
+            return Err(String::from("the output needs a size"));
+        }
+        let name = match name {
+            Some(name) if self.outputs.contains_key(&name) => {
+                return Err(format!("there is already an output called {name}"));
+            }
+            Some(name) => name,
+            None => (1..)
+                .map(|n| format!("headless-{n}"))
+                .find(|n| !self.outputs.contains_key(n))
+                .unwrap(),
+        };
+        self.add_named_output(arbor, name, size);
+        Ok(())
+    }
+
+    /// `arbor msg remove-output`: unplug a monitor (Hyprland's `hyprctl output remove`).
+    pub fn remove_output(&mut self, arbor: &mut Arbor, name: &str) -> Result<(), String> {
+        let (output, id) = self
+            .outputs
+            .remove(name)
+            .ok_or_else(|| format!("no output called {name}"))?;
+        self.ipc_outputs.lock().unwrap().remove(&id);
+        if let Some(live) = &mut self.live {
+            live.targets.remove(&output);
+        }
+        // An output turned off (`arbor msg output NAME off`) is already out of the layout.
+        if arbor.output_state.contains_key(&output) {
+            arbor.remove_output(&output);
+        }
+        Ok(())
+    }
+
+    fn add_named_output(&mut self, arbor: &mut Arbor, connector: String, size: (u16, u16)) {
+        self.serials += 1;
+        let serial = self.serials.to_string();
         let make = "arbor".to_string();
         let model = "headless".to_string();
 
@@ -273,8 +317,10 @@ impl Headless {
         });
 
         let physical_properties = output.physical_properties();
+        let id = OutputId::next();
+        self.outputs.insert(output.name(), (output.clone(), id));
         self.ipc_outputs.lock().unwrap().insert(
-            OutputId::next(),
+            id,
             arbor_ipc::Output {
                 name: output.name(),
                 make: physical_properties.make,

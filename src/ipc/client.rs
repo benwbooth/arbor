@@ -41,6 +41,17 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             output: output.clone(),
             action: action.clone(),
         },
+        Msg::CreateOutput { name, size } => {
+            let (w, h) = size
+                .split_once('x')
+                .context("--size: expected WIDTHxHEIGHT, e.g. 1920x1080")?;
+            Request::CreateOutput {
+                name: name.clone(),
+                width: w.parse().context("--size: bad width")?,
+                height: h.parse().context("--size: bad height")?,
+            }
+        }
+        Msg::RemoveOutput { name } => Request::RemoveOutput { name: name.clone() },
         Msg::Workspaces => Request::Workspaces,
         Msg::Windows => Request::Windows,
         Msg::Layers => Request::Layers,
@@ -363,7 +374,11 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("No color was picked.");
             }
         }
-        Msg::Action { .. } | Msg::Glass { .. } | Msg::Session { .. } => {
+        Msg::Action { .. }
+        | Msg::Glass { .. }
+        | Msg::Session { .. }
+        | Msg::CreateOutput { .. }
+        | Msg::RemoveOutput { .. } => {
             let Response::Handled = response else {
                 bail!("unexpected response: expected Handled, got {response:?}");
             };
