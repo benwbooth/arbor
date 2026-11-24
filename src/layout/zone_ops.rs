@@ -30,6 +30,35 @@ pub(super) fn zone_window_size<W: LayoutElement>(
     ))
 }
 
+/// Where a tile filling `zone` goes when the window can't shrink to it (its minimum size is
+/// bigger): moved just enough to stay inside `area` (the working area), so a zone at the screen's
+/// right or bottom edge lines the window up with that edge instead of pushing it off screen
+/// (Spotify in a narrow right-hand zone was cut off).
+pub(super) fn zone_tile_loc<W: LayoutElement>(
+    tile: &Tile<W>,
+    zone: Rectangle<f64, Logical>,
+    area: Rectangle<f64, Logical>,
+) -> Point<f64, Logical> {
+    let size = zone_window_size(tile, zone.size);
+    let fit_w = tile.window_width_for_tile_width(zone.size.w).round().max(1.);
+    let fit_h = tile.window_height_for_tile_height(zone.size.h).round().max(1.);
+    // How much bigger than the zone the tile ends up.
+    let extra_w = (f64::from(size.w) - fit_w).max(0.);
+    let extra_h = (f64::from(size.h) - fit_h).max(0.);
+    let (tile_w, tile_h) = (zone.size.w + extra_w, zone.size.h + extra_h);
+    let x = zone
+        .loc
+        .x
+        .min(area.loc.x + area.size.w - tile_w)
+        .max(area.loc.x);
+    let y = zone
+        .loc
+        .y
+        .min(area.loc.y + area.size.h - tile_h)
+        .max(area.loc.y);
+    Point::from((x, y))
+}
+
 fn area_of(r: Rectangle<f64, Logical>) -> [f64; 4] {
     [r.loc.x, r.loc.y, r.size.w, r.size.h]
 }

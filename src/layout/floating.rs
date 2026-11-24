@@ -1112,9 +1112,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
         tile.floating_preset_width_idx = None;
         tile.floating_preset_height_idx = None;
         let size = super::zone_ops::zone_window_size(tile, rect.size);
+        let loc = super::zone_ops::zone_tile_loc(tile, rect, self.working_area);
         tile.floating_window_size = Some(size);
         tile.window_mut().request_size_once(size, true);
-        self.move_to(idx, rect.loc, true);
+        self.move_to(idx, loc, true);
     }
 
     pub fn center_window(&mut self, id: Option<&W::Id>) {

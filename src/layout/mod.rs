@@ -4219,7 +4219,8 @@ impl<W: LayoutElement> Layout<W> {
                         // arbor: dropped into a zone: fill it.
                         if let Some(rect) = zone_rect {
                             let ws = &mon.workspaces[ws_idx];
-                            tile.floating_pos = Some(ws.floating_logical_to_size_frac(rect.loc));
+                            let loc = zone_ops::zone_tile_loc(&tile, rect, ws.working_area());
+                            tile.floating_pos = Some(ws.floating_logical_to_size_frac(loc));
                             tile.floating_window_size =
                                 Some(zone_ops::zone_window_size(&tile, rect.size));
                         }
