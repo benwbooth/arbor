@@ -25,6 +25,10 @@ pub struct Debug {
     pub honor_xdg_activation_with_invalid_serial: bool,
     pub deactivate_unfocused_windows: bool,
     pub skip_cursor_only_updates_during_vrr: bool,
+    /// arbor: redraw only the changed parts of the screen (buffer-age damage). Off by default:
+    /// arbor repaints the whole screen each frame it draws, because stale regions (smudged
+    /// text, windows grey until clicked) kept showing that a full redraw fixed.
+    pub partial_redraws: bool,
 }
 
 #[derive(knuffel::Decode, Debug, Default, PartialEq)]
@@ -71,6 +75,8 @@ pub struct DebugPart {
     pub deactivate_unfocused_windows: Option<Flag>,
     #[knuffel(child)]
     pub skip_cursor_only_updates_during_vrr: Option<Flag>,
+    #[knuffel(child)]
+    pub partial_redraws: Option<Flag>,
 }
 
 impl MergeWith<DebugPart> for Debug {
@@ -95,6 +101,7 @@ impl MergeWith<DebugPart> for Debug {
             honor_xdg_activation_with_invalid_serial,
             deactivate_unfocused_windows,
             skip_cursor_only_updates_during_vrr,
+            partial_redraws,
         );
 
         merge_clone_opt!((self, part), preview_render, render_drm_device);
