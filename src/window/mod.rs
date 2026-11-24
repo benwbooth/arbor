@@ -85,6 +85,8 @@ pub struct ResolvedWindowRules {
     pub max_width: Option<u16>,
     /// Extra bound on the maximum window height.
     pub max_height: Option<u16>,
+    /// Interactive resizes keep the window's proportions.
+    pub keep_aspect_ratio: Option<bool>,
 
     /// Focus ring overrides.
     pub focus_ring: BorderRule,
@@ -276,6 +278,9 @@ impl ResolvedWindowRules {
                 }
                 if let Some(x) = rule.max_height {
                     resolved.max_height = Some(x);
+                }
+                if let Some(x) = rule.keep_aspect_ratio {
+                    resolved.keep_aspect_ratio = Some(x);
                 }
 
                 resolved.focus_ring.merge_with(&rule.focus_ring);

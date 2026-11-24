@@ -48,6 +48,10 @@ pub struct WindowRule {
     pub max_width: Option<u16>,
     #[knuffel(child, unwrap(argument))]
     pub max_height: Option<u16>,
+    /// arbor: an interactive resize keeps the window's proportions (as it
+    /// was when the drag began), like a video player's window on macOS.
+    #[knuffel(child, unwrap(argument))]
+    pub keep_aspect_ratio: Option<bool>,
 
     #[knuffel(child, default)]
     pub focus_ring: BorderRule,

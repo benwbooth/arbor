@@ -855,6 +855,39 @@ impl<W: LayoutElement> FloatingSpace<W> {
         win.request_size_once(win_size, animate);
     }
 
+    /// One size request for a window that keeps its proportions: within its
+    /// min/max sizes, shrunk or grown together so the shape stays.
+    fn set_window_size_keeping_aspect(&mut self, id: &W::Id, w: f64, h: f64, aspect: f64) {
+        let Some(idx) = self.idx_of(id) else { return };
+        let tile = &mut self.tiles[idx];
+        tile.floating_preset_width_idx = None;
+        tile.floating_preset_height_idx = None;
+        let win = tile.window_mut();
+        let min_size = win.min_size();
+        let max_size = win.max_size();
+        let (mut w, mut h) = (w, h);
+        // Grow to the minimums, then shrink to the maximums (0 = none),
+        // both sides together.
+        if min_size.w > 0 && w < f64::from(min_size.w) {
+            w = f64::from(min_size.w);
+            h = w / aspect;
+        }
+        if min_size.h > 0 && h < f64::from(min_size.h) {
+            h = f64::from(min_size.h);
+            w = h * aspect;
+        }
+        if max_size.w > 0 && w > f64::from(max_size.w) {
+            w = f64::from(max_size.w);
+            h = w / aspect;
+        }
+        if max_size.h > 0 && h > f64::from(max_size.h) {
+            h = f64::from(max_size.h);
+            w = h * aspect;
+        }
+        let size = Size::from((w.round().max(1.) as i32, h.round().max(1.) as i32));
+        win.request_size_once(size, false);
+    }
+
     pub fn set_window_height(&mut self, id: Option<&W::Id>, change: SizeChange, animate: bool) {
         let Some(id) = id.or(self.active_window_id.as_ref()) else {
             return;
@@ -1211,6 +1244,41 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
         let original_window_size = resize.original_window_size;
         let edges = resize.data.edges;
+
+        // keep-aspect-ratio: both sides follow the proportions the window had
+        // when the drag began; the side dragged further (relative to its
+        // length) leads. One request, so the client never sees a size of the
+        // wrong shape (a video player answering with its own size made the
+        // window wobble and flicker).
+        let keep_aspect = self
+            .tiles
+            .iter()
+            .find(|tile| tile.window().id() == window)
+            .is_some_and(|tile| tile.window().rules().keep_aspect_ratio == Some(true));
+        if keep_aspect && original_window_size.w > 0. && original_window_size.h > 0. {
+            let (w0, h0) = (original_window_size.w, original_window_size.h);
+            let mut dx = delta.x;
+            if edges.contains(ResizeEdge::LEFT) {
+                dx = -dx;
+            }
+            let mut dy = delta.y;
+            if edges.contains(ResizeEdge::TOP) {
+                dy = -dy;
+            }
+            let horizontal = edges.intersects(ResizeEdge::LEFT_RIGHT);
+            let vertical = edges.intersects(ResizeEdge::TOP_BOTTOM);
+            let scale = if horizontal && vertical {
+                let (sx, sy) = ((w0 + dx) / w0, (h0 + dy) / h0);
+                if (sx - 1.).abs() >= (sy - 1.).abs() { sx } else { sy }
+            } else if horizontal {
+                (w0 + dx) / w0
+            } else {
+                (h0 + dy) / h0
+            };
+            let scale = scale.max(0.01);
+            self.set_window_size_keeping_aspect(window, w0 * scale, h0 * scale, w0 / h0);
+            return true;
+        }
 
         if edges.intersects(ResizeEdge::LEFT_RIGHT) {
             let mut dx = delta.x;

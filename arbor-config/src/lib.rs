@@ -1921,6 +1921,7 @@ mod tests {
                     min_height: None,
                     max_width: None,
                     max_height: None,
+                    keep_aspect_ratio: None,
                     focus_ring: BorderRule {
                         off: true,
                         on: false,

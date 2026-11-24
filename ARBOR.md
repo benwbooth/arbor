@@ -356,6 +356,21 @@ window-rule {
 With title bars on, the decoration globals are offered to clients even
 without `prefer-no-csd`, so that Qt stops drawing its own bar.
 
+### Keep the shape while resizing
+
+`keep-aspect-ratio true` in a window rule makes an interactive resize of a
+floating window keep the proportions it had when the drag began (the side
+dragged further leads; min/max sizes respected), as macOS does for video
+windows. Grove Player has it (hearth's arbor config), so a movie never gets
+black bars from resizing.
+
+```kdl
+window-rule {
+    match app-id="^grove-player$"
+    keep-aspect-ratio true
+}
+```
+
 ## Liquid glass
 
 Shells can ask arbor to draw macOS 26-style liquid glass under parts of their

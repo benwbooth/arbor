@@ -14,6 +14,7 @@ use super::*;
 
 mod dock;
 mod fullscreen;
+mod keep_aspect;
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
