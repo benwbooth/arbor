@@ -62,6 +62,12 @@ struct Target {
     texture: GlesTexture,
     size: Size<i32, smithay::utils::Physical>,
     damage_tracker: OutputDamageTracker,
+    /// ARBOR_DAMAGE_CHECK: a swapchain-like ring of buffers (with the frame each was last drawn
+    /// in), so partial redraws run at buffer age 3 like on a real screen.
+    ring: Vec<(GlesTexture, Option<u64>)>,
+    frame: u64,
+    checked: u64,
+    stale: u64,
 }
 
 /// Whether `ARBOR_BACKEND=headless` asks for a headless session.
@@ -360,6 +366,10 @@ impl Headless {
                             texture,
                             size,
                             damage_tracker: OutputDamageTracker::from_output(output),
+                            ring: Vec::new(),
+                            frame: 0,
+                            checked: 0,
+                            stale: 0,
                         },
                     );
                 }
@@ -376,8 +386,32 @@ impl Headless {
         // and log what covers any pixel that differs: an element that under-reports its damage
         // leaves stale pixels on screen that screenshots never show.
         let damage_check = std::env::var_os("ARBOR_DAMAGE_CHECK").is_some_and(|v| v != "0");
-        let age = usize::from(damage_check);
-        let res = match renderer.bind(&mut target.texture) {
+        const RING: usize = 3;
+        if damage_check && target.ring.len() < RING {
+            let buffer_size = Size::from((size.w.max(1), size.h.max(1)));
+            while target.ring.len() < RING {
+                match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size) {
+                    Ok(t) => target.ring.push((t, None)),
+                    Err(err) => {
+                        warn!("damage check: no ring buffer: {err:?}");
+                        return RenderResult::Skipped;
+                    }
+                }
+            }
+        }
+        let (age, slot) = if damage_check {
+            let slot = (target.frame % RING as u64) as usize;
+            let age = target.ring[slot].1.map_or(0, |last| (target.frame - last) as usize);
+            (age, Some(slot))
+        } else {
+            (0, None)
+        };
+        let buffer = match slot {
+            Some(slot) => &mut target.ring[slot].0,
+            None => &mut target.texture,
+        };
+        let mut stale_frame = false;
+        let res = match renderer.bind(buffer) {
             Ok(mut framebuffer) => target
                 .damage_tracker
                 .render_output(renderer, &mut framebuffer, age, &elements, [0.; 4])
@@ -385,7 +419,8 @@ impl Headless {
                 .map_err(|err| anyhow::anyhow!("{err:?}"))
                 .inspect(|(damaged, _)| {
                     if damage_check && *damaged {
-                        damage_check_frame(renderer, &framebuffer, output, size, &elements);
+                        stale_frame =
+                            damage_check_frame(renderer, &framebuffer, output, size, &elements);
                     }
                 }),
             Err(err) => Err(anyhow::anyhow!(
@@ -399,6 +434,22 @@ impl Headless {
                 return RenderResult::Skipped;
             }
         };
+        if let Some(slot) = slot {
+            target.ring[slot].1 = Some(target.frame);
+            target.frame += 1;
+            if damaged {
+                target.checked += 1;
+                target.stale += u64::from(stale_frame);
+                if target.checked % 300 == 1 {
+                    info!(
+                        "damage check {}: {} frames compared, {} with stale pixels",
+                        output.name(),
+                        target.checked,
+                        target.stale
+                    );
+                }
+            }
+        }
 
         if let Some(start) = stats_start {
             crate::frame_stats::rendered(&output.name(), start.elapsed(), elements.len(), !damaged);
@@ -503,7 +554,7 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
     output: &Output,
     size: Size<i32, smithay::utils::Physical>,
     elements: &[E],
-) {
+) -> bool {
     use smithay::backend::renderer::element::Element as _;
     use smithay::backend::renderer::ExportMem as _;
     use smithay::utils::{Rectangle, Scale, Transform};
@@ -514,7 +565,7 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
         Ok(v) => v,
         Err(err) => {
             warn!("damage check: can't read the frame: {err:?}");
-            return;
+            return false;
         }
     };
     let scale = Scale::from(output.current_scale().fractional_scale());
@@ -529,11 +580,11 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
         Ok(v) => v,
         Err(err) => {
             warn!("damage check: can't draw the reference frame: {err:?}");
-            return;
+            return false;
         }
     };
     if partial.len() != fresh.len() {
-        return;
+        return false;
     }
     let (w, h) = (size.w.max(1) as usize, size.h.max(1) as usize);
     let (mut x0, mut y0, mut x1, mut y1, mut n) = (usize::MAX, usize::MAX, 0, 0, 0usize);
@@ -549,7 +600,7 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
         }
     }
     if n == 0 {
-        return;
+        return false;
     }
     let bbox = Rectangle::<i32, smithay::utils::Physical>::new(
         (x0 as i32, y0 as i32).into(),
@@ -568,4 +619,5 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
         "damage check {}: {n} stale pixels in {bbox:?} of {w}x{h}; elements there (top first): {over:#?}",
         output.name()
     );
+    true
 }
