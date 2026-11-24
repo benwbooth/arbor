@@ -407,13 +407,20 @@ impl<R: Renderer + ImportAll> Element for WaylandSurfaceRenderElement<R> {
                         let surface_scale = dst_size.to_f64() / self.view.dst.to_f64().to_physical(scale);
                         let total = surface_scale * scale;
                         let rect = rect.to_physical_precise_up(total);
-                        // arbor: at a fractional scale, grow the damage by one physical pixel on
-                        // every side. Clients (Qt among them) can round their buffer damage a
+                        // arbor: at a fractional scale, grow the damage by ceil(scale) physical
+                        // pixels on every side. Clients (Qt among them) can round their buffer damage a
                         // pixel short at fractional scales; the missed row or column kept the
                         // previous frame's text, so moving text left a blurry ghost on screen
                         // (screenshots, which redraw everything, looked fine).
                         if total.x.fract() != 0. || total.y.fract() != 0. {
-                            Rectangle::new(rect.loc - Point::from((1, 1)), rect.size + Size::from((2, 2)))
+                            // A whole logical pixel short (Qt rounds its damage in logical
+                            // pixels) is up to ceil(scale) physical ones; one wasn't enough
+                            // (ARBOR_DAMAGE_CHECK still found 1-px rows of stale menu text).
+                            let pad = total.x.max(total.y).ceil() as i32;
+                            Rectangle::new(
+                                rect.loc - Point::from((pad, pad)),
+                                rect.size + Size::from((2 * pad, 2 * pad)),
+                            )
                         } else {
                             rect
                         }
