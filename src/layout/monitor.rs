@@ -1826,6 +1826,11 @@ impl<W: LayoutElement> Monitor<W> {
 
             let xray_pos = XrayPos::new(geo.loc, zoom);
 
+            // arbor: topmost first; docked windows go on top while one has the focus.
+            let dock_on_top = ws.dock_on_top();
+            if dock_on_top {
+                ws.render_scrolling(ctx.r(), xray_pos, focus_ring, push!());
+            }
             ws.render_floating(ctx.r(), xray_pos, focus_ring, push!());
 
             if let Some(loc) = insert_hint_render_loc {
@@ -1835,7 +1840,9 @@ impl<W: LayoutElement> Monitor<W> {
                 }
             }
 
-            ws.render_scrolling(ctx.r(), xray_pos, focus_ring, push!());
+            if !dock_on_top {
+                ws.render_scrolling(ctx.r(), xray_pos, focus_ring, push!());
+            }
         }
     }
 

@@ -1545,6 +1545,13 @@ impl<W: LayoutElement> Workspace<W> {
         self.windows_mut().find(|win| win.is_wl_surface(wl_surface))
     }
 
+    /// arbor: whether the docked windows are drawn (and hit) above the floating ones: while a
+    /// docked window has the focus. Otherwise a docked window behind the Desktop's floating
+    /// windows could never be brought forward (BlueBubbles, Tessera reopened docked).
+    pub fn dock_on_top(&self) -> bool {
+        self.floating_is_active == FloatingActive::No && !self.dock.is_empty()
+    }
+
     pub fn tiles_with_render_positions(
         &self,
     ) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>, bool)> {
@@ -1558,16 +1565,30 @@ impl<W: LayoutElement> Workspace<W> {
             (tile, pos, visible)
         });
 
-        floating.chain(dock)
+        // Topmost first.
+        let (first, second): (Box<dyn Iterator<Item = _>>, Box<dyn Iterator<Item = _>>) =
+            if self.dock_on_top() {
+                (Box::new(dock), Box::new(floating))
+            } else {
+                (Box::new(floating), Box::new(dock))
+            };
+        first.chain(second)
     }
 
     pub fn tiles_with_render_positions_mut(
         &mut self,
         round: bool,
     ) -> impl Iterator<Item = (&mut Tile<W>, Point<f64, Logical>)> {
+        let dock_on_top = self.dock_on_top();
         let dock = self.dock.tiles_with_render_positions_mut(round);
         let floating = self.floating.tiles_with_render_positions_mut(round);
-        floating.chain(dock)
+        let (first, second): (Box<dyn Iterator<Item = _>>, Box<dyn Iterator<Item = _>>) =
+            if dock_on_top {
+                (Box::new(dock), Box::new(floating))
+            } else {
+                (Box::new(floating), Box::new(dock))
+            };
+        first.chain(second)
     }
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
@@ -1722,6 +1743,11 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
         // This logic is consistent with tiles_with_render_positions().
+        if self.dock_on_top() {
+            if let Some(rv) = self.dock.window_under(pos) {
+                return Some(rv);
+            }
+        }
         if self.is_floating_visible() {
             if let Some(rv) = self
                 .floating
