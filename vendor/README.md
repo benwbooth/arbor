@@ -24,3 +24,6 @@ Changes:
   (`WaylandSurfaceRenderElement::damage_since`): clients such as Qt round their buffer damage a
   pixel short there, and the missed row or column kept the previous frame's pixels, so moving
   text left a blurry ghost on screen only.
+- Surface opaque regions at a fractional scale shrink by one physical pixel on every side
+  (`WaylandSurfaceRenderElement::opaque_regions`): rounding could claim a half-covered edge row
+  as opaque, so what's under it wasn't redrawn and showed stale through it.

@@ -434,14 +434,24 @@ impl<R: Renderer + ImportAll> Element for WaylandSurfaceRenderElement<R> {
             return OpaqueRegions::default();
         }
 
+        // arbor: at a fractional scale, rounding can grow a region by up to half a pixel on a
+        // side, onto a row the surface only half covers. The damage tracker then skipped
+        // redrawing what's under that row, and the half-transparent row showed stale pixels
+        // (ARBOR_DAMAGE_CHECK: 1-px rows under hearth's pop-ups). Shrink by a pixel there.
+        let fractional = scale.x.fract() != 0. || scale.y.fract() != 0.;
         self.opaque_regions
             .iter()
-            .map(|r| {
+            .filter_map(|r| {
                 let loc = r.loc.to_physical_precise_round(scale);
                 let size = ((r.size.to_f64().to_physical(scale).to_point() + self.location).to_i32_round()
                     - self.location.to_i32_round())
                 .to_size();
-                Rectangle::new(loc, size)
+                if !fractional {
+                    return Some(Rectangle::new(loc, size));
+                }
+                (size.w > 2 && size.h > 2).then(|| {
+                    Rectangle::new(loc + Point::from((1, 1)), size - Size::from((2, 2)))
+                })
             })
             .collect::<OpaqueRegions<_, _>>()
     }
