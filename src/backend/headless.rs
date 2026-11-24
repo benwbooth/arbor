@@ -371,12 +371,23 @@ impl Headless {
         }
         let target = live.targets.get_mut(output).unwrap();
 
+        // ARBOR_DAMAGE_CHECK=1: draw partially (buffer age 1: this buffer still holds the last
+        // frame), as a real screen does, then compare with the same frame drawn from scratch
+        // and log what covers any pixel that differs: an element that under-reports its damage
+        // leaves stale pixels on screen that screenshots never show.
+        let damage_check = std::env::var_os("ARBOR_DAMAGE_CHECK").is_some_and(|v| v != "0");
+        let age = usize::from(damage_check);
         let res = match renderer.bind(&mut target.texture) {
             Ok(mut framebuffer) => target
                 .damage_tracker
-                .render_output(renderer, &mut framebuffer, 0, &elements, [0.; 4])
+                .render_output(renderer, &mut framebuffer, age, &elements, [0.; 4])
                 .map(|res| (res.damage.is_some(), res.states))
-                .map_err(|err| anyhow::anyhow!("{err:?}")),
+                .map_err(|err| anyhow::anyhow!("{err:?}"))
+                .inspect(|(damaged, _)| {
+                    if damage_check && *damaged {
+                        damage_check_frame(renderer, &framebuffer, output, size, &elements);
+                    }
+                }),
             Err(err) => Err(anyhow::anyhow!(
                 "error binding headless framebuffer: {err:?}"
             )),
@@ -482,4 +493,79 @@ impl Default for Headless {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// ARBOR_DAMAGE_CHECK: compares the partially drawn `framebuffer` with `elements` drawn from
+/// scratch and logs the elements over any difference.
+fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<GlesRenderer> + std::fmt::Debug>(
+    renderer: &mut GlesRenderer,
+    framebuffer: &smithay::backend::renderer::gles::GlesTarget<'_>,
+    output: &Output,
+    size: Size<i32, smithay::utils::Physical>,
+    elements: &[E],
+) {
+    use smithay::backend::renderer::element::Element as _;
+    use smithay::backend::renderer::ExportMem as _;
+    use smithay::utils::{Rectangle, Scale, Transform};
+
+    let partial = match crate::render_helpers::copy_framebuffer(renderer, framebuffer, Fourcc::Abgr8888)
+        .and_then(|m| renderer.map_texture(&m).map(|b| b.to_vec()))
+    {
+        Ok(v) => v,
+        Err(err) => {
+            warn!("damage check: can't read the frame: {err:?}");
+            return;
+        }
+    };
+    let scale = Scale::from(output.current_scale().fractional_scale());
+    let fresh = match crate::render_helpers::render_to_vec(
+        renderer,
+        size,
+        scale,
+        Transform::Normal,
+        Fourcc::Abgr8888,
+        elements.iter().rev(),
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!("damage check: can't draw the reference frame: {err:?}");
+            return;
+        }
+    };
+    if partial.len() != fresh.len() {
+        return;
+    }
+    let (w, h) = (size.w.max(1) as usize, size.h.max(1) as usize);
+    let (mut x0, mut y0, mut x1, mut y1, mut n) = (usize::MAX, usize::MAX, 0, 0, 0usize);
+    for (i, (a, b)) in partial.chunks_exact(4).zip(fresh.chunks_exact(4)).enumerate() {
+        // A little slack for blending differences.
+        if a.iter().zip(b).any(|(p, q)| p.abs_diff(*q) > 6) {
+            let (x, y) = (i % w, i / w);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return;
+    }
+    let bbox = Rectangle::<i32, smithay::utils::Physical>::new(
+        (x0 as i32, y0 as i32).into(),
+        ((x1 - x0 + 1) as i32, (y1 - y0 + 1) as i32).into(),
+    );
+    let over: Vec<String> = elements
+        .iter()
+        .filter(|e| e.geometry(scale).overlaps(bbox))
+        .map(|e| {
+            let d = format!("{e:?}");
+            let d: String = d.chars().take(90).collect();
+            format!("{d} @ {:?}", e.geometry(scale))
+        })
+        .collect();
+    warn!(
+        "damage check {}: {n} stale pixels in {bbox:?} of {w}x{h}; elements there (top first): {over:#?}",
+        output.name()
+    );
 }
