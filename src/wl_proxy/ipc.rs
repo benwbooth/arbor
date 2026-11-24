@@ -18,7 +18,7 @@ use std::{io, thread};
 use super::{poll, recv_with_fds, send_with_fds, Hub};
 
 /// Accepts IPC clients on `listener` (the session's IPC socket) and proxies each, forever.
-pub fn start(listener: UnixListener, hub: Arc<Hub>) -> io::Result<()> {
+pub fn start(listener: UnixListener, hub: Arc<Hub>, wayland_name: String) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     thread::Builder::new()
         .name("ipc-proxy-accept".to_owned())
@@ -26,12 +26,13 @@ pub fn start(listener: UnixListener, hub: Arc<Hub>) -> io::Result<()> {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let hub = hub.clone();
+                    let wayland_name = wayland_name.clone();
                     let _ = thread::Builder::new()
                         .name("ipc-proxy".to_owned())
                         .spawn(move || {
                             let res =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    serve(stream, &hub)
+                                    serve(stream, &hub, &wayland_name)
                                 }));
                             if res.is_err() {
                                 warn!("ipc-proxy: panicked; connection dropped");
@@ -102,7 +103,48 @@ fn write_all(stream: &UnixStream, mut bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn serve(client: UnixStream, hub: &Hub) {
+/// The `WAYLAND_DISPLAY` of the process at the other end of `client`, when it names a
+/// different compositor than ours (`wayland_name`): a test session's shell that inherited this
+/// session's ARBOR_SOCKET.
+fn foreign_display(client: &UnixStream, wayland_name: &str) -> Option<String> {
+    use std::os::fd::AsRawFd as _;
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills a ucred of the given size.
+    let rv = unsafe {
+        libc::getsockopt(
+            client.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    if rv != 0 || cred.pid <= 0 {
+        return None;
+    }
+    let environ = std::fs::read(format!("/proc/{}/environ", cred.pid)).ok()?;
+    let display = environ
+        .split(|b| *b == 0)
+        .find_map(|kv| kv.strip_prefix(b"WAYLAND_DISPLAY="))?;
+    let display = String::from_utf8_lossy(display).into_owned();
+    let name = display.rsplit('/').next().unwrap_or(&display);
+    (!name.is_empty() && name != wayland_name).then_some(display)
+}
+
+/// Requests a client of another compositor must not make here: turning the screens off
+/// (a test shell's idle timer blanked Ben's real monitor every 15-25 minutes) and quitting.
+fn refused_for_foreign(line: &[u8]) -> bool {
+    matches!(
+        serde_json::from_slice::<arbor_ipc::Request>(line),
+        Ok(arbor_ipc::Request::Action(
+            arbor_ipc::Action::PowerOffMonitors {} | arbor_ipc::Action::Quit { .. }
+        ))
+    )
+}
+
+fn serve(client: UnixStream, hub: &Hub, wayland_name: &str) {
+    let foreign = foreign_display(&client, wayland_name);
     let Ok((mut server, mut generation)) = hub.connect_ipc(0) else {
         return;
     };
@@ -145,6 +187,21 @@ fn serve(client: UnixStream, hub: &Hub) {
                 }
                 Ok(n) => {
                     for line in from_client.push(&buf[..n]) {
+                        if let Some(their) = &foreign {
+                            if refused_for_foreign(&line) {
+                                warn!(
+                                    "ipc-proxy: refused {} from a client of another compositor \
+                                     (WAYLAND_DISPLAY={their})",
+                                    String::from_utf8_lossy(&line).trim()
+                                );
+                                let reply = serde_json::json!({ "Err": format!(
+                                    "refused: this client belongs to another compositor \
+                                     (WAYLAND_DISPLAY={their})"
+                                ) });
+                                let _ = write_all(&client, format!("{reply}\n").as_bytes());
+                                continue;
+                            }
+                        }
                         if let Some(key) = state_key(&line) {
                             state.retain(|(k, _)| *k != key);
                             state.push((key, line.clone()));

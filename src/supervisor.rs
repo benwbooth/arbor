@@ -623,7 +623,8 @@ pub fn run(args: Vec<OsString>, satellite: Option<String>) -> anyhow::Result<i32
             .and_then(|l| crate::wl_proxy::start(l, hub.clone()))
             .and_then(|()| {
                 let ipc = sup.sockets.ipc.try_clone()?;
-                crate::wl_proxy::ipc::start(ipc, hub.clone())
+                let name = sup.sockets.wayland_name.to_string_lossy().into_owned();
+                crate::wl_proxy::ipc::start(ipc, hub.clone(), name)
             });
         match started {
             Ok(()) => sup.hub = Some(hub),
