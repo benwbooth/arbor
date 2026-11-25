@@ -4887,33 +4887,47 @@ fn find_bind<'a>(
             let vt = (modified - KEY_XF86Switch_VT_1 + 1) as i32;
             Some(Action::ChangeVt(vt))
         }
-        KEY_XF86PowerOff if !disable_power_key_handling => Some(Action::Suspend),
+        KEY_XF86PowerOff if !disable_power_key_handling => {
+            // A configured power-key bind (hearth's "When I press the power button")
+            // replaces the built-in suspend. arbor still holds logind's handle-power-key
+            // inhibitor either way, so logind's own action (often poweroff) never runs.
+            if let Some(bind) = raw.and_then(|raw| {
+                find_configured_bind(bindings, mod_key, Trigger::Keysym(raw), mods)
+            }) {
+                return Some(bind);
+            }
+            return Some(hardcoded_bind(modified, Action::Suspend));
+        }
         _ => None,
     };
 
     if let Some(action) = hardcoded_action {
-        return Some(Bind {
-            key: Key {
-                // Not entirely correct but it doesn't matter in how we currently use it.
-                trigger: Trigger::Keysym(modified),
-                modifiers: Modifiers::empty(),
-            },
-            action,
-            repeat: true,
-            cooldown: None,
-            allow_when_locked: false,
-            // In a worst-case scenario, the user has no way to unlock the compositor and a
-            // misbehaving client has a keyboard shortcuts inhibitor, "jailing" the user.
-            // The user must always be able to change VTs to recover from such a situation.
-            // It also makes no sense to inhibit the default power key handling.
-            // Hardcoded binds must never be inhibited.
-            allow_inhibiting: false,
-            hotkey_overlay_title: None,
-        });
+        return Some(hardcoded_bind(modified, action));
     }
 
     let trigger = Trigger::Keysym(raw?);
     find_configured_bind(bindings, mod_key, trigger, mods)
+}
+
+fn hardcoded_bind(modified: Keysym, action: Action) -> Bind {
+    Bind {
+        key: Key {
+            // Not entirely correct but it doesn't matter in how we currently use it.
+            trigger: Trigger::Keysym(modified),
+            modifiers: Modifiers::empty(),
+        },
+        action,
+        repeat: true,
+        cooldown: None,
+        allow_when_locked: false,
+        // In a worst-case scenario, the user has no way to unlock the compositor and a
+        // misbehaving client has a keyboard shortcuts inhibitor, "jailing" the user.
+        // The user must always be able to change VTs to recover from such a situation.
+        // It also makes no sense to inhibit the default power key handling.
+        // Hardcoded binds must never be inhibited.
+        allow_inhibiting: false,
+        hotkey_overlay_title: None,
+    }
 }
 
 fn find_configured_bind<'a>(
@@ -5533,6 +5547,38 @@ mod tests {
 
     use super::*;
     use crate::animation::Clock;
+
+    #[test]
+    fn configured_power_key_bind_replaces_suspend() {
+        let power = Keysym::XF86_PowerOff;
+        let find = |binds: &[Bind], disable| {
+            find_bind(binds, ModKey::Super, power, Some(power), ModifiersState::default(), disable)
+                .map(|bind| bind.action)
+        };
+
+        // Nothing configured: the built-in suspend.
+        assert_eq!(find(&[], false), Some(Action::Suspend));
+
+        // A configured bind (hearth's power button setting) wins.
+        let spawn = Action::Spawn(vec!["hearth-ipc".into(), "call".into(), "power".into()]);
+        let binds = [Bind {
+            key: Key {
+                trigger: Trigger::Keysym(power),
+                modifiers: Modifiers::empty(),
+            },
+            action: spawn.clone(),
+            repeat: true,
+            cooldown: None,
+            allow_when_locked: false,
+            allow_inhibiting: true,
+            hotkey_overlay_title: None,
+        }];
+        assert_eq!(find(&binds, false), Some(spawn.clone()));
+
+        // disable-power-key-handling leaves it to the configured binds as before.
+        assert_eq!(find(&binds, true), Some(spawn));
+        assert_eq!(find(&[], true), None);
+    }
 
     #[test]
     fn bindings_suppress_keys() {
