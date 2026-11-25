@@ -27,3 +27,6 @@ Changes:
 - Surface opaque regions at a fractional scale shrink by one physical pixel on every side
   (`WaylandSurfaceRenderElement::opaque_regions`): rounding could claim a half-covered edge row
   as opaque, so what's under it wasn't redrawn and showed stale through it.
+- Framebuffer effects (liquid glass) redraw in full when any damage overlaps them, from elements
+  above as well as below (`OutputDamageTracker`): redrawing a blur only inside a strip left a
+  faint line at the strip's edge.

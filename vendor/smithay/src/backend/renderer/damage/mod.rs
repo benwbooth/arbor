@@ -692,11 +692,12 @@ impl OutputDamageTracker {
             .enumerate()
             .filter(|(_, e)| e.is_framebuffer_effect())
         {
-            let damage_index = if force_effect_redraw {
-                0
-            } else {
-                self.element_damage_index[z_index]
-            };
+            // arbor: any damage over the effect counts, from elements above it as well as below:
+            // a blur redrawn only inside a strip (a pop-up's hover row above liquid glass) came
+            // out different at the strip's edge than the blur of the whole area, leaving a faint
+            // line (ARBOR_DAMAGE_CHECK: 1-px rows, none with ARBOR_GLASS_OFF=1).
+            let _ = force_effect_redraw;
+            let damage_index = 0;
             let opaque_regions_index = if force_effect_redraw {
                 self.opaque_regions.len()
             } else {
@@ -758,6 +759,18 @@ impl OutputDamageTracker {
             self.damage.clear();
             self.damage.push(output_geo);
         };
+
+        // arbor: an older buffer's damage over an effect redraws the whole effect too (the
+        // check above only saw this frame's damage).
+        for element in render_elements.iter().filter(|e| e.is_framebuffer_effect()) {
+            if let Some(intersection) = element.geometry(output_scale).intersection(output_geo) {
+                if !self.damage.contains(&intersection)
+                    && self.damage.iter().any(|d| d.overlaps(intersection))
+                {
+                    self.damage.push(intersection);
+                }
+            }
+        }
 
         // Optimize the damage for rendering
 
