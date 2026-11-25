@@ -711,13 +711,11 @@ impl OutputDamageTracker {
                 .as_ref()
                 .and_then(|states| states.states.get(element.id()));
 
-            if element_state.needs_capture
-                || with_element_state.is_some_and(|state| state.needs_capture)
-                || self
-                    .damage
-                    .iter()
-                    .skip(damage_index)
-                    .any(|d| d.overlaps(intersection))
+            // arbor: every effect (liquid glass) captures its backdrop again and redraws in full
+            // on every frame. Reusing an earlier capture showed an old backdrop whenever a change
+            // behind it went unnoticed (ARBOR_DAMAGE_CHECK_DUMP: the glass refracted lines that
+            // weren't there any more). Glass covers pop-ups and the dock, so this is cheap.
+            let _ = (damage_index, &with_element_state);
             {
                 element_state.needs_capture = true;
                 self.damage.push(intersection);
