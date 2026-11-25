@@ -3098,29 +3098,61 @@ impl State {
         );
         pointer.frame(self);
         const BTN_LEFT: u32 = 0x110;
-        for state in [ButtonState::Pressed, ButtonState::Released] {
-            pointer.button(
-                self,
-                &ButtonEvent {
-                    button: BTN_LEFT,
-                    state,
-                    serial: SERIAL_COUNTER.next_serial(),
-                    time,
-                },
-            );
-            pointer.frame(self);
-        }
-        let under = self.arbor.contents_under(location);
-        pointer.motion(
+        pointer.button(
             self,
-            under.surface,
-            &MotionEvent {
-                location,
+            &ButtonEvent {
+                button: BTN_LEFT,
+                state: ButtonState::Pressed,
                 serial: SERIAL_COUNTER.next_serial(),
                 time,
             },
         );
         pointer.frame(self);
+        // Like a real click: the button held a moment, the pointer left on
+        // the window a while longer. GTK 3 opens a GtkMenu on press and maps
+        // it only while the pointer is still over its window; releasing and
+        // moving the focus away in the same dispatch left its ☰ pressed with
+        // no menu (Catfish).
+        let _ = self.arbor.event_loop.insert_source(
+            Timer::from_duration(Duration::from_millis(100)),
+            move |_, _, state| {
+                let pointer = state.arbor.seat.get_pointer().unwrap();
+                pointer.button(
+                    state,
+                    &ButtonEvent {
+                        button: BTN_LEFT,
+                        state: ButtonState::Released,
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: get_monotonic_time().as_millis() as u32,
+                    },
+                );
+                pointer.frame(state);
+                TimeoutAction::Drop
+            },
+        );
+        let _ = self.arbor.event_loop.insert_source(
+            Timer::from_duration(Duration::from_millis(400)),
+            move |_, _, state| {
+                let pointer = state.arbor.seat.get_pointer().unwrap();
+                // Back on what is really under the pointer, unless a menu
+                // opened by the click holds a grab (it routes the pointer).
+                if !pointer.is_grabbed() {
+                    let location = pointer.current_location();
+                    let under = state.arbor.contents_under(location);
+                    pointer.motion(
+                        state,
+                        under.surface,
+                        &MotionEvent {
+                            location,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: get_monotonic_time().as_millis() as u32,
+                        },
+                    );
+                    pointer.frame(state);
+                }
+                TimeoutAction::Drop
+            },
+        );
     }
 
     /// IPC SendKeys: type `keys` (chords such as "Ctrl+Shift+S", several
