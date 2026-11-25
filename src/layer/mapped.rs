@@ -330,6 +330,7 @@ impl MappedLayer {
             radius,
             self.rules.background_effect,
             should_block_out,
+            false,
             xray_pos,
             &mut |elem| push(elem.into()),
         );
@@ -413,6 +414,7 @@ impl MappedLayer {
                 popup_rules.geometry_corner_radius.unwrap_or_default(),
                 effect,
                 false,
+                true,
                 xray_pos,
                 &mut |elem| push(elem.into()),
             );

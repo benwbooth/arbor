@@ -7,7 +7,7 @@ use smithay::wayland::background_effect::{
     self, BackgroundEffectSurfaceCachedState, ExtBackgroundEffectHandler,
 };
 use smithay::wayland::compositor::{
-    add_post_commit_hook, with_states, RegionAttributes, SurfaceData,
+    add_post_commit_hook, with_states, RegionAttributes, SurfaceAttributes, SurfaceData,
 };
 
 use crate::arbor::State;
@@ -105,6 +105,81 @@ fn mark_blur_region_pending_dirty(wl_surface: &WlSurface) {
             });
         });
     }
+}
+
+/// Per-surface cache of the input region (non-overlapping rects), the shape a rule-forced
+/// background effect takes behind a popup that sets no blur region itself: GTK 4 popovers give
+/// their exact rounded body and arrow as the input region, while their window geometry also
+/// covers the band beside the arrow.
+#[derive(Default)]
+struct CachedInputRegionUserData(Mutex<CachedInputRegionInner>);
+
+#[derive(Default)]
+struct CachedInputRegionInner {
+    /// Whether the region must be recomputed (set by every commit).
+    dirty: bool,
+    /// Whether the post-commit hook has been registered for this surface.
+    hook_registered: bool,
+    /// `None` means no input region (the whole surface).
+    rects: Option<Arc<Vec<Rectangle<i32, Logical>>>>,
+}
+
+/// Starts tracking `surface`'s input region for [`get_cached_input_region`]. Call outside
+/// `with_states`.
+pub fn track_input_region(wl_surface: &WlSurface) {
+    let register_hook = with_states(wl_surface, |states| {
+        let cache = states
+            .data_map
+            .get_or_insert_threadsafe(CachedInputRegionUserData::default);
+        let mut guard = cache.0.lock().unwrap();
+        if guard.hook_registered {
+            false
+        } else {
+            guard.hook_registered = true;
+            guard.dirty = true;
+            true
+        }
+    });
+
+    if register_hook {
+        add_post_commit_hook::<State, _>(wl_surface, |_state, _dh, surface| {
+            with_states(surface, |states| {
+                if let Some(cache) = states.data_map.get::<CachedInputRegionUserData>() {
+                    cache.0.lock().unwrap().dirty = true;
+                }
+            });
+        });
+    }
+}
+
+/// The surface's input region as non-overlapping rects (`None`: none set, or not tracked), and
+/// whether it changed since the last call.
+pub fn get_cached_input_region(
+    states: &SurfaceData,
+) -> (Option<Arc<Vec<Rectangle<i32, Logical>>>>, bool) {
+    let Some(cache) = states.data_map.get::<CachedInputRegionUserData>() else {
+        return (None, false);
+    };
+    let mut guard = cache.0.lock().unwrap();
+
+    let mut changed = false;
+    if guard.dirty {
+        guard.dirty = false;
+        let new = {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            attrs.current().input_region.as_ref().map(|region| {
+                let mut rects = Vec::new();
+                region_to_non_overlapping_rects(region, &mut rects);
+                rects
+            })
+        };
+        if new.as_deref() != guard.rects.as_deref().map(|r| r.as_slice()) {
+            guard.rects = new.map(Arc::new);
+            changed = true;
+        }
+    }
+
+    (guard.rects.clone(), changed)
 }
 
 impl ExtBackgroundEffectHandler for State {

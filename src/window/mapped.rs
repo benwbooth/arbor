@@ -778,6 +778,7 @@ impl LayoutElement for Mapped {
                 popup_rules.geometry_corner_radius.unwrap_or_default(),
                 effect,
                 false,
+                true,
                 xray_pos,
                 &mut |elem| push(elem.into()),
             );
@@ -809,6 +810,7 @@ impl LayoutElement for Mapped {
             radius,
             self.rules.background_effect,
             should_block_out,
+            false,
             xray_pos,
             push,
         );

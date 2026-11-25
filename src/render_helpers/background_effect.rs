@@ -7,7 +7,9 @@ use smithay::wayland::compositor::{with_states, SurfaceData};
 use wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::arbor_render_elements;
-use crate::handlers::background_effect::get_cached_blur_region;
+use crate::handlers::background_effect::{
+    get_cached_blur_region, get_cached_input_region, track_input_region,
+};
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
@@ -294,14 +296,32 @@ pub fn render_for_tile(
     radius: CornerRadius,
     effect: arbor_config::BackgroundEffect,
     should_block_out: bool,
+    // For popups: an effect the surface didn't ask for (no blur region of its own) takes the
+    // shape of its input region, clipped to its geometry with `radius`. Without an input region
+    // (or with an empty one) it covers the geometry.
+    shape_from_input_region: bool,
     xray_pos: XrayPos,
     push: &mut dyn FnMut(BackgroundEffectElement),
 ) {
+    // Only effects a rule forces need the shape (popups always get an explicit xray).
+    let forced =
+        effect.blur == Some(true) || effect.noise.is_some() || effect.saturation.is_some();
+    if shape_from_input_region && forced {
+        track_input_region(surface);
+    }
+
     with_states(surface, |states| {
+        // Before locking the effect: a changed input region damages it below.
+        let (input_region, input_region_changed) = if shape_from_input_region {
+            get_cached_input_region(states)
+        } else {
+            (None, false)
+        };
+
         let background_effect = SurfaceBackgroundEffect::get(states);
         let mut background_effect = background_effect.0.lock().unwrap();
 
-        let blur_region = get_cached_blur_region(states);
+        let mut blur_region = get_cached_blur_region(states);
         let has_blur_region = blur_region.as_ref().is_some_and(|r| !r.is_empty());
 
         background_effect.update_config(blur_config);
@@ -309,6 +329,17 @@ pub fn render_for_tile(
 
         if !background_effect.is_visible() {
             return;
+        }
+
+        if input_region_changed {
+            background_effect.damage();
+        }
+        let mut clip_to_geometry = clip_to_geometry;
+        if blur_region.is_none() {
+            if let Some(rects) = input_region.filter(|r| !r.is_empty()) {
+                blur_region = Some(rects);
+                clip_to_geometry = true;
+            }
         }
 
         let mut surface_geo = surface_geo(states).unwrap_or_default().to_f64();
