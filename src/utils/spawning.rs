@@ -62,6 +62,20 @@ pub fn restore_nofile_rlimit() {
     unsafe { setrlimit(RLIMIT_NOFILE, &rlim) };
 }
 
+/// Apps start at normal priority. arbor itself runs at a raised priority
+/// (Nice=-10 on arbor.service, so the desktop stays responsive under load),
+/// which a forked child would otherwise inherit. Raising a nice value is
+/// always allowed, so this works without privileges.
+pub fn reset_child_priority() {
+    unsafe {
+        *libc::__errno_location() = 0;
+        let nice = libc::getpriority(libc::PRIO_PROCESS, 0);
+        if nice < 0 && *libc::__errno_location() == 0 {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 0);
+        }
+    }
+}
+
 /// Spawns the command to run independently of the compositor.
 pub fn spawn<T: AsRef<OsStr> + Send + 'static>(command: Vec<T>, token: Option<XdgActivationToken>) {
     let _span = tracy_client::span!();
@@ -184,6 +198,7 @@ fn do_spawn(command: &OsStr, mut process: Command) -> Option<Child> {
             }
 
             restore_nofile_rlimit();
+            reset_child_priority();
 
             Ok(())
         });
@@ -323,6 +338,7 @@ mod systemd {
                 }
 
                 restore_nofile_rlimit();
+                reset_child_priority();
 
                 Ok(())
             });
