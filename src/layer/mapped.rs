@@ -163,6 +163,14 @@ impl MappedLayer {
         surface_loc: Point<f64, Logical>,
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
     ) {
+        // ARBOR_GLASS_OFF=1 (debugging): no liquid glass drawn, to tell its part in a rendering
+        // problem (ARBOR_DAMAGE_CHECK) from the surfaces' own.
+        static GLASS_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *GLASS_OFF.get_or_init(|| {
+            std::env::var_os("ARBOR_GLASS_OFF").is_some_and(|v| !v.is_empty() && v != "0")
+        }) {
+            return;
+        }
         for g in shapes {
             let mut rect = g.rect;
             rect.loc += surface_loc;

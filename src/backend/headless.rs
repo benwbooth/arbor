@@ -665,5 +665,44 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
         "damage check {}: {n} stale pixels in {bbox:?} of {w}x{h}; elements there (top first): {over:#?}",
         output.name()
     );
+    // ARBOR_DAMAGE_CHECK_DUMP=DIR: the first few stale spots as PNGs (partial, from scratch,
+    // and their difference amplified), with a margin around them.
+    if let Some(dir) = std::env::var_os("ARBOR_DAMAGE_CHECK_DUMP") {
+        static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let k = DUMPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if k < 3 {
+            let m = 40usize;
+            let (cx0, cy0) = (x0.saturating_sub(m), y0.saturating_sub(m));
+            let (cx1, cy1) = ((x1 + m).min(w - 1), (y1 + m).min(h - 1));
+            let (cw, ch) = (cx1 - cx0 + 1, cy1 - cy0 + 1);
+            let crop = |src: &[u8]| {
+                let mut out = Vec::with_capacity(cw * ch * 4);
+                for y in cy0..=cy1 {
+                    out.extend_from_slice(&src[(y * w + cx0) * 4..(y * w + cx1 + 1) * 4]);
+                }
+                out
+            };
+            let (a, b) = (crop(&partial), crop(&fresh));
+            let diff: Vec<u8> = a
+                .chunks_exact(4)
+                .zip(b.chunks_exact(4))
+                .flat_map(|(p, q)| {
+                    let d = |i: usize| (p[i].abs_diff(q[i]) as u32 * 16).min(255) as u8;
+                    [d(0), d(1), d(2), 255]
+                })
+                .collect();
+            for (name, data) in [("partial", &a), ("fresh", &b), ("diff", &diff)] {
+                let path = std::path::Path::new(&dir).join(format!("stale{k}-{name}.png"));
+                if let Ok(f) = std::fs::File::create(&path) {
+                    let _ = crate::utils::write_png_rgba8(
+                        std::io::BufWriter::new(f),
+                        cw as u32,
+                        ch as u32,
+                        data,
+                    );
+                }
+            }
+        }
+    }
     true
 }
