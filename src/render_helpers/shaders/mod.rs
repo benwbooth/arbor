@@ -14,6 +14,7 @@ pub struct Shaders {
     pub border: Option<ShaderProgram>,
     pub shadow: Option<ShaderProgram>,
     pub clipped_surface: Option<GlesTexProgram>,
+    pub see_through: Option<GlesTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
     pub glass: Option<GlesTexProgram>,
     pub resize: Option<ShaderProgram>,
@@ -186,6 +187,19 @@ impl Shaders {
         })
         .ok();
 
+        let see_through = renderer
+            .compile_custom_texture_shader(
+                include_str!("see_through.frag"),
+                &[
+                    UniformName::new("key", UniformType::_3f),
+                    UniformName::new("key_alpha", UniformType::_1f),
+                ],
+            )
+            .map_err(|err| {
+                warn!("error compiling see-through shader: {err:?}");
+            })
+            .ok();
+
         let blur = BlurProgram::compile(renderer)
             .map_err(|err| {
                 warn!("error compiling blur shaders: {err:?}");
@@ -196,6 +210,7 @@ impl Shaders {
             border,
             shadow,
             clipped_surface,
+            see_through,
             postprocess_and_clip,
             glass,
             resize,

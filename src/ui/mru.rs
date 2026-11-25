@@ -420,6 +420,7 @@ impl Thumbnail {
                 // Otherwise, render the solid color as is.
                 LayoutElementRenderElement::SolidColor(elem).into()
             }
+            elem @ LayoutElementRenderElement::SeeThrough(_) => elem.into(),
             elem @ LayoutElementRenderElement::BackgroundEffect(_) => {
                 // This is only used on popups for now. If subsurface blur is implemented, this
                 // will need to be handled somehow.

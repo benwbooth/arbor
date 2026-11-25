@@ -1,6 +1,6 @@
 use crate::appearance::{
-    BackgroundEffect, BackgroundEffectRule, BlockOutFrom, BorderRule, CornerRadius, ShadowRule,
-    TabIndicatorRule,
+    BackgroundEffect, BackgroundEffectRule, BlockOutFrom, BorderRule, Color, CornerRadius,
+    ShadowRule, TabIndicatorRule,
 };
 use crate::layout::DefaultPresetSize;
 use crate::utils::{MergeWith, RegexEq};
@@ -96,6 +96,13 @@ pub struct PopupsRule {
     pub geometry_corner_radius: Option<CornerRadius>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
+    /// arbor: draw this colour (the popup's background) see-through, everything else as
+    /// opaque as it was, for apps that draw their menus opaque (Chromium, Electron).
+    #[knuffel(child)]
+    pub see_through_color: Option<Color>,
+    /// arbor: how opaque `see-through-color` stays (0 = invisible, 1 = unchanged).
+    #[knuffel(child, unwrap(argument))]
+    pub see_through_opacity: Option<f32>,
 }
 
 /// Resolved popup-specific rules.
@@ -109,6 +116,12 @@ pub struct ResolvedPopupsRules {
 
     /// Background effect configuration for popups.
     pub background_effect: BackgroundEffect,
+
+    /// Colour drawn see-through in popups.
+    pub see_through_color: Option<Color>,
+
+    /// How opaque `see_through_color` stays.
+    pub see_through_opacity: Option<f32>,
 }
 
 impl MergeWith<PopupsRule> for ResolvedPopupsRules {
@@ -120,6 +133,12 @@ impl MergeWith<PopupsRule> for ResolvedPopupsRules {
             self.geometry_corner_radius = Some(x);
         }
         self.background_effect.merge_with(&part.background_effect);
+        if let Some(x) = part.see_through_color {
+            self.see_through_color = Some(x);
+        }
+        if let Some(x) = part.see_through_opacity {
+            self.see_through_opacity = Some(x);
+        }
     }
 }
 

@@ -59,6 +59,7 @@ use crate::layout::sizing::ScrollDirection;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::offscreen::OffscreenData;
 use crate::render_helpers::renderer::ArborRenderer;
+use crate::render_helpers::see_through::SeeThroughSurfaceRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::TextureBuffer;
@@ -121,6 +122,7 @@ arbor_render_elements! {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
         BackgroundEffect = BackgroundEffectElement,
+        SeeThrough = SeeThroughSurfaceRenderElement<R>,
     }
 }
 

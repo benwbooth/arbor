@@ -32,6 +32,7 @@ use crate::render_helpers::background_effect::BackgroundEffectElement;
 use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::offscreen::OffscreenData;
 use crate::render_helpers::renderer::ArborRenderer;
+use crate::render_helpers::see_through::SeeThroughSurfaceRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::{
@@ -746,6 +747,12 @@ impl LayoutElement for Mapped {
             let popup_geo = popup.geometry();
             let surface_loc = location + (offset - popup.geometry().loc).to_f64();
 
+            // Popups of apps that draw their menus opaque: their background colour drawn
+            // see-through, so the blur behind shows like through a translucent menu.
+            let see_through = popup_rules.see_through_color.and_then(|key| {
+                let shader = SeeThroughSurfaceRenderElement::shader(ctx.renderer)?.clone();
+                Some((shader, key, popup_rules.see_through_opacity.unwrap_or(0.74)))
+            });
             push_elements_from_surface_tree(
                 ctx.renderer,
                 surface,
@@ -753,7 +760,13 @@ impl LayoutElement for Mapped {
                 scale,
                 alpha,
                 Kind::ScanoutCandidate,
-                &mut |elem| push(elem.into()),
+                &mut |elem| match &see_through {
+                    Some((shader, key, opacity)) => push(
+                        SeeThroughSurfaceRenderElement::new(elem, shader.clone(), *key, *opacity)
+                            .into(),
+                    ),
+                    None => push(elem.into()),
+                },
             );
 
             let geometry = Rectangle::new(location + offset.to_f64(), popup_geo.size.to_f64());
