@@ -3,6 +3,7 @@ use arbor_config::{Config, LayerRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::desktop::{LayerSurface, PopupKind, PopupManager};
+use smithay::reexports::wayland_server::Resource as _;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 use smithay::wayland::compositor::{remove_pre_commit_hook, HookId};
 use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
@@ -56,6 +57,10 @@ pub struct MappedLayer {
     /// Liquid glass shapes for this surface's pop-ups.
     popup_glass: Vec<PopupGlass>,
 
+    /// When each of its pop-ups was first drawn (a new one gets no
+    /// closest-size glass, see `glass::popup_entries_for`).
+    popup_seen: std::cell::RefCell<std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, std::time::Duration>>,
+
     /// The view size for the layer surface's output.
     view_size: Size<f64, Logical>,
 
@@ -104,6 +109,7 @@ impl MappedLayer {
             glass_config: config.glass,
             glass: Vec::new(),
             popup_glass: Vec::new(),
+            popup_seen: Default::default(),
             clock,
         }
     }
@@ -146,11 +152,11 @@ impl MappedLayer {
     }
 
     /// Glass shapes for a pop-up of this surface with the given surface size.
-    fn glass_for_popup(&self, size: (f64, f64), popup_count: usize) -> Vec<&GlassInstance> {
+    fn glass_for_popup(&self, size: (f64, f64), popup_count: usize, fresh: bool) -> Vec<&GlassInstance> {
         if self.glass_config.off || self.popup_glass.is_empty() {
             return Vec::new();
         }
-        let entries = crate::glass::popup_entries_for(&self.popup_glass, size, popup_count);
+        let entries = crate::glass::popup_entries_for(&self.popup_glass, size, popup_count, fresh);
         entries
             .into_iter()
             .flat_map(|i| self.popup_glass[i].shapes.iter())
@@ -369,7 +375,24 @@ impl MappedLayer {
         } else {
             PopupManager::popups_for_surface(surface).count()
         };
+        // Pop-ups seen before and when (gone ones forgotten).
+        let now = self.clock.now_unadjusted();
+        {
+            let mut seen = self.popup_seen.borrow_mut();
+            let live: std::collections::HashSet<_> = PopupManager::popups_for_surface(surface)
+                .map(|(p, _)| p.wl_surface().id())
+                .collect();
+            seen.retain(|id, _| live.contains(id));
+            for id in live {
+                seen.entry(id).or_insert(now);
+            }
+        }
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
+            let fresh = self
+                .popup_seen
+                .borrow()
+                .get(&popup.wl_surface().id())
+                .is_some_and(|t| now.saturating_sub(*t) < std::time::Duration::from_millis(250));
             let popup_rules = match popup {
                 PopupKind::Xdg(_) => self.rules.popups,
                 // IME popups aren't affected by rules for regular popups.
@@ -393,7 +416,7 @@ impl MappedLayer {
 
             if popup_count > 0 && self.surface.layer() != Layer::Background {
                 let size = popup_geo.size.to_f64();
-                let glass = self.glass_for_popup((size.w, size.h), popup_count);
+                let glass = self.glass_for_popup((size.w, size.h), popup_count, fresh);
                 if !glass.is_empty() {
                     self.push_glass(&mut glass.into_iter(), surface_loc, push);
                     continue;

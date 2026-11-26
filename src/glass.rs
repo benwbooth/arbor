@@ -190,6 +190,7 @@ pub fn popup_entries_for(
     entries: &[PopupGlass],
     size: (f64, f64),
     popup_count: usize,
+    fresh: bool,
 ) -> Vec<usize> {
     let dist = |(w, h): (f64, f64)| (w - size.0).abs().max((h - size.1).abs());
     let mut out: Vec<usize> = (0..entries.len())
@@ -200,7 +201,13 @@ pub fn popup_entries_for(
         })
         .collect();
     let any_sized_match = out.iter().any(|&i| entries[i].surface_size.is_some());
-    if popup_count == 1 && !any_sized_match {
+    // (Not for a pop-up that has just appeared: it has no entry yet, and the
+    // closest is a leftover of the one before, whose removal comes over IPC
+    // a moment after it unmapped. Drawn on the new pop-up's first frame,
+    // before the shell placed it, it flashed as an empty glass "tooltip" in
+    // the Dock's lower-left corner, moving from icon to icon. A pop-up whose
+    // size lags its entry is one that's already showing, resizing.)
+    if popup_count == 1 && !any_sized_match && !fresh {
         let closest = (0..entries.len())
             .filter_map(|i| entries[i].surface_size.map(|s| (i, dist(s))))
             .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -365,13 +372,16 @@ mod tests {
         let entries = [e(Some((300., 400.))), e(Some((120., 40.))), e(None)];
         // One pop-up open, of the menu's size: the menu's entry and the unsized one, not the
         // leftover tooltip's.
-        assert_eq!(popup_entries_for(&entries, (300., 400.), 1), [0, 2]);
+        assert_eq!(popup_entries_for(&entries, (300., 400.), 1, false), [0, 2]);
         // One pop-up whose size lags behind: the closest sized entry.
-        assert_eq!(popup_entries_for(&entries, (310., 380.), 1), [0, 2]);
+        assert_eq!(popup_entries_for(&entries, (310., 380.), 1, false), [0, 2]);
         // Several pop-ups: only exact (within a pixel) sizes.
-        assert_eq!(popup_entries_for(&entries, (310., 380.), 2), [2]);
-        assert_eq!(popup_entries_for(&entries, (120.5, 40.), 2), [1, 2]);
-        assert!(popup_entries_for(&[], (1., 1.), 1).is_empty());
+        assert_eq!(popup_entries_for(&entries, (310., 380.), 2, false), [2]);
+        assert_eq!(popup_entries_for(&entries, (120.5, 40.), 2, false), [1, 2]);
+        assert!(popup_entries_for(&[], (1., 1.), 1, false).is_empty());
+        // A pop-up that has just appeared doesn't take the closest (a
+        // leftover tooltip's): only its own size or unsized entries.
+        assert_eq!(popup_entries_for(&entries, (310., 380.), 1, true), [2]);
     }
 
     #[test]
