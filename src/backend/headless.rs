@@ -461,13 +461,23 @@ impl Headless {
             Ok(mut framebuffer) => target
                 .damage_tracker
                 .render_output(renderer, &mut framebuffer, age, &elements, [0.; 4])
-                .map(|res| (res.damage.is_some(), res.states))
+                .map(|res| (res.damage.cloned(), res.states))
                 .map_err(|err| anyhow::anyhow!("{err:?}"))
-                .inspect(|(damaged, _)| {
-                    if damage_check && *damaged {
-                        stale_frame =
-                            damage_check_frame(renderer, &framebuffer, output, size, &elements);
+                .map(|(damage, states)| {
+                    if damage_check {
+                        if let Some(damage) = &damage {
+                            stale_frame = damage_check_frame(
+                                renderer,
+                                &framebuffer,
+                                output,
+                                size,
+                                &elements,
+                                damage,
+                                age,
+                            );
+                        }
                     }
+                    (damage.is_some(), states)
                 }),
             Err(err) => Err(anyhow::anyhow!(
                 "error binding headless framebuffer: {err:?}"
@@ -600,6 +610,8 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
     output: &Output,
     size: Size<i32, smithay::utils::Physical>,
     elements: &[E],
+    damage: &[smithay::utils::Rectangle<i32, smithay::utils::Physical>],
+    age: usize,
 ) -> bool {
     use smithay::backend::renderer::element::Element as _;
     use smithay::backend::renderer::ExportMem as _;
@@ -661,8 +673,28 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
             format!("{d} @ {:?}", e.geometry(scale))
         })
         .collect();
+    // Was the stale spot redrawn this frame? Not at all: a change went unreported (damage);
+    // fully: it was redrawn but came out different (drawing).
+    let covered: i64 = damage
+        .iter()
+        .filter_map(|d| d.intersection(bbox))
+        .map(|r| i64::from(r.size.w) * i64::from(r.size.h))
+        .sum();
+    let area = i64::from(bbox.size.w) * i64::from(bbox.size.h);
+    let near: Vec<_> = damage
+        .iter()
+        .filter(|d| {
+            let around = Rectangle::<i32, smithay::utils::Physical>::new(
+                (bbox.loc.x - 8, bbox.loc.y - 8).into(),
+                (bbox.size.w + 16, bbox.size.h + 16).into(),
+            );
+            d.overlaps(around)
+        })
+        .collect();
     warn!(
-        "damage check {}: {n} stale pixels in {bbox:?} of {w}x{h}; elements there (top first): {over:#?}",
+        "damage check {}: {n} stale pixels in {bbox:?} of {w}x{h}; buffer age {age}; \
+         redrawn this frame: {covered} of {area} px of that box; damage near it: {near:?}; \
+         elements there (top first): {over:#?}",
         output.name()
     );
     // ARBOR_DAMAGE_CHECK_DUMP=DIR: the first few stale spots as PNGs (partial, from scratch,
