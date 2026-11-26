@@ -2391,7 +2391,7 @@ mod tests {
                 honor_xdg_activation_with_invalid_serial: false,
                 deactivate_unfocused_windows: false,
                 skip_cursor_only_updates_during_vrr: false,
-                full_redraws: false,
+                partial_redraws: false,
             },
             workspaces: [
                 Workspace {

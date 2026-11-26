@@ -1986,9 +1986,12 @@ impl Tty {
 
         // Hand them over to the DRM.
         let drm_compositor = &mut surface.compositor;
-        // arbor: `debug { full-redraws }` repaints the whole screen each frame (no buffer-age
-        // partial redraws), the fallback if stale regions show up on screen again.
-        if self.config.borrow().debug.full_redraws {
+        // arbor: repaint the whole screen each frame (no buffer-age partial redraws) unless
+        // `debug { partial-redraws }`. Partial redraws left stale regions on screen (smudged
+        // text, windows grey until clicked) that screenshots never showed and that a full
+        // redraw (opening the overview) cleared. Cheap at this GPU's speed; unchanged frames
+        // are still skipped before this.
+        if !self.config.borrow().debug.partial_redraws {
             drm_compositor.reset_buffer_ages();
         }
         match drm_compositor.render_frame::<_, _>(&mut renderer, &elements, [0.; 4], flags) {
