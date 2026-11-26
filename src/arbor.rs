@@ -2796,7 +2796,7 @@ impl Arbor {
             .unwrap();
 
         let first_frame_hold = config_.debug.hold_first_frame.then(|| {
-            let wait = Duration::from_secs(8);
+            let wait = Duration::from_secs(15);
             event_loop
                 .insert_source(Timer::from_duration(wait), |_, _, state| {
                     if state.arbor.first_frame_hold.take().is_some() {

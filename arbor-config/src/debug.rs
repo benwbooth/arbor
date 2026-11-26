@@ -30,7 +30,7 @@ pub struct Debug {
     /// text, windows grey until clicked) kept showing that a full redraw fixed.
     pub partial_redraws: bool,
     /// arbor: draw nothing at startup until a layer-shell surface covers the whole screen (a
-    /// login screen, a wallpaper; a bar alone doesn't count), or 8 s have passed: whatever was there (the Plymouth boot
+    /// login screen, a wallpaper; a bar alone doesn't count), or 15 s have passed: whatever was there (the Plymouth boot
     /// splash, which hearth's greeter hands over from) stays up instead of a black frame.
     pub hold_first_frame: bool,
 }
