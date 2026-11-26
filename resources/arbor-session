@@ -10,7 +10,9 @@ if [ -n "${MANAGERPID:-}" ] && [ "${SYSTEMD_EXEC_PID:-}" = "$$" ]; then
     esac
 fi
 
-if [ -n "$SHELL" ] &&
+# Only a login shell that's there: one listed in /etc/shells but missing
+# (a dev build of it removed) would end the session at once.
+if [ -n "$SHELL" ] && [ -x "$SHELL" ] &&
    grep -q "$SHELL" /etc/shells &&
    ! (echo "$SHELL" | grep -q "false") &&
    ! (echo "$SHELL" | grep -q "nologin"); then

@@ -29,6 +29,10 @@ pub struct Debug {
     /// arbor repaints the whole screen each frame it draws, because stale regions (smudged
     /// text, windows grey until clicked) kept showing that a full redraw fixed.
     pub partial_redraws: bool,
+    /// arbor: draw nothing at startup until a layer-shell client (a login screen, a shell) has
+    /// put something on the screen, or 8 s have passed: whatever was there (the Plymouth boot
+    /// splash, which hearth's greeter hands over from) stays up instead of a black frame.
+    pub hold_first_frame: bool,
 }
 
 #[derive(knuffel::Decode, Debug, Default, PartialEq)]
@@ -77,6 +81,8 @@ pub struct DebugPart {
     pub skip_cursor_only_updates_during_vrr: Option<Flag>,
     #[knuffel(child)]
     pub partial_redraws: Option<Flag>,
+    #[knuffel(child)]
+    pub hold_first_frame: Option<Flag>,
 }
 
 impl MergeWith<DebugPart> for Debug {
@@ -102,6 +108,7 @@ impl MergeWith<DebugPart> for Debug {
             deactivate_unfocused_windows,
             skip_cursor_only_updates_during_vrr,
             partial_redraws,
+            hold_first_frame,
         );
 
         merge_clone_opt!((self, part), preview_render, render_drm_device);

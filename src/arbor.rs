@@ -254,6 +254,9 @@ pub struct Arbor {
 
     /// Extra data for mapped layer surfaces.
     pub mapped_layer_surfaces: HashMap<LayerSurface, MappedLayer>,
+    /// arbor: `debug { hold-first-frame }`: until when nothing is drawn while no layer surface
+    /// is mapped. None once something has been drawn.
+    pub first_frame_hold: Option<Instant>,
     /// arbor: liquid glass shapes registered over IPC.
     pub glass: crate::glass::GlassRegistry,
     /// arbor: `SetGlass` requests waiting for their surface's next commit (`on_commit`), with
@@ -2792,6 +2795,19 @@ impl Arbor {
             })
             .unwrap();
 
+        let first_frame_hold = config_.debug.hold_first_frame.then(|| {
+            let wait = Duration::from_secs(8);
+            event_loop
+                .insert_source(Timer::from_duration(wait), |_, _, state| {
+                    if state.arbor.first_frame_hold.take().is_some() {
+                        state.arbor.queue_redraw_all();
+                    }
+                    TimeoutAction::Drop
+                })
+                .unwrap();
+            Instant::now() + wait
+        });
+
         event_loop
             .insert_source(
                 Timer::from_duration(Duration::from_secs(60)),
@@ -2845,6 +2861,7 @@ impl Arbor {
             unmapped_windows: HashMap::new(),
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
+            first_frame_hold,
             glass: crate::glass::GlassRegistry::default(),
             pending_glass: Vec::new(),
             genie: Default::default(),
@@ -5193,8 +5210,21 @@ impl Arbor {
                     .any(|mapped| mapped.are_animations_ongoing());
             }
 
+            // arbor: `debug { hold-first-frame }`: leave the screen as it was (the boot splash)
+            // until a layer client has drawn something, so the first frame isn't empty.
+            if self.first_frame_hold.is_some() {
+                let layer_up = layer_map_for_output(output)
+                    .layers()
+                    .any(|l| self.mapped_layer_surfaces.contains_key(l));
+                if layer_up || self.first_frame_hold.is_some_and(|t| Instant::now() >= t) {
+                    self.first_frame_hold = None;
+                }
+            }
+
             // Render.
-            res = backend.render(self, output, target_presentation_time);
+            if self.first_frame_hold.is_none() {
+                res = backend.render(self, output, target_presentation_time);
+            }
         }
 
         let is_locked = self.is_locked();
