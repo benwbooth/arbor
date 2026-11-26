@@ -32,8 +32,14 @@ use crate::utils::with_toplevel_role;
 pub const SESSION_VERSION: u32 = 1;
 /// How long relaunched apps get to map their windows.
 const RESTORE_TIMEOUT: Duration = Duration::from_secs(90);
-/// Delay after start before relaunching, so that the shell and portals come up first.
-const STARTUP_DELAY: Duration = Duration::from_secs(2);
+/// Apps are relaunched only once the desktop is up: a monitor is on and a shell has put a
+/// panel on screen (hearth's menu bar, any bar), and that has held for `READY_SETTLE`. A fixed
+/// 2 s delay relaunched them mid-login, and Chromium/Electron apps (Spotify) whose Wayland
+/// connection wasn't answered yet fell back to X11 for good (no fitting into dock slots).
+/// Checked every `READY_POLL`; after `READY_MAX` it restores anyway.
+const READY_POLL: Duration = Duration::from_millis(250);
+const READY_SETTLE: Duration = Duration::from_millis(1500);
+const READY_MAX: Duration = Duration::from_secs(30);
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,7 +195,9 @@ impl PendingRestore {
         window: &Window,
     ) -> Option<SavedWindow> {
         let free = |w: &&SavedWindow| {
-            w.app_id == app_id && !self.claimed.iter().any(|(s, _)| *s == w.slot)
+            // Case-insensitive: an app saved while it ran under X11 ("Spotify", its WM class)
+            // comes back on Wayland ("spotify").
+            w.app_id.eq_ignore_ascii_case(app_id) && !self.claimed.iter().any(|(s, _)| *s == w.slot)
         };
         let same_pid = |w: &&SavedWindow| pid.is_some() && w.pid == pid;
         let same_title = |w: &&SavedWindow| title.is_some() && w.title.as_deref() == title;
@@ -553,14 +561,30 @@ impl State {
     /// periodically.
     pub fn session_start(&mut self, restore: bool) {
         let off = self.arbor.config.borrow().session_restore.off || !restore;
+        let started = Instant::now();
+        let mut ready_since: Option<Instant> = None;
         let _ = self.arbor.event_loop.insert_source(
-            Timer::from_duration(STARTUP_DELAY),
+            Timer::from_duration(READY_POLL),
             move |_, _, state| {
-                if !off {
-                    if let Some(path) = state.arbor.session_path.clone() {
-                        if path.exists() {
-                            state.session_restore_now();
-                        }
+                if off {
+                    return TimeoutAction::Drop;
+                }
+                let now = Instant::now();
+                if state.session_desktop_ready() {
+                    let since = *ready_since.get_or_insert(now);
+                    if now.duration_since(since) < READY_SETTLE {
+                        return TimeoutAction::ToDuration(READY_POLL);
+                    }
+                } else {
+                    ready_since = None;
+                    if now.duration_since(started) < READY_MAX {
+                        return TimeoutAction::ToDuration(READY_POLL);
+                    }
+                    warn!("session restore: the desktop isn't ready after {READY_MAX:?}, restoring anyway");
+                }
+                if let Some(path) = state.arbor.session_path.clone() {
+                    if path.exists() {
+                        state.session_restore_now();
                     }
                 }
                 TimeoutAction::Drop
@@ -573,6 +597,26 @@ impl State {
                 TimeoutAction::ToDuration(AUTOSAVE_INTERVAL)
             },
         );
+    }
+
+    /// The desktop is up for relaunching apps: a monitor exists and a shell has a panel (any
+    /// layer surface on the top or overlay layer: hearth's menu bar, another shell's bar).
+    fn session_desktop_ready(&self) -> bool {
+        use smithay::desktop::layer_map_for_output;
+        use smithay::wayland::shell::wlr_layer::Layer;
+        let mut any_output = false;
+        let mut panel = false;
+        for output in self.arbor.layout.outputs() {
+            any_output = true;
+            let map = layer_map_for_output(output);
+            if map
+                .layers()
+                .any(|l| matches!(l.layer(), Layer::Top | Layer::Overlay))
+            {
+                panel = true;
+            }
+        }
+        any_output && panel
     }
 
     /// A window just mapped: if it belongs to the restoring session, put it in its place.
