@@ -1753,7 +1753,14 @@ impl<W: LayoutElement> Workspace<W> {
                 .floating
                 .tiles_with_render_positions()
                 .filter(|(tile, _)| !self.floating.is_minimized(tile.window().id()))
-                .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
+                .find_map(|(tile, tile_pos)| {
+                    HitType::hit_tile(tile, tile_pos, pos).or_else(|| {
+                        // arbor: the resize band around it is the window's too (no input
+                        // to the client, so its cursor doesn't fight the resize cursor).
+                        floating_edge_hit(tile.tile_size(), pos - tile_pos)
+                            .map(|_| (tile.window(), HitType::Activate { is_tab_indicator: false }))
+                    })
+                })
             {
                 return Some(rv);
             }
@@ -1848,6 +1855,31 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     /// arbor: the dock divider under `pos`, as a window and the edge to resize to drag it.
+    /// arbor: the floating window whose resize band (just outside its frame) is under `pos`,
+    /// and the edges dragging there resizes. None over a window itself, or when another
+    /// floating window above covers the point.
+    pub fn floating_edge_under(&self, pos: Point<f64, Logical>) -> Option<(W::Id, ResizeEdge)> {
+        if !self.is_floating_visible() {
+            return None;
+        }
+        for (tile, tile_pos) in self
+            .floating
+            .tiles_with_render_positions()
+            .filter(|(tile, _)| !self.floating.is_minimized(tile.window().id()))
+        {
+            if HitType::hit_tile(tile, tile_pos, pos).is_some() {
+                return None;
+            }
+            if !tile.window().sizing_mode().is_normal() {
+                continue;
+            }
+            if let Some(edges) = floating_edge_hit(tile.tile_size(), pos - tile_pos) {
+                return Some((tile.window().id().clone(), edges));
+            }
+        }
+        None
+    }
+
     pub fn dock_divider_under(&self, pos: Point<f64, Logical>) -> Option<(W::Id, ResizeEdge)> {
         // Floating windows are above the dividers.
         if self.is_floating_visible()
@@ -2034,4 +2066,55 @@ fn compute_workspace_shadow_config(
     config.offset.y.0 *= norm;
 
     config
+}
+
+/// arbor: how far outside a floating window's frame its edges can be grabbed to resize it, and
+/// how far along an edge from a corner still grabs the corner.
+const FLOATING_EDGE_BAND: f64 = 6.;
+const FLOATING_CORNER_REACH: f64 = 16.;
+
+/// arbor: the edges a point (relative to a floating tile) is the resize band of, if any: a band
+/// `FLOATING_EDGE_BAND` wide just outside the tile, corners reaching `FLOATING_CORNER_REACH`
+/// along each side.
+fn floating_edge_hit(size: Size<f64, Logical>, p: Point<f64, Logical>) -> Option<ResizeEdge> {
+    let b = FLOATING_EDGE_BAND;
+    let inside = p.x >= 0. && p.y >= 0. && p.x < size.w && p.y < size.h;
+    if inside || p.x < -b || p.y < -b || p.x >= size.w + b || p.y >= size.h + b {
+        return None;
+    }
+    // (The point is outside the tile, so at least one side applies; near a corner, both.)
+    let c = FLOATING_CORNER_REACH;
+    let mut edges = ResizeEdge::empty();
+    if p.x < c.min(size.w / 2.) {
+        edges |= ResizeEdge::LEFT;
+    } else if p.x >= size.w - c.min(size.w / 2.) {
+        edges |= ResizeEdge::RIGHT;
+    }
+    if p.y < c.min(size.h / 2.) {
+        edges |= ResizeEdge::TOP;
+    } else if p.y >= size.h - c.min(size.h / 2.) {
+        edges |= ResizeEdge::BOTTOM;
+    }
+    (!edges.is_empty()).then_some(edges)
+}
+
+#[cfg(test)]
+mod floating_edge_tests {
+    use super::*;
+
+    #[test]
+    fn bands_and_corners() {
+        let size = Size::from((400., 300.));
+        let at = |x: f64, y: f64| floating_edge_hit(size, Point::from((x, y)));
+        assert_eq!(at(10., 10.), None, "inside");
+        assert_eq!(at(-20., 100.), None, "too far");
+        assert_eq!(at(-3., 150.), Some(ResizeEdge::LEFT));
+        assert_eq!(at(403., 150.), Some(ResizeEdge::RIGHT));
+        assert_eq!(at(200., -3.), Some(ResizeEdge::TOP));
+        assert_eq!(at(200., 303.), Some(ResizeEdge::BOTTOM));
+        assert_eq!(at(-3., -3.), Some(ResizeEdge::TOP_LEFT));
+        assert_eq!(at(-3., 10.), Some(ResizeEdge::TOP_LEFT), "near the corner along the side");
+        assert_eq!(at(395., 303.), Some(ResizeEdge::BOTTOM_RIGHT));
+        assert_eq!(at(403., 295.), Some(ResizeEdge::BOTTOM_RIGHT));
+    }
 }

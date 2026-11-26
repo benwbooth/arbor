@@ -1655,6 +1655,19 @@ impl<W: LayoutElement> Monitor<W> {
         ws.resize_edges_under(pos_within_output - geo.loc)
     }
 
+    /// arbor: the floating window resize band under the pointer, see
+    /// [`Workspace::floating_edge_under`].
+    pub fn floating_edge_under(
+        &self,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<(W::Id, ResizeEdge)> {
+        if self.overview_progress.is_some() {
+            return None;
+        }
+        let (ws, geo) = self.workspace_under(pos_within_output)?;
+        ws.floating_edge_under(pos_within_output - geo.loc)
+    }
+
     /// arbor: the dock divider under the pointer, see [`Workspace::dock_divider_under`].
     pub fn dock_divider_under(
         &self,

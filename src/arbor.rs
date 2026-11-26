@@ -432,6 +432,8 @@ pub struct Arbor {
     pub pointer_inside_hot_corner: bool,
     /// arbor: the cursor shows a resize shape over a dock divider.
     pub dock_divider_hover: bool,
+    /// arbor: the pointer is in a floating window's resize band (a resize cursor is shown).
+    pub floating_edge_hover: bool,
     /// arbor: last click on a server-side title bar, for double-click detection.
     pub title_bar_last_click: Option<(std::time::Duration, smithay::desktop::Window)>,
     /// arbor: last pinch scale of a Mod+pinch camera zoom in progress.
@@ -2954,6 +2956,7 @@ impl Arbor {
             notified_activity_this_iteration: false,
             pointer_inside_hot_corner: false,
             dock_divider_hover: false,
+            floating_edge_hover: false,
             title_bar_last_click: None,
             camera_pinch: None,
             tablet_cursor_location: None,

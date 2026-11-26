@@ -59,6 +59,7 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 pub mod backend_ext;
 mod camera;
 mod dock_divider;
+mod floating_edge;
 mod expose;
 pub mod move_grab;
 pub mod pick_color_grab;
@@ -2921,6 +2922,7 @@ impl State {
         self.arbor.maybe_activate_pointer_constraint();
 
         self.update_dock_divider_cursor();
+        self.update_floating_edge_cursor();
         self.update_title_bar_hover();
         self.update_expose_pointer();
 
@@ -3022,6 +3024,7 @@ impl State {
         self.arbor.maybe_activate_pointer_constraint();
 
         self.update_dock_divider_cursor();
+        self.update_floating_edge_cursor();
         self.update_title_bar_hover();
         self.update_expose_pointer();
 
@@ -3398,6 +3401,9 @@ impl State {
                 // arbor: the overview (exposé) handles its own clicks.
             } else if self.try_start_dock_divider_resize(button, button_code, serial) {
                 // arbor: dragging a dock divider.
+                self.arbor.queue_redraw_all();
+            } else if self.try_start_floating_edge_resize(button, button_code, serial) {
+                // arbor: dragging a floating window's edge.
                 self.arbor.queue_redraw_all();
             } else if self.try_zoomed_dock_press(button, button_code, serial) {
                 // arbor: clicking the zoomed-out dock tree.
