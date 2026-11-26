@@ -32,6 +32,45 @@ use crate::utils::with_toplevel_role;
 pub const SESSION_VERSION: u32 = 1;
 /// How long relaunched apps get to map their windows.
 const RESTORE_TIMEOUT: Duration = Duration::from_secs(90);
+/// A restored app starts as its own user service, `app-restore-<name>-<n>`:
+/// hearth's session module orders every `app-*.service` after
+/// hearth-ready.service (its tray, notifications and menu registrar up, the
+/// portal answering), so an app that asks those once, at start, finds them
+/// (the Claude app came up light when the portal hadn't answered yet).
+/// Without systemd-run the command runs as before.
+fn gated_launch(command: Vec<String>) -> Vec<String> {
+    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let has_systemd_run = std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p).any(|d| d.join("systemd-run").is_file())
+    });
+    if !has_systemd_run || command.is_empty() {
+        return command;
+    }
+    let name: String = command[0]
+        .rsplit('/')
+        .next()
+        .unwrap_or("app")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '_' })
+        .collect();
+    let unit = format!(
+        "app-restore-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, AtomicOrdering::Relaxed)
+    );
+    let mut out: Vec<String> = [
+        "systemd-run", "--user", "--collect", "--quiet", "-p", "ExitType=cgroup",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    out.push(format!("--unit={unit}"));
+    out.push("--".into());
+    out.extend(command);
+    out
+}
+
 /// Apps are relaunched only once the desktop is up: a monitor is on and a shell has put a
 /// panel on screen (hearth's menu bar, any bar), and that has held for `READY_SETTLE`. A fixed
 /// 2 s delay relaunched them mid-login, and Chromium/Electron apps (Spotify) whose Wayland
@@ -545,7 +584,7 @@ impl State {
         info!("restoring session: {} windows", file.windows.len());
         if launch {
             for command in file.launch_commands() {
-                spawn(command, None);
+                spawn(gated_launch(command), None);
             }
         }
         self.arbor.session_restore = Some(PendingRestore {
