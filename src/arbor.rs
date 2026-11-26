@@ -254,8 +254,8 @@ pub struct Arbor {
 
     /// Extra data for mapped layer surfaces.
     pub mapped_layer_surfaces: HashMap<LayerSurface, MappedLayer>,
-    /// arbor: `debug { hold-first-frame }`: until when nothing is drawn while no layer surface
-    /// is mapped. None once something has been drawn.
+    /// arbor: `debug { hold-first-frame }`: until when nothing is drawn while no full-screen
+    /// layer surface is mapped. None once something has been drawn.
     pub first_frame_hold: Option<Instant>,
     /// arbor: liquid glass shapes registered over IPC.
     pub glass: crate::glass::GlassRegistry,
@@ -5210,12 +5210,19 @@ impl Arbor {
                     .any(|mapped| mapped.are_animations_ongoing());
             }
 
-            // arbor: `debug { hold-first-frame }`: leave the screen as it was (the boot splash)
-            // until a layer client has drawn something, so the first frame isn't empty.
+            // arbor: `debug { hold-first-frame }`: leave the screen as it was (the boot splash,
+            // the login screen's last frame) until a layer client covers it, so the first frame
+            // isn't an empty one.
             if self.first_frame_hold.is_some() {
-                let layer_up = layer_map_for_output(output)
-                    .layers()
-                    .any(|l| self.mapped_layer_surfaces.contains_key(l));
+                // Something that covers the whole screen (a wallpaper, a login screen), not a
+                // bar or a dock on its own.
+                let size = self.global_space.output_geometry(output).map(|g| g.size);
+                let map = layer_map_for_output(output);
+                let layer_up = map.layers().any(|l| {
+                    self.mapped_layer_surfaces.contains_key(l)
+                        && map.layer_geometry(l).is_some_and(|g| Some(g.size) == size)
+                });
+                drop(map);
                 if layer_up || self.first_frame_hold.is_some_and(|t| Instant::now() >= t) {
                     self.first_frame_hold = None;
                 }
