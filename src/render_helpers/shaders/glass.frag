@@ -81,10 +81,16 @@ void main() {
         return;
     }
 
-    // Outward normal from the distance field.
+    // Outward normal from the distance field. It flips across the crease in the middle where
+    // the top and bottom (or left and right) bevels meet, and is zero right on it; an odd-sized
+    // shape has a row of pixel centres exactly there, which then lit up as a bright line (and
+    // float noise decided per damage rectangle whether a pixel hit zero, so partial redraws
+    // left it behind in pieces). Sampling a quarter of a physical pixel off keeps every pixel
+    // centre clear of the crease.
     vec2 e = vec2(0.5, 0.0);
-    vec2 n = vec2(sd_glass(lp + e.xy, half_size, radius) - sd_glass(lp - e.xy, half_size, radius),
-                  sd_glass(lp + e.yx, half_size, radius) - sd_glass(lp - e.yx, half_size, radius));
+    vec2 ln = lp + vec2(0.25 / niri_scale);
+    vec2 n = vec2(sd_glass(ln + e.xy, half_size, radius) - sd_glass(ln - e.xy, half_size, radius),
+                  sd_glass(ln + e.yx, half_size, radius) - sd_glass(ln - e.yx, half_size, radius));
     n = normalize(n + 1e-6);
 
     // Bending across the band along the rim: 1 at the rim, 0 where the band ends (and in the
