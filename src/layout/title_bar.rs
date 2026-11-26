@@ -31,8 +31,9 @@ const BUTTON_MARGIN: f64 = 15.;
 /// Extra hit radius around a button.
 const BUTTON_HIT_SLACK: f64 = 3.;
 
-/// KDE's default window title font.
-const FONT: &str = "Noto Sans, sans 10";
+/// macOS's window title: the system font at 13 pt, semibold (Inter, hearth's UI font, standing
+/// in for SF Pro). Sizes here are logical pixels.
+const FONT: &str = "Inter, sans Semi-Bold 13";
 
 /// Breeze's "negative" color, used for the close button highlight.
 const CLOSE_HOVER: u32 = 0xda4453;

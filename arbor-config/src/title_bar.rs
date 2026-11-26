@@ -7,7 +7,7 @@ use crate::{Color, FloatOrInt};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TitleBars {
     pub off: bool,
-    /// Breeze Light colors instead of Breeze Dark.
+    /// Light colors instead of dark (hearth-color-scheme sets it with hearth's mode).
     pub light: bool,
     pub height: f64,
     pub active_color: Color,
@@ -27,23 +27,25 @@ impl Default for TitleBars {
 }
 
 impl TitleBars {
-    /// Breeze Dark or Breeze Light header colors (Plasma 6 `[Colors:Header]`, active and
-    /// inactive).
+    /// macOS-style colors in hearth's palette (dark or light): the bar is the window's own
+    /// background (a hair lighter while active, so the focused window stands out), not a band
+    /// of its own as in Breeze; the title is the label color at 85% while active and fades to
+    /// about a third when inactive, as macOS's does.
     fn breeze(light: bool) -> Self {
-        let c = |r, g, b| Color::from_rgba8_unpremul(r, g, b, 0xff);
+        let c = |r, g, b, a| Color::from_rgba8_unpremul(r, g, b, a);
         let (active, inactive, active_text, inactive_text) = if light {
             (
-                c(0xde, 0xe0, 0xe2),
-                c(0xef, 0xf0, 0xf1),
-                c(0x23, 0x26, 0x29),
-                c(0x70, 0x7d, 0x8a),
+                c(0xf6, 0xf6, 0xf7, 0xff),
+                c(0xef, 0xf0, 0xf1, 0xff),
+                c(0x00, 0x00, 0x00, 217),
+                c(0x00, 0x00, 0x00, 77),
             )
         } else {
             (
-                c(0x29, 0x2c, 0x30),
-                c(0x20, 0x23, 0x26),
-                c(0xfc, 0xfc, 0xfc),
-                c(0xa1, 0xa9, 0xb1),
+                c(0x25, 0x28, 0x2b, 0xff),
+                c(0x20, 0x23, 0x26, 0xff),
+                c(0xff, 0xff, 0xff, 217),
+                c(0xff, 0xff, 0xff, 89),
             )
         };
         Self {

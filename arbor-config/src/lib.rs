@@ -1522,9 +1522,9 @@ mod tests {
                     light: false,
                     height: 30.0,
                     active_color: Color {
-                        r: 0.16078432,
-                        g: 0.17254902,
-                        b: 0.1882353,
+                        r: 0.14509805,
+                        g: 0.15686275,
+                        b: 0.16862746,
                         a: 1.0,
                     },
                     inactive_color: Color {
@@ -1534,16 +1534,16 @@ mod tests {
                         a: 1.0,
                     },
                     active_text_color: Color {
-                        r: 0.9882353,
-                        g: 0.9882353,
-                        b: 0.9882353,
-                        a: 1.0,
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.8509804,
                     },
                     inactive_text_color: Color {
-                        r: 0.6313726,
-                        g: 0.6627451,
-                        b: 0.69411767,
-                        a: 1.0,
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.34901962,
                     },
                 },
                 camera: Camera {
