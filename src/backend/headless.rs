@@ -734,6 +734,38 @@ fn damage_check_frame<E: smithay::backend::renderer::element::RenderElement<Gles
                     );
                 }
             }
+            // The first spot also gets the from-scratch frame built up one element at a time
+            // (bottom first), to show which element a difference comes from.
+            if k == 0 {
+                for i in (0..elements.len()).rev() {
+                    if !elements[i].geometry(scale).overlaps(bbox) {
+                        continue;
+                    }
+                    let Ok(layer) = crate::render_helpers::render_to_vec(
+                        renderer,
+                        size,
+                        scale,
+                        Transform::Normal,
+                        Fourcc::Abgr8888,
+                        elements[i..].iter().rev(),
+                    ) else {
+                        continue;
+                    };
+                    if layer.len() != partial.len() {
+                        continue;
+                    }
+                    let data = crop(&layer);
+                    let path = std::path::Path::new(&dir).join(format!("stale0-upto{i}.png"));
+                    if let Ok(f) = std::fs::File::create(&path) {
+                        let _ = crate::utils::write_png_rgba8(
+                            std::io::BufWriter::new(f),
+                            cw as u32,
+                            ch as u32,
+                            &data,
+                        );
+                    }
+                }
+            }
         }
     }
     true
