@@ -30,3 +30,17 @@ Changes:
 - Framebuffer effects (liquid glass) redraw in full when any damage overlaps them, from elements
   above as well as below (`OutputDamageTracker`): redrawing a blur only inside a strip left a
   faint line at the strip's edge.
+
+- `xwayland-satellite/`: [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite)
+  0.8.3, the source nixpkgs builds (MPL-2.0, `LICENSE`), kept whole. Built by itself as
+  `packages.xwayland-satellite` (nixpkgs' derivation with this source; same Cargo.lock, so its
+  cargo deps are reused) and installed by `nix/module.nix` ahead of any other copy, since arbor
+  runs `xwayland-satellite` from PATH. Not part of arbor's cargo workspace.
+
+  To update: replace the directory with a newer release's source, re-apply the changes below,
+  and bump nixpkgs to the same version (or give the package its own `cargoHash`).
+
+Changes:
+- `_NET_WM_MOVERESIZE` ignores the button field, like KWin. Chromium and Electron title bars
+  send button 0 and were dropped ("non left click button (0)"), so their windows couldn't be
+  dragged. The compositor still only moves the window while the click's pointer grab is held.
