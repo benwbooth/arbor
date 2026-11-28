@@ -117,6 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => Some(arbor_config::XwaylandSatellite::default().path),
         };
         let args = env::args_os().skip(1).collect();
+        // The supervisor's Wayland proxy keeps a duplicate of every fd apps send (to replay
+        // them across swaps): at the default soft limit of 1024 it ran out after a day and
+        // dropped hearth's connection every few seconds (`dup: Too many open files`,
+        // 2026-11-27). The compositor child gets the original limit back (pre_exec), so it
+        // records the right one to restore for apps.
+        store_and_increase_nofile_rlimit();
         let code = arbor::supervisor::run(args, satellite)?;
         std::process::exit(code);
     }

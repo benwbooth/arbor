@@ -520,6 +520,8 @@ impl Supervisor {
                 for fd in &fds {
                     clear_cloexec(BorrowedFd::borrow_raw(*fd))?;
                 }
+                // (setrlimit is async-signal-safe.)
+                crate::utils::spawning::restore_nofile_rlimit();
                 crate::utils::signals::unblock_all()
             });
         }

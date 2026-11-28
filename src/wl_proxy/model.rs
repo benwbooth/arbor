@@ -38,11 +38,24 @@ pub struct Rec {
 }
 
 impl Rec {
+    /// Whether it holds an fd (a dup the model keeps open).
+    pub fn has_fd(&self) -> bool {
+        self.args.iter().any(|a| matches!(a, V::Fd(_)))
+    }
+
     pub fn refs(&self) -> impl Iterator<Item = Key> + '_ {
         self.args.iter().filter_map(|a| match a {
             V::Obj(Some(k)) => Some(*k),
             _ => None,
         })
+    }
+}
+
+impl Obj {
+    /// Whether it holds an fd (in how it was made, or a recorded request).
+    pub fn holds_fd(&self) -> bool {
+        matches!(&self.creation, Creation::Request(rec) if rec.has_fd())
+            || self.sets.values().chain(&self.accum).any(Rec::has_fd)
     }
 }
 
@@ -332,6 +345,8 @@ pub struct Model {
     pub error: Option<String>,
     /// One past the highest compositor-made id the client has seen.
     pub server_end: u32,
+    /// Destroyed objects still holding fds (gc's other trigger).
+    dead_fds: usize,
 }
 
 impl Default for Model {
@@ -349,6 +364,7 @@ impl Default for Model {
             swapped: false,
             error: None,
             server_end: SERVER_ID_START,
+            dead_fds: 0,
         };
         m.insert(1, display, 1, None, Creation::Display, true);
         m
@@ -613,6 +629,9 @@ impl Model {
             Kind::Destroy => {
                 let o = self.objs.get_mut(&key).unwrap();
                 o.alive = false;
+                if o.holds_fd() {
+                    self.dead_fds += 1;
+                }
                 self.by_id.remove(&msg.object);
                 self.focus.retain(|k, s| *k != key && *s != key);
                 // The client waits for delete_id before reusing a client id; the compositor
@@ -945,9 +964,13 @@ impl Model {
         out
     }
 
-    /// Forgets destroyed objects nothing needs any more.
+    /// Forgets destroyed objects nothing needs any more: when they outnumber the live ones, or
+    /// when a few of them hold fds. Each fd is a dup the proxy keeps open; apps with thousands of
+    /// live objects (hearth) never reached the first trigger, and every cursor theme they loaded
+    /// left its shm pool's fd open until the supervisor ran out (693 `wayland-cursor` memfds,
+    /// 2026-11-27).
     pub fn gc(&mut self) {
-        if self.objs.len() < 2 * self.by_id.len() + 256 {
+        if self.objs.len() < 2 * self.by_id.len() + 256 && self.dead_fds < 32 {
             return;
         }
         let mut keep: HashSet<Key> = HashSet::new();
@@ -966,6 +989,7 @@ impl Model {
             }
         }
         self.objs.retain(|k, _| keep.contains(k));
+        self.dead_fds = self.objs.values().filter(|o| !o.alive && o.holds_fd()).count();
     }
 }
 
