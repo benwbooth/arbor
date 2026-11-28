@@ -863,14 +863,24 @@ impl XdgActivationHandler for State {
             // window's workspace every few minutes (2026-11-27). Raising the fullscreen window
             // itself is fine, and so is a token from another app (the dock, a notification
             // clicked in the shell, the launcher), which is the user asking.
+            // "Fullscreen" includes a window that fills its whole output without asking for
+            // fullscreen (Jellyfin's player was let through at that size).
             let fullscreen_keeps = {
                 let target_client = surface.client().map(|c| c.id());
-                match self.arbor.layout.focus() {
-                    Some(focused)
-                        if focused.sizing_mode().is_fullscreen()
-                            && focused.window.toplevel().map(|t| t.wl_surface()) != Some(&surface) =>
+                match self.arbor.layout.focus_with_output() {
+                    Some((focused, output))
+                        if focused.window.toplevel().map(|t| t.wl_surface()) != Some(&surface) =>
                     {
-                        token_data.client_id.is_none() || token_data.client_id == target_client
+                        let out = crate::utils::output_size(output);
+                        let size = focused.size();
+                        let fills = f64::from(size.w) >= out.w - 1. && f64::from(size.h) >= out.h - 1.;
+                        let fullscreen = focused.sizing_mode().is_fullscreen() || fills;
+                        let own = token_data.client_id.is_none() || token_data.client_id == target_client;
+                        tracing::info!(
+                            "xdg-activation: focused window fullscreen={} (mode {}, fills output {}), request from the target's own app {}",
+                            fullscreen, focused.sizing_mode().is_fullscreen(), fills, own
+                        );
+                        fullscreen && own
                     }
                     _ => false,
                 }
