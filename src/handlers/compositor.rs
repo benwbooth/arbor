@@ -178,6 +178,35 @@ impl CompositorHandler for State {
                         }
                     });
 
+                    // arbor: a fullscreen window in front (a video) keeps the screen: a new
+                    // window from anything else opens without focus, token or not (tessera's and
+                    // latch's windows opening on a notification pulled away from a show every
+                    // time, 2026-11-27). A window rule asking for focus, or a dialog of the
+                    // fullscreen app itself, still gets it.
+                    let activate = if rules.open_focused.is_none() {
+                        let new_client = surface.client().map(|c| c.id());
+                        match self.arbor.layout.focus_with_output() {
+                            Some((focused, out)) => {
+                                let size = focused.size();
+                                let o = crate::utils::output_size(out);
+                                let fullscreen = focused.sizing_mode().is_fullscreen()
+                                    || (f64::from(size.w) >= o.w - 1. && f64::from(size.h) >= o.h - 1.);
+                                let same_app = focused.window.toplevel().and_then(|t| t.wl_surface().client()).map(|c| c.id())
+                                    == new_client;
+                                if fullscreen && !same_app {
+                                    let app_id = crate::utils::with_toplevel_role(toplevel, |role| role.app_id.clone());
+                                    tracing::info!("new window {app_id:?} opens without focus: a fullscreen window is in front");
+                                    ActivateWindow::No
+                                } else {
+                                    activate
+                                }
+                            }
+                            None => activate,
+                        }
+                    } else {
+                        activate
+                    };
+
                     let parent = toplevel
                         .parent()
                         .and_then(|parent| self.arbor.layout.find_window_and_output(&parent))
