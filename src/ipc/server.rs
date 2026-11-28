@@ -435,6 +435,15 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let (tx, rx) = async_channel::bounded(1);
 
             let action = arbor_config::Action::from(action);
+            // arbor: actions that move focus or the view, logged with the client's name (a
+            // switch away from a fullscreen video had no visible cause, 2026-11-27).
+            let name = format!("{action:?}");
+            if ["Focus", "MoveWindowTo", "MoveColumnTo", "ToggleOverview", "Workspace"]
+                .iter()
+                .any(|k| name.starts_with(k))
+            {
+                tracing::info!("ipc action: {}", name.chars().take(160).collect::<String>());
+            }
             ctx.event_loop.insert_idle(move |state| {
                 // Make sure some logic like workspace clean-up has a chance to run before doing
                 // actions.

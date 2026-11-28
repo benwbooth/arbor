@@ -1380,6 +1380,20 @@ impl State {
                 self.arbor.keyboard_focus,
                 focus
             );
+            // arbor: which app the focus moves between (windows only), so a jump away from what
+            // you were doing (a fullscreen video, 2026-11-27) can be traced to its cause in the
+            // lines around it (an activation, an IPC action).
+            {
+                let app_of = |f: &KeyboardFocus| -> Option<String> {
+                    let KeyboardFocus::Layout { surface: Some(s) } = f else { return None };
+                    let (mapped, _) = self.arbor.layout.find_window_and_output(s)?;
+                    crate::utils::with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone())
+                };
+                let (from, to) = (app_of(&self.arbor.keyboard_focus), app_of(&focus));
+                if to.is_some() && from != to {
+                    info!("focus: {} -> {}", from.as_deref().unwrap_or("-"), to.as_deref().unwrap_or("-"));
+                }
+            }
 
             // Tell the windows their new focus state for window rule purposes.
             if let KeyboardFocus::Layout {
