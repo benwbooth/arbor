@@ -770,9 +770,13 @@ pub enum Action {
     /// For the shell's global menu: an app whose menu items exist only
     /// while its own menu is open (Electron, GTK 4 popovers, ☰ menus) has
     /// that menu opened for a moment to be read. While the probe lasts, the
-    /// window's popups are not drawn and a popup grab doesn't take the
-    /// keyboard, so nothing flickers and the user's typing stays where it
-    /// was. Ends after `seconds` (at most 5), or now with 0.
+    /// screen and screen casts show the window frozen as it was when the
+    /// probe started, without its popups (a menu drawn inside the window,
+    /// like an Electron app's in-page menu, goes unseen too), and a popup
+    /// grab doesn't take the keyboard, so nothing flickers and the user's
+    /// typing stays where it was. The window keeps running and rendering
+    /// (its frame callbacks go on), and window screenshots see it live, open
+    /// menus included. Ends after `seconds` (at most 5), or now with 0.
     ProbeWindow {
         /// Id of the window.
         #[cfg_attr(feature = "clap", arg(long))]

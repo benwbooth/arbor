@@ -5685,7 +5685,32 @@ impl Arbor {
 
         let frame_callback_time = get_monotonic_time();
 
+        // arbor: a frozen window (IPC ProbeWindow) isn't drawn, so it isn't
+        // the primary scanout output's: it gets frame callbacks anyway, so it
+        // and the menus an accessibility tool opens keep rendering.
+        let should_send_frozen = |_surface: &WlSurface, states: &SurfaceData| {
+            let frame_throttling_state = states
+                .data_map
+                .get_or_insert(SurfaceFrameThrottlingState::default);
+            let mut last_sent_at = frame_throttling_state.last_sent_at.borrow_mut();
+            if let Some((last_output, last_sequence)) = &*last_sent_at {
+                if last_output == output && *last_sequence == sequence {
+                    return None;
+                }
+            }
+            *last_sent_at = Some((output.clone(), sequence));
+            Some(output.clone())
+        };
         for mapped in self.layout.windows_for_output_mut(output) {
+            if mapped.is_frozen() {
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    FRAME_CALLBACK_THROTTLE,
+                    should_send_frozen,
+                );
+                continue;
+            }
             mapped.send_frame(
                 output,
                 frame_callback_time,

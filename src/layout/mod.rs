@@ -264,6 +264,12 @@ pub trait LayoutElement {
 
     fn is_urgent(&self) -> bool;
 
+    /// arbor: the picture the screen shows while an accessibility tool
+    /// probes the window (IPC ProbeWindow), if it is frozen.
+    fn frozen_view(&self) -> Option<std::cell::Ref<'_, crate::window::mapped::FrozenView>> {
+        None
+    }
+
     fn configure_intent(&self) -> ConfigureIntent;
     fn send_pending_configure(&mut self);
 

@@ -25,6 +25,7 @@ use crate::render_helpers::clipped_surface::{ClippedSurfaceRenderElement, Rounde
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+use crate::render_helpers::texture::TextureRenderElement;
 use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
 use crate::render_helpers::shadow::ShadowRenderElement;
@@ -1195,19 +1196,42 @@ impl<W: LayoutElement> Tile<W> {
             .window_corner_radius()
             .scaled_by(1. - expanded_progress as f32);
 
-        // Popups go on top, whether it's resize or not.
-        self.window.render_popups(
-            ctx.r(),
-            window_render_loc,
-            scale,
-            win_alpha,
-            xray_pos,
-            &mut |elem| push(elem.into()),
-        );
+        // arbor: a frozen window (IPC ProbeWindow: an accessibility tool is
+        // opening its menus to read them) shows on screen and in screen casts
+        // as it was, without its popups; screenshots still see it live.
+        let frozen = if ctx.target == RenderTarget::ScreenCapture {
+            None
+        } else {
+            self.window.frozen_view()
+        };
+        let mut pushed_resize = false;
+        if let Some(frozen) = &frozen {
+            let elem = TextureRenderElement::from_texture_buffer(
+                frozen.buffer.clone(),
+                window_render_loc + frozen.offset,
+                win_alpha,
+                None,
+                None,
+                Kind::Unspecified,
+            );
+            // (The title bar's variant: the same texture element type.)
+            push(TileRenderElement::TitleBar(PrimaryGpuTextureRenderElement(elem)));
+            pushed_resize = true;
+        } else {
+            // Popups go on top, whether it's resize or not.
+            self.window.render_popups(
+                ctx.r(),
+                window_render_loc,
+                scale,
+                win_alpha,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
+        }
+        drop(frozen);
 
         // If we're resizing, try to render a shader, or a fallback.
-        let mut pushed_resize = false;
-        if let Some(resize) = &self.resize_animation {
+        if let Some(resize) = self.resize_animation.as_ref().filter(|_| !pushed_resize) {
             if ResizeRenderElement::has_shader(ctx.renderer) {
                 let mut ctx = ctx.as_gles();
 

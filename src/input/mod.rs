@@ -34,7 +34,7 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle, Transform, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER};
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitor;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint};
 use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
@@ -977,17 +977,7 @@ impl State {
             Action::ClickWindow(id, x, y, geometry) => self.click_window(id, x, y, geometry),
             Action::ClosePopups(id) => self.close_window_popups(id),
             Action::SendKeys(id, keys) => self.send_keys_to_window(id, &keys),
-            Action::ProbeWindow(id, seconds) => {
-                let window = self
-                    .arbor
-                    .layout
-                    .workspaces_mut()
-                    .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id));
-                if let Some(window) = window {
-                    window.set_probe(seconds);
-                }
-                self.arbor.queue_redraw_all();
-            }
+            Action::ProbeWindow(id, seconds) => self.probe_window(id, seconds),
             Action::FocusWindowPrevious => {
                 let current = self.arbor.layout.focus().map(|win| win.id());
                 if let Some(window) = self
@@ -3226,6 +3216,66 @@ impl State {
                 );
             }
         }
+    }
+
+    /// IPC ProbeWindow: an accessibility tool reads window `id`'s menus for
+    /// up to `seconds` (0 ends it). The screen shows the window frozen as it
+    /// was (`Mapped::freeze`: a picture taken now, kept for the whole probe
+    /// even when it's extended), without popups; it thaws when the probe
+    /// ends or its time is up.
+    fn probe_window(&mut self, id: u64, seconds: f64) {
+        let seconds = seconds.clamp(0., 5.);
+        let scale = self
+            .arbor
+            .layout
+            .windows()
+            .find(|(_, m)| m.id().get() == id)
+            .map(|(mon, _)| {
+                mon.map(|mon| mon.output().current_scale().fractional_scale())
+                    .unwrap_or(1.)
+            });
+        let Some(scale) = scale else { return };
+        if let Some(window) = self
+            .arbor
+            .layout
+            .workspaces_mut()
+            .find_map(|ws| ws.windows_mut().find(|w| w.id().get() == id))
+        {
+            window.set_probe(seconds);
+        }
+        if seconds == 0. {
+            for (_, m) in self.arbor.layout.windows() {
+                if m.id().get() == id {
+                    m.thaw();
+                }
+            }
+        } else {
+            let duration = Duration::from_secs_f64(seconds);
+            self.backend.with_primary_renderer(|renderer| {
+                for (_, m) in self.arbor.layout.windows() {
+                    if m.id().get() == id && !m.freeze(renderer, Scale::from(scale), duration) {
+                        warn!("ProbeWindow: couldn't freeze window {id}'s picture");
+                    }
+                }
+            });
+            // Thaw when the time is up (unless the probe was extended).
+            let _ = self.arbor.event_loop.insert_source(
+                Timer::from_duration(duration + Duration::from_millis(5)),
+                move |_, _, state| {
+                    let mut thawed = false;
+                    for (_, m) in state.arbor.layout.windows() {
+                        if m.id().get() == id && m.is_frozen() && m.frozen_view().is_none() {
+                            thawed |= m.thaw();
+                        }
+                    }
+                    if thawed {
+                        state.arbor.queue_redraw_all();
+                    }
+                    TimeoutAction::Drop
+                },
+            );
+        }
+        self.arbor.queue_redraw_all();
     }
 
     /// IPC ClosePopups: close window `id`'s popups (its open menus), as a

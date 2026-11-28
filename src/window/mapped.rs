@@ -4,7 +4,7 @@ use std::time::Duration;
 use arbor_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::desktop::space::SpaceElement as _;
 use smithay::desktop::{PopupKind, PopupManager, Window};
 use smithay::output::{self, Output};
@@ -35,6 +35,7 @@ use crate::render_helpers::renderer::ArborRenderer;
 use crate::render_helpers::see_through::SeeThroughSurfaceRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
@@ -109,6 +110,14 @@ pub struct Mapped {
 
     /// Buffer to draw instead of the window when it should be blocked out.
     block_out_buffer: RefCell<SolidColorBuffer>,
+
+    /// arbor: what the screen shows of the window while an accessibility
+    /// tool probes it (IPC ProbeWindow): its contents as they were when the
+    /// probe started, and until when.
+    /// Accessibility tools open the app's own menus to read them; the
+    /// window and its popups keep rendering (screenshots see them), but
+    /// the screen and screen casts show this.
+    frozen: RefCell<Option<FrozenView>>,
 
     /// The blur config, passed for background effect rendering.
     blur_config: arbor_config::Blur,
@@ -217,6 +226,15 @@ static MAPPED_ID_COUNTER: IdCounter = IdCounter::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MappedId(u64);
 
+/// arbor: a frozen window's picture (see `Mapped::freeze`).
+#[derive(Debug)]
+pub struct FrozenView {
+    pub buffer: TextureBuffer<GlesTexture>,
+    /// Where the picture's top-left is, from the window's geometry origin.
+    pub offset: Point<f64, Logical>,
+    pub until: std::time::Instant,
+}
+
 impl MappedId {
     pub fn next() -> MappedId {
         MappedId(MAPPED_ID_COUNTER.next())
@@ -313,6 +331,7 @@ impl Mapped {
             is_window_cast_target: false,
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
+            frozen: RefCell::new(None),
             blur_config: config.blur,
             animate_next_configure: false,
             probe_until: None,
@@ -436,6 +455,59 @@ impl Mapped {
 
         self.is_window_cast_target = value;
         self.need_to_recompute_rules = true;
+    }
+
+    /// arbor: freeze what the screen shows of the window for `duration`
+    /// (IPC ProbeWindow), its contents rendered to a texture now (the
+    /// client may reuse its buffers while frozen). False if that failed.
+    pub fn freeze(&self, renderer: &mut GlesRenderer, scale: Scale<f64>, duration: Duration) -> bool {
+        let until = std::time::Instant::now() + duration;
+        if let Some(f) = self.frozen.borrow_mut().as_mut() {
+            // Already frozen: keep the picture from before, extend the time.
+            f.until = until;
+            return true;
+        }
+        let snapshot = self.render_snapshot(renderer);
+        let ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::Output,
+            xray: None,
+        };
+        let Some((texture, geo)) = snapshot.texture(ctx, scale).cloned() else {
+            return false;
+        };
+        let buffer = TextureBuffer::from_texture(renderer, texture, scale, Transform::Normal, Vec::new());
+        *self.frozen.borrow_mut() = Some(FrozenView {
+            buffer,
+            offset: geo.loc.to_f64().to_logical(scale),
+            until,
+        });
+        true
+    }
+
+    /// arbor: show the live window again (the probe ended, or its time
+    /// is up). True if it was frozen.
+    pub fn thaw(&self) -> bool {
+        self.frozen.borrow_mut().take().is_some()
+    }
+
+    /// arbor: the frozen picture while the freeze lasts.
+    pub fn frozen_view(&self) -> Option<Ref<'_, FrozenView>> {
+        let frozen = self.frozen.borrow();
+        if frozen
+            .as_ref()
+            .is_some_and(|f| std::time::Instant::now() < f.until)
+        {
+            Some(Ref::map(frozen, |f| f.as_ref().unwrap()))
+        } else {
+            None
+        }
+    }
+
+    /// arbor: frozen, even if the freeze's time ran out a moment ago (frame
+    /// callbacks keep going until the window is thawed).
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.borrow().is_some()
     }
 
     /// Renders a snapshot of the window without popups.
@@ -664,6 +736,10 @@ impl Drop for Mapped {
 }
 
 impl LayoutElement for Mapped {
+    fn frozen_view(&self) -> Option<Ref<'_, FrozenView>> {
+        Mapped::frozen_view(self)
+    }
+
     type Id = Window;
 
     fn id(&self) -> &Self::Id {
@@ -729,8 +805,10 @@ impl LayoutElement for Mapped {
         if ctx.target.should_block_out(self.rules.block_out_from) {
             return;
         }
-        // A menu opened only to be read (ProbeWindow) is never shown.
-        if self.is_probed() {
+        // A menu opened only to be read (ProbeWindow) is never shown on
+        // screen or in screen casts; window screenshots (an accessibility
+        // tool reading it off the screen) still see it.
+        if self.is_probed() && ctx.target != RenderTarget::ScreenCapture {
             return;
         }
 
