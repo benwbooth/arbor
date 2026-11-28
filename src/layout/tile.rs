@@ -1202,12 +1202,24 @@ impl<W: LayoutElement> Tile<W> {
         let frozen = self.window.frozen_view();
         let mut pushed_resize = false;
         if let Some(frozen) = &frozen {
+            // Clipped to the window's frame like the live window when it is
+            // (client-side shadows in the picture darkened the border).
+            let (loc, src, size) = if clip_to_geometry {
+                let size = window_size.to_f64();
+                (
+                    window_render_loc,
+                    Some(Rectangle::new(Point::from((-frozen.offset.x, -frozen.offset.y)), size)),
+                    Some(size),
+                )
+            } else {
+                (window_render_loc + frozen.offset, None, None)
+            };
             let elem = TextureRenderElement::from_texture_buffer(
                 frozen.buffer.clone(),
-                window_render_loc + frozen.offset,
+                loc,
                 win_alpha,
-                None,
-                None,
+                src,
+                size,
                 Kind::Unspecified,
             );
             // (The title bar's variant: the same texture element type.)
