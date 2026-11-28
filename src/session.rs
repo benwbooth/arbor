@@ -193,6 +193,12 @@ pub struct SessionFile {
     /// In-place restarts: KDE (kglobalaccel) apps' runtime registrations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kde_shortcuts: Option<crate::kglobalaccel::SavedKde>,
+    /// In-place restarts: the window zones the shell set (`SetZones`). The shell's IPC
+    /// connections outlive the compositor through the supervisor's proxy, so it never learns of
+    /// the restart and doesn't send them again: without these Shift-drag snapping stopped after
+    /// every swap until a zone layout was picked again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zones: Option<arbor_ipc::SetZones>,
 }
 
 impl SessionFile {
@@ -510,6 +516,7 @@ impl State {
             focused,
             portal_sessions: Vec::new(),
             kde_shortcuts: None,
+            zones: None,
         }
     }
 
@@ -929,6 +936,7 @@ impl State {
         let mut file = self.session_collect_for(true);
         file.portal_sessions = self.arbor.global_shortcuts.saved_sessions();
         file.kde_shortcuts = Some(self.arbor.global_shortcuts.kde_saved());
+        file.zones = Some(self.arbor.layout.zones().clone());
         match store(&path, &file) {
             Ok(()) => trace!("saved restart state ({} windows)", file.windows.len()),
             Err(err) => warn!("error saving restart state to {}: {err:?}", path.display()),
@@ -957,6 +965,9 @@ impl State {
                         .restore_sessions(portal_sessions);
                     if let Some(kde) = file.kde_shortcuts.take() {
                         self.arbor.global_shortcuts.kde_restore(kde);
+                    }
+                    if let Some(zones) = file.zones.take() {
+                        self.arbor.layout.set_zones(zones);
                     }
                     self.arbor.session_restore = Some(PendingRestore {
                         file,
@@ -1124,6 +1135,7 @@ mod tests {
             focused: None,
             portal_sessions: vec![],
             kde_shortcuts: None,
+            zones: None,
         };
         assert_eq!(file.launch_commands(), [vec!["a"], vec!["b"]]);
 

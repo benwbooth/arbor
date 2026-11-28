@@ -562,6 +562,11 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             ctx.event_loop.insert_idle(move |state| {
                 state.arbor.layout.set_zones(req);
                 state.arbor.queue_redraw_all();
+                // For a compositor replacing this one after a crash (a swap saves anyway). Not
+                // while windows are still coming back: their places would be lost.
+                if state.arbor.session_restore.is_none() {
+                    state.restart_save();
+                }
                 let _ = tx.send_blocking(());
             });
             let _ = rx.recv().await;

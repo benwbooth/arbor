@@ -73,6 +73,11 @@ impl<W: LayoutElement> Layout<W> {
         self.update_insert_hint(None);
     }
 
+    /// The zones set over IPC (kept across in-place restarts).
+    pub fn zones(&self) -> &arbor_ipc::SetZones {
+        &self.zones
+    }
+
     /// Updates whether Shift is held; during an interactive move this switches zone snapping.
     /// Returns whether anything changed.
     pub fn set_zone_modifier_held(&mut self, held: bool) -> bool {
