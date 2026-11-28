@@ -3244,11 +3244,33 @@ impl State {
             window.set_probe(seconds);
         }
         if seconds == 0. {
+            // The read's clicks left the pointer focus on the app's menu
+            // button (a menu's grab kept click_window from putting it back):
+            // back on what is really under the pointer, then a moment more of
+            // the picture while the app redraws without the hover look
+            // (GTK's ☰ highlighted, its tooltip coming).
+            self.restore_pointer_focus();
+            const SETTLE: Duration = Duration::from_millis(150);
             for (_, m) in self.arbor.layout.windows() {
                 if m.id().get() == id {
-                    m.thaw();
+                    m.thaw_after(SETTLE);
                 }
             }
+            let _ = self.arbor.event_loop.insert_source(
+                Timer::from_duration(SETTLE + Duration::from_millis(5)),
+                move |_, _, state| {
+                    let mut thawed = false;
+                    for (_, m) in state.arbor.layout.windows() {
+                        if m.id().get() == id && m.is_frozen() && m.frozen_view().is_none() {
+                            thawed |= m.thaw();
+                        }
+                    }
+                    if thawed {
+                        state.arbor.queue_redraw_all();
+                    }
+                    TimeoutAction::Drop
+                },
+            );
         } else {
             let duration = Duration::from_secs_f64(seconds);
             self.backend.with_primary_renderer(|renderer| {
@@ -3276,6 +3298,27 @@ impl State {
             );
         }
         self.arbor.queue_redraw_all();
+    }
+
+    /// The pointer focus back on what is really under the pointer (after
+    /// click_window pointed it elsewhere), unless something holds a grab.
+    fn restore_pointer_focus(&mut self) {
+        let pointer = self.arbor.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() {
+            return;
+        }
+        let location = pointer.current_location();
+        let under = self.arbor.contents_under(location);
+        pointer.motion(
+            self,
+            under.surface,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
     }
 
     /// IPC ClosePopups: close window `id`'s popups (its open menus), as a

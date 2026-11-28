@@ -492,6 +492,15 @@ impl Mapped {
         true
     }
 
+    /// arbor: keep the frozen picture `d` longer at most (the probe ended:
+    /// the app redraws without the hover and pressed look the read left
+    /// before the user sees it live).
+    pub fn thaw_after(&self, d: Duration) {
+        if let Some(f) = self.frozen.borrow_mut().as_mut() {
+            f.until = f.until.min(std::time::Instant::now() + d);
+        }
+    }
+
     /// arbor: show the live window again (the probe ended, or its time
     /// is up). True if it was frozen.
     pub fn thaw(&self) -> bool {
