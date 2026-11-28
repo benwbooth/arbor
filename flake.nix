@@ -64,7 +64,7 @@
               ./arbor-ipc
               ./resources
               ./src
-              ./vendor
+              (lib.fileset.difference ./vendor ./vendor/xwayland-satellite)
               ./Cargo.toml
               ./Cargo.lock
             ];
@@ -299,6 +299,14 @@
         {
           inherit arbor;
 
+          # xwayland-satellite (the X11 bridge arbor starts for X11 apps) from
+          # vendor/xwayland-satellite, with arbor's changes (vendor/README.md). Same
+          # version and Cargo.lock as nixpkgs', so its cargo deps are reused.
+          xwayland-satellite = nixpkgsFor.${system}.xwayland-satellite.overrideAttrs (old: {
+            version = old.version + "-arbor";
+            src = ./vendor/xwayland-satellite;
+          });
+
           # RDP server for the arbor session: hypr-rdp (MuNeNICK/hypr-rdp)
           # patched to run without Hyprland IPC; see nix/arbor-rdp.nix.
           arbor-rdp = nixpkgsFor.${system}.callPackage ./nix/arbor-rdp.nix { };
@@ -323,9 +331,13 @@
         }
       );
 
-      overlays.default = final: _: {
+      overlays.default = final: prev: {
         arbor = final.callPackage arbor-package { };
         arbor-rdp = final.callPackage ./nix/arbor-rdp.nix { };
+        xwayland-satellite = prev.xwayland-satellite.overrideAttrs (old: {
+          version = old.version + "-arbor";
+          src = ./vendor/xwayland-satellite;
+        });
       };
 
       nixosModules.arbor = import ./nix/module.nix self;

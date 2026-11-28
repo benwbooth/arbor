@@ -57,6 +57,17 @@ in
       description = "The arbor package to use.";
     };
 
+    xwaylandSatellite = lib.mkOption {
+      type = lib.types.package;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.xwayland-satellite;
+      defaultText = lib.literalExpression "arbor.packages.\${pkgs.stdenv.hostPlatform.system}.xwayland-satellite";
+      description = ''
+        The xwayland-satellite arbor starts for X11 apps (it runs `xwayland-satellite` from
+        PATH). arbor's vendored copy (vendor/xwayland-satellite) lets X11 apps' own title
+        bars drag their windows; it takes priority over any other copy installed.
+      '';
+    };
+
     useNautilus = lib.mkEnableOption ''
       Nautilus as file chooser. Only useful if you add xdg-desktop-portal-gnome
       yourself and route FileChooser to it; arbor's portal setup uses the GTK
@@ -164,7 +175,10 @@ in
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
       {
-        environment.systemPackages = [ cfg.package ];
+        environment.systemPackages = [
+          cfg.package
+          (lib.hiPrio cfg.xwaylandSatellite)
+        ];
 
         # Only for xdg-desktop-portal-gnome's FileChooser (see useNautilus).
         services.dbus.packages = lib.mkIf cfg.useNautilus [ pkgs.nautilus ];
