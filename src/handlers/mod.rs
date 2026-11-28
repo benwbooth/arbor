@@ -74,6 +74,7 @@ use crate::clipboard_persist::{write_selection, SelectionData};
 pub use crate::handlers::xdg_shell::KdeDecorationsModeState;
 use crate::layout::workspace::WorkspaceId;
 use crate::layout::ActivateWindow;
+use crate::layout::LayoutElement as _;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceHandler, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{
     self, ForeignToplevelHandler, ForeignToplevelManagerState,
@@ -856,9 +857,34 @@ impl XdgActivationHandler for State {
         surface: WlSurface,
     ) {
         if token_data.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT {
+            // arbor: a fullscreen window in front (a video, a game) keeps the screen. An app
+            // raising itself or another of its own windows only marks it urgent then: watching a
+            // show fullscreen in Brave, Brave raising one of its other windows switched to that
+            // window's workspace every few minutes (2026-11-27). Raising the fullscreen window
+            // itself is fine, and so is a token from another app (the dock, a notification
+            // clicked in the shell, the launcher), which is the user asking.
+            let fullscreen_keeps = {
+                let target_client = surface.client().map(|c| c.id());
+                match self.arbor.layout.focus() {
+                    Some(focused)
+                        if focused.sizing_mode().is_fullscreen()
+                            && focused.window.toplevel().map(|t| t.wl_surface()) != Some(&surface) =>
+                    {
+                        token_data.client_id.is_none() || token_data.client_id == target_client
+                    }
+                    _ => false,
+                }
+            };
             if let Some((mapped, _)) = self.arbor.layout.find_window_and_output_mut(&surface) {
                 let window = mapped.window.clone();
-                if token_data.user_data.get::<UrgentOnlyMarker>().is_some() {
+                if fullscreen_keeps {
+                    let app_id = window
+                        .toplevel()
+                        .map(|t| crate::utils::with_toplevel_role(t, |role| role.app_id.clone()));
+                    tracing::info!("xdg-activation: {app_id:?} marked urgent, a fullscreen window is in front");
+                    mapped.set_urgent(true);
+                    self.arbor.queue_redraw_all();
+                } else if token_data.user_data.get::<UrgentOnlyMarker>().is_some() {
                     mapped.set_urgent(true);
                     self.arbor.queue_redraw_all();
                 } else {
