@@ -1197,13 +1197,9 @@ impl<W: LayoutElement> Tile<W> {
             .scaled_by(1. - expanded_progress as f32);
 
         // arbor: a frozen window (IPC ProbeWindow: an accessibility tool is
-        // opening its menus to read them) shows on screen and in screen casts
-        // as it was, without its popups; screenshots still see it live.
-        let frozen = if ctx.target == RenderTarget::ScreenCapture {
-            None
-        } else {
-            self.window.frozen_view()
-        };
+        // opening its menus to read them) shows as it was, without its
+        // popups; a window screenshot still sees it live (Mapped::live_capture).
+        let frozen = self.window.frozen_view();
         let mut pushed_resize = false;
         if let Some(frozen) = &frozen {
             let elem = TextureRenderElement::from_texture_buffer(

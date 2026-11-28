@@ -6293,6 +6293,9 @@ impl Arbor {
             target: RenderTarget::ScreenCapture,
             xray: None,
         };
+        // A window screenshot sees the window live even while an
+        // accessibility tool probes it (ProbeWindow freezes it elsewhere).
+        mapped.set_live_capture(true);
         match tile {
             Some(tile) => tile.render(
                 ctx,
@@ -6310,6 +6313,7 @@ impl Arbor {
                 &mut |elem| elements.push(elem.into()),
             ),
         }
+        mapped.set_live_capture(false);
 
         // The pointer is not included in encompassing_geo because we don't want it to expand the
         // screenshot size. Without shadows, crop to the window (or tile) itself.

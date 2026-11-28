@@ -119,6 +119,12 @@ pub struct Mapped {
     /// the screen and screen casts show this.
     frozen: RefCell<Option<FrozenView>>,
 
+    /// arbor: a window screenshot (IPC ScreenshotWindow) is rendering it:
+    /// it sees the window live during a probe, popups included (the screen-
+    /// reading route reads the open menu off it). Everything else, full-
+    /// screen screenshots and screencopy included, sees what the user sees.
+    live_capture: Cell<bool>,
+
     /// The blur config, passed for background effect rendering.
     blur_config: arbor_config::Blur,
 
@@ -332,6 +338,7 @@ impl Mapped {
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
             frozen: RefCell::new(None),
+            live_capture: Cell::new(false),
             blur_config: config.blur,
             animate_next_configure: false,
             probe_until: None,
@@ -491,8 +498,17 @@ impl Mapped {
         self.frozen.borrow_mut().take().is_some()
     }
 
+    /// arbor: a window screenshot renders the window live (see
+    /// `live_capture`); set around that render only.
+    pub fn set_live_capture(&self, on: bool) {
+        self.live_capture.set(on);
+    }
+
     /// arbor: the frozen picture while the freeze lasts.
     pub fn frozen_view(&self) -> Option<Ref<'_, FrozenView>> {
+        if self.live_capture.get() {
+            return None;
+        }
         let frozen = self.frozen.borrow();
         if frozen
             .as_ref()
@@ -805,10 +821,10 @@ impl LayoutElement for Mapped {
         if ctx.target.should_block_out(self.rules.block_out_from) {
             return;
         }
-        // A menu opened only to be read (ProbeWindow) is never shown on
-        // screen or in screen casts; window screenshots (an accessibility
-        // tool reading it off the screen) still see it.
-        if self.is_probed() && ctx.target != RenderTarget::ScreenCapture {
+        // A menu opened only to be read (ProbeWindow) is never shown; a
+        // window screenshot (an accessibility tool reading it off the
+        // screen) still sees it.
+        if self.is_probed() && !self.live_capture.get() {
             return;
         }
 
